@@ -1,0 +1,192 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String             @id @default(cuid())
+  email              String             @unique
+  phone              String             @unique
+  firstName          String
+  lastName           String
+  password           String
+  role               UserRole           @default(BUYER)
+  avatar             String?
+  isVerified         Boolean            @default(false)
+  verificationStatus VerificationStatus @default(PENDING)
+  verificationCode   String?
+  verificationExpiry DateTime?
+  points             Int                @default(0)
+  lastLogin           DateTime?
+  deletionCode     String?   @db.VarChar(6)
+  deletionExpiry   DateTime?
+
+  store              Store?
+  notifications      Notification[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([email])
+  @@index([phone])
+  @@index([role])
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Store {
+  id             String            @id @default(cuid())
+  userId         String            @unique   // Only if 1 user = 1 store
+  name           String
+  url            String
+  description    String?
+  logo           String?
+  location       String
+  category       String
+  region         String
+  isActive       Boolean           @default(false)
+  rating         Float             @default(0.0)
+  totalReviews   Int               @default(0)
+  viewCount      Int               @default(0) 
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verification   StoreVerification?
+  views          StoreView[]
+  products       Product[]
+  paymentDetails  PaymentAccount[] 
+
+  @@index([userId])
+  @@index([isActive])
+  @@index([url])
+  @@unique([url])
+   @@index([viewCount])
+}
+
+
+model StoreVerification {
+  id              String   @id @default(cuid())
+  storeId         String   @unique
+  ghanaCardFront  String
+  ghanaCardBack   String
+  selfie          String
+  businessDoc     String?
+  status          String   @default("pending")
+  rejectionReason String?
+  verifiedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  store           Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([status])
+}
+
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String   // The user receiving the notification
+  title       String   // Brief title
+  message     String   // Detailed message
+  type        String   // e.g., 'store_verification', 'order_update', 'system_alert', 'new_message'
+  data        Json?    // Optional JSON data related to the notification (e.g., order ID, sender ID)
+  read        Boolean  @default(false) // Whether the user has read it
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, read])
+  @@index([createdAt]) 
+}
+
+model StoreView {
+  id        String   @id @default(cuid())
+  storeId   String
+  userId    String?  // User ID if logged in, null for anonymous views (if allowed - not used here for logged-in users)
+  viewedAt  DateTime @default(now())
+
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, userId])
+  @@index([viewedAt])
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  storeId       String
+  name          String
+  description   String?
+  price         Float
+  stock         Int      @default(0)
+  images        String[] // Array of image URLs from Cloudinary
+  category      String?
+  tags          String[] 
+  sizes         String[] 
+  color         String[]  
+  weight        Float?   
+  sellerNote    String?  
+  moq           Int?     // Minimum Order Quantity (null if no MOQ)
+  quantityBought Int     @default(0) 
+  url           String   @unique 
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([isActive])
+  @@index([price])
+  @@index([category]) 
+  @@index([tags])    
+  @@index([sizes])   
+  @@index([url])     
+}
+
+model PaymentAccount {
+  id          String   @id @default(cuid())
+  storeId     String   @unique 
+  accountType String   
+  
+  bankName    String?  
+  accountNumber String?
+  accountName String?  
+  
+  provider    String?  
+  mobileNumber String? 
+  
+  isPrimary   Boolean  @default(true) 
+  isActive    Boolean  @default(true) 
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([accountType])
+  @@index([isPrimary])
+}
