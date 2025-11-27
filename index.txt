@@ -1,1 +1,187 @@
-create the app.js file, authnavigator, and a signup screen. When we will have a different screen for different roles SELLER,BUYER, and ADMIN so depending on the role of the logged in user and the screen they are redirected to after to. after signup navigate to login screen.
+// Navigate to this screen
+navigation.navigate('SellerPublicProducts', {
+  storeUrl: 'store-slug-here',
+  storeName: 'Optional Store Name'
+});
+
+navigation.navigate('SellerPublicProductDetails', {
+  productUrl: product.url,
+  storeUrl: storeUrl,
+});
+
+navigation.navigate('SellerPublicProductDetails', {
+  productUrl: product.url,
+  storeUrl: product.store?.url,
+});
+
+navigation.navigate('Chat', {
+  storeId: product?.storeId,
+  storeName: product?.store?.name,
+});
+
+
+// In your navigation stack
+<Stack.Screen name="Notifications" component={NotificationsScreen} />
+<Stack.Screen name="OrderDetails" component={OrderDetailsScreen} />
+<Stack.Screen name="DisputeDetails" component={DisputeDetailsScreen} />
+<Stack.Screen name="PaymentDetails" component={PaymentDetailsScreen} />
+// ... etc
+
+
+// ... other models ...
+
+model Order {
+  id            String        @id @default(cuid())
+  buyerId       String
+  storeId       String
+  status        OrderStatus   @default(PENDING)
+  totalAmount   Float
+  currency      String        @default("GHS")
+  paymentStatus PaymentStatus @default(PENDING)
+  items         OrderItem[]
+  deliveryInfo  DeliveryInfo?
+  statusHistory StatusChange[]
+  refundAmount  Float?
+  refundReason  String?
+  cancelledAt   DateTime?
+  cancelledBy   String?     
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?     // Soft delete (optional but useful)
+
+  buyer User  @relation(fields: [buyerId], references: [id], onDelete: Restrict)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  // Link to the primary payment record for this order
+
+
+  // Link to the escrow record for this order (if funds are held)
+
+
+  @@index([buyerId])
+  @@index([storeId])
+  @@index([status])
+  @@index([paymentStatus])
+ 
+}
+
+export const cancelOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const userId = req.user.userId; 
+    const { reason } = req.body; // Optional reason for cancellation
+
+    // Fetch the order to check ownership and status
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        store: {
+            select: { userId: true } // Get the store owner's ID
+        }
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found.'
+      });
+    }
+
+    let canCancel = false;
+    let cancelledBy = null;
+
+    // Determine if the user can cancel based on role and status
+    if (order.buyerId === userId) {
+        // Buyer can cancel if status is PENDING
+        if (order.status === 'PENDING') {
+            canCancel = true;
+            cancelledBy = 'buyer';
+        }
+    } else if (order.store.userId === userId) {
+        // Seller can cancel if status is CONFIRMED or PENDING
+        if (order.status === 'PENDING' || order.status === 'CONFIRMED') {
+            canCancel = true;
+            cancelledBy = 'seller';
+        }
+    }
+
+    if (!canCancel) {
+        return res.status(403).json({
+            success: false,
+            message: `You are not authorized to cancel this order in its current status (${order.status}).`
+        });
+    }
+
+    // Use a transaction to update status, add history, and adjust stock
+    const updatedOrder = await prisma.$transaction(async (tx) => {
+      // Update the order status to CANCELLED
+      const updated = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          cancelledBy: cancelledBy,
+          // paymentStatus might also need updating based on business logic (e.g., initiate refund)
+        }
+      });
+
+      // Add a status change record
+      await tx.statusChange.create({
+        data: {
+          orderId,
+          oldStatus: order.status,
+          newStatus: 'CANCELLED',
+          changedBy: userId, // The user who initiated the cancellation
+          reason: reason || `Cancelled by ${cancelledBy}`
+        }
+      });
+
+      // Adjust product stock back
+      const orderItems = await tx.orderItem.findMany({
+          where: { orderId }
+      });
+      for (const item of orderItems) {
+          await tx.product.update({
+              where: { id: item.productId },
+              data: {
+                  stock: {
+                      increment: item.quantity
+                  },
+                  quantityBought: {
+                      decrement: item.quantity
+                  }
+              }
+          });
+      }
+
+      return updated;
+    });
+
+    // Invalidate relevant caches
+    await cache.del(`order:${orderId}:user:${order.buyerId}`);
+    await cache.del(`order:${orderId}:user:${order.store.userId}`);
+    await cache.del(`user:${order.buyerId}:orders`);
+    await cache.del(`store:${order.storeId}:orders`);
+    // Invalidate product caches for items in the order
+    const orderItems = await prisma.orderItem.findMany({
+        where: { orderId }
+    });
+    for (const item of orderItems) {
+        await cache.del(`product:url:${item.productId}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Order cancelled successfully.',
+      data: updatedOrder
+    });
+
+  } catch (error) {
+    console.error('Error cancelling order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};

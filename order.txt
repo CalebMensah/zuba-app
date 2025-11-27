@@ -1,0 +1,38 @@
+// server.js or app.js
+import express from 'express';
+
+
+// Import routes
+
+// ... other routes
+
+// Import Socket.IO configuration
+
+
+dotenv.config();
+
+const app = express();
+
+
+// Initialize Socket.IO
+
+
+// Make io accessible in routes if needed
+
+
+// Middleware
+
+
+// Routes
+app.use('/api/chat', chatRoutes);
+// ... other routes
+
+
+
+const PORT = process.env.PORT || 5000;
+
+
+
+// Handle unhandled promise rejections
+
+

@@ -193,7 +193,7 @@ export const updateProduct = async (req, res) => {
     if (weight !== undefined) updateData.weight = parseFloat(weight);
     if (sellerNote !== undefined) updateData.sellerNote = sellerNote;
     if (moq !== undefined) updateData.moq = parseInt(moq);
-    if (isActive !== undefined) updateData.isActive = isActive;
+    if (isActive !== undefined) updateData.isActive = true
 
     let imageUrls = [...existingProduct.images];
     let imagesToDeleteFromCloudinary = [];
@@ -270,7 +270,7 @@ export const getSellerProductByIdForPublicUse = async (req, res) => {
     if (cachedProduct) {
       return res.status(200).json({
         success: true,
-         cachedProduct,
+         data:cachedProduct,
         cached: true
       });
     }
@@ -305,7 +305,7 @@ export const getSellerProductByIdForPublicUse = async (req, res) => {
 
     res.status(200).json({
       success: true,
-       product
+       data:product
     });
 
   } catch (error) {
@@ -329,7 +329,7 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
       search = '', // Search term for name or description within the store
       category = '', // Filter by category within the store
       minPrice = 0, // Default to 0 if not provided
-      maxPrice = Infinity, // Default to Infinity if not provided
+      maxPrice = '', // Default to Infinity if not provided
       tags = '', // Filter by tags within the store (comma-separated string)
       sizes = '', // Filter by sizes within the store (comma-separated string)
       color = '', // Filter by color within the store (comma-separated string)
@@ -426,7 +426,7 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
     if (cachedResult) {
       return res.status(200).json({
         success: true,
-         cachedResult,
+         data:cachedResult,
         cached: true
       });
     }
@@ -481,7 +481,7 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
 
     res.status(200).json({
       success: true,
-       resultData
+       data:resultData
     });
 
   } catch (error) {
@@ -496,6 +496,7 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
 
 // Get user's products (seller view)
 export const getUserProducts = async (req, res) => {
+  console.log('getting user products')
   try {
     const userId = req.user.userId;
 
@@ -522,7 +523,7 @@ export const getUserProducts = async (req, res) => {
     if (cachedProducts) {
       return res.status(200).json({
         success: true,
-         cachedProducts,
+        data: cachedProducts,
         cached: true
       });
     }
@@ -535,6 +536,8 @@ export const getUserProducts = async (req, res) => {
       skip: offset,
       take: limit,
     });
+
+    console.log('fetched products from DB:', products)
 
     const total = await prisma.product.count({
       where: { storeId }
@@ -551,10 +554,11 @@ export const getUserProducts = async (req, res) => {
     };
 
     await cache.set(cacheKey, resultData, 900);
+    console.log('my products:',resultData)
 
     res.status(200).json({
       success: true,
-       resultData
+       data:resultData
     });
   } catch (error) {
     console.error('Error fetching user products:', error);
@@ -633,6 +637,7 @@ export const deleteProduct = async (req, res) => {
 };
 
 export const getAllProducts = async (req, res) => {
+  console.log("Fetching all products with filters...");
   try {
     const {
       page = 1,
@@ -640,7 +645,7 @@ export const getAllProducts = async (req, res) => {
       search = '', // Search term for name or description
       category = '', // Filter by category
       minPrice = 0, // Filter by minimum price
-      maxPrice = Infinity, // Filter by maximum price
+      maxPrice = '', // Filter by maximum price
       tags = '', // Filter by tags (comma-separated string)
       sizes = '', // Filter by sizes (comma-separated string)
       color = '', // Filter by color (comma-separated string)
@@ -677,10 +682,23 @@ export const getAllProducts = async (req, res) => {
     }
 
     // Add price filter
-    whereClause.price = {
-      gte: parseFloat(minPrice), // Greater than or equal to minPrice
-      lte: parseFloat(maxPrice)  // Less than or equal to maxPrice
-    };
+    let priceFilter = {};
+    if (minPrice !== undefined && minPrice !== '') {
+      const parsedMin = parseFloat(minPrice);
+      if (!isNaN(parsedMin)) {
+        priceFilter.gte = parsedMin;
+      }
+    }
+    if (maxPrice !== undefined && maxPrice !== '') {
+      const parsedMax = parseFloat(maxPrice);
+      if (!isNaN(parsedMax)) {
+        priceFilter.lte = parsedMax;
+      }
+    }
+    // Only add the price filter to whereClause if at least one valid bound was set
+    if (Object.keys(priceFilter).length > 0) {
+      whereClause.price = priceFilter;
+    }
 
     // Add tags filter (using 'hasSome' for array fields)
     if (tagArray.length > 0) {
@@ -716,7 +734,7 @@ export const getAllProducts = async (req, res) => {
     if (cachedResult) {
       return res.status(200).json({
         success: true,
-         cachedResult,
+         data:cachedResult,
         cached: true
       });
     }
@@ -773,11 +791,508 @@ export const getAllProducts = async (req, res) => {
 
     res.status(200).json({
       success: true,
-       resultData
+      data: resultData
     });
 
   } catch (error) {
     console.error('Error fetching all products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get top selling products
+export const getTopSellingProducts = async (req, res) => {
+  try {
+    const {
+      limit = 10,
+      category = '',
+      storeUrl = '' // Optional: filter by specific store
+    } = req.query;
+
+    const limitNum = parseInt(limit) || 10;
+
+    // Build where clause
+    const whereClause = {
+      isActive: true,
+    };
+
+    if (category) {
+      whereClause.category = { contains: category, mode: 'insensitive' };
+    }
+
+    // If filtering by store
+    if (storeUrl) {
+      const store = await prisma.store.findFirst({
+        where: { url: storeUrl },
+        select: { id: true }
+      });
+
+      if (store) {
+        whereClause.storeId = store.id;
+      }
+    }
+
+    // Construct cache key
+    const cacheKey = `products:top-selling:limit:${limitNum}:category:${category}:store:${storeUrl}`;
+
+    // Try to get from cache
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult) {
+      return res.status(200).json({
+        success: true,
+        data: cachedResult,
+        cached: true
+      });
+    }
+
+    // Fetch top selling products ordered by quantityBought
+    const products = await prisma.product.findMany({
+      where: whereClause,
+      orderBy: [
+        { quantityBought: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: limitNum,
+      include: {
+        store: {
+          select: {
+            id: true,
+            name: true,
+            url: true,
+            logo: true,
+            region: true,
+            location: true
+          }
+        }
+      }
+    });
+
+    const resultData = {
+      products,
+      count: products.length
+    };
+
+    // Cache for 30 minutes
+    await cache.set(cacheKey, resultData, 1800);
+
+    res.status(200).json({
+      success: true,
+      data: resultData
+    });
+
+  } catch (error) {
+    console.error('Error fetching top selling products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get recommended products based on a specific product
+export const getRecommendedProducts = async (req, res) => {
+  try {
+    const { productUrl } = req.params;
+    const { limit = 8 } = req.query;
+
+    const limitNum = parseInt(limit) || 8;
+
+    // Construct cache key
+    const cacheKey = `products:recommended:${productUrl}:limit:${limitNum}`;
+
+    // Try to get from cache
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult) {
+      return res.status(200).json({
+        success: true,
+        data: cachedResult,
+        cached: true
+      });
+    }
+
+    // Get the current product to base recommendations on
+    const currentProduct = await prisma.product.findFirst({
+      where: {
+        url: productUrl,
+        isActive: true
+      },
+      select: {
+        id: true,
+        category: true,
+        tags: true,
+        price: true,
+        storeId: true
+      }
+    });
+
+    if (!currentProduct) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found.'
+      });
+    }
+
+    // Build where clause for recommendations
+    const whereClause = {
+      isActive: true,
+      NOT: {
+        id: currentProduct.id // Exclude the current product
+      }
+    };
+
+    // Create an array of OR conditions for better matches
+    const orConditions = [];
+
+    // Match by category
+    if (currentProduct.category) {
+      orConditions.push({
+        category: { contains: currentProduct.category, mode: 'insensitive' }
+      });
+    }
+
+    // Match by tags
+    if (currentProduct.tags && currentProduct.tags.length > 0) {
+      orConditions.push({
+        tags: { hasSome: currentProduct.tags }
+      });
+    }
+
+    // Match by similar price range (±30%)
+    const priceLower = currentProduct.price * 0.7;
+    const priceUpper = currentProduct.price * 1.3;
+    orConditions.push({
+      price: {
+        gte: priceLower,
+        lte: priceUpper
+      }
+    });
+
+    // Match by same store
+    orConditions.push({
+      storeId: currentProduct.storeId
+    });
+
+    if (orConditions.length > 0) {
+      whereClause.OR = orConditions;
+    }
+
+    // Fetch recommended products
+    const products = await prisma.product.findMany({
+      where: whereClause,
+      orderBy: [
+        { quantityBought: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: limitNum,
+      include: {
+        store: {
+          select: {
+            id: true,
+            name: true,
+            url: true,
+            logo: true,
+            region: true,
+            location: true
+          }
+        }
+      }
+    });
+
+    // If we don't have enough products, fill with random popular products
+    if (products.length < limitNum) {
+      const additionalProducts = await prisma.product.findMany({
+        where: {
+          isActive: true,
+          NOT: {
+            id: {
+              in: [currentProduct.id, ...products.map(p => p.id)]
+            }
+          }
+        },
+        orderBy: [
+          { quantityBought: 'desc' },
+        ],
+        take: limitNum - products.length,
+        include: {
+          store: {
+            select: {
+              id: true,
+              name: true,
+              url: true,
+              logo: true,
+              region: true,
+              location: true
+            }
+          }
+        }
+      });
+
+      products.push(...additionalProducts);
+    }
+
+    const resultData = {
+      products,
+      count: products.length,
+      basedOn: {
+        category: currentProduct.category,
+        tags: currentProduct.tags
+      }
+    };
+
+    // Cache for 1 hour
+    await cache.set(cacheKey, resultData, 3600);
+
+    res.status(200).json({
+      success: true,
+      data: resultData
+    });
+
+  } catch (error) {
+    console.error('Error fetching recommended products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get products you may like (random selection with some intelligence)
+export const getProductsYouMayLike = async (req, res) => {
+  try {
+    const {
+      limit = 12,
+      category = '',
+      excludeProductId = '' // Optional: exclude a specific product
+    } = req.query;
+
+    const limitNum = parseInt(limit) || 12;
+
+    // Construct cache key
+    const cacheKey = `products:you-may-like:limit:${limitNum}:category:${category}:exclude:${excludeProductId}`;
+
+    // Try to get from cache
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult) {
+      return res.status(200).json({
+        success: true,
+        data: cachedResult,
+        cached: true
+      });
+    }
+
+    // Build where clause
+    const whereClause = {
+      isActive: true,
+    };
+
+    if (category) {
+      whereClause.category = { contains: category, mode: 'insensitive' };
+    }
+
+    if (excludeProductId) {
+      whereClause.NOT = {
+        id: excludeProductId
+      };
+    }
+
+    // Get total count for random offset calculation
+    const totalCount = await prisma.product.count({
+      where: whereClause
+    });
+
+    if (totalCount === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          products: [],
+          count: 0
+        }
+      });
+    }
+
+    // Strategy: Get a mix of popular and random products
+    const popularLimit = Math.ceil(limitNum * 0.6); // 60% popular products
+    const randomLimit = limitNum - popularLimit; // 40% random products
+
+    // Get popular products (by quantityBought and viewCount)
+    const popularProducts = await prisma.product.findMany({
+      where: whereClause,
+      orderBy: [
+        { quantityBought: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: popularLimit,
+      include: {
+        store: {
+          select: {
+            id: true,
+            name: true,
+            url: true,
+            logo: true,
+            region: true,
+            location: true
+          }
+        }
+      }
+    });
+
+    const popularIds = popularProducts.map(p => p.id);
+
+    // Get random products (exclude already selected popular ones)
+    let randomProducts = [];
+    if (randomLimit > 0 && totalCount > popularLimit) {
+      // Generate random offset
+      const maxOffset = Math.max(0, totalCount - randomLimit - popularLimit);
+      const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
+
+      randomProducts = await prisma.product.findMany({
+        where: {
+          ...whereClause,
+          NOT: {
+            id: { in: popularIds }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip: randomOffset,
+        take: randomLimit,
+        include: {
+          store: {
+            select: {
+              id: true,
+              name: true,
+              url: true,
+              logo: true,
+              region: true,
+              location: true
+            }
+          }
+        }
+      });
+    }
+
+    // Combine and shuffle
+    const allProducts = [...popularProducts, ...randomProducts];
+    
+    // Fisher-Yates shuffle algorithm
+    for (let i = allProducts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [allProducts[i], allProducts[j]] = [allProducts[j], allProducts[i]];
+    }
+
+    const resultData = {
+      products: allProducts,
+      count: allProducts.length,
+      mix: {
+        popular: popularProducts.length,
+        random: randomProducts.length
+      }
+    };
+
+    // Cache for 15 minutes (shorter cache for randomness)
+    await cache.set(cacheKey, resultData, 900);
+
+    res.status(200).json({
+      success: true,
+      data: resultData
+    });
+
+  } catch (error) {
+    console.error('Error fetching products you may like:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Get trending products (based on recent views and purchases)
+export const getTrendingProducts = async (req, res) => {
+  try {
+    const {
+      limit = 10,
+      category = '',
+      days = 7 // Consider products from last N days
+    } = req.query;
+
+    const limitNum = parseInt(limit) || 10;
+    const daysNum = parseInt(days) || 7;
+
+    // Calculate date threshold
+    const dateThreshold = new Date();
+    dateThreshold.setDate(dateThreshold.getDate() - daysNum);
+
+    // Construct cache key
+    const cacheKey = `products:trending:limit:${limitNum}:category:${category}:days:${daysNum}`;
+
+    // Try to get from cache
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult) {
+      return res.status(200).json({
+        success: true,
+        data: cachedResult,
+        cached: true
+      });
+    }
+
+    // Build where clause
+    const whereClause = {
+      isActive: true,
+      createdAt: {
+        gte: dateThreshold
+      }
+    };
+
+    if (category) {
+      whereClause.category = { contains: category, mode: 'insensitive' };
+    }
+
+    // Fetch trending products
+    const products = await prisma.product.findMany({
+      where: whereClause,
+      orderBy: [
+        { quantityBought: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: limitNum,
+      include: {
+        store: {
+          select: {
+            id: true,
+            name: true,
+            url: true,
+            logo: true,
+            region: true,
+            location: true
+          }
+        }
+      }
+    });
+
+    const resultData = {
+      products,
+      count: products.length,
+      period: `Last ${daysNum} days`
+    };
+
+    // Cache for 1 hour
+    await cache.set(cacheKey, resultData, 3600);
+
+    res.status(200).json({
+      success: true,
+      data: resultData
+    });
+
+  } catch (error) {
+    console.error('Error fetching trending products:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error',

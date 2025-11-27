@@ -215,3 +215,62 @@ export const getUnreadNotificationCount = async (req, res) => {
     });
   }
 };
+
+export const getNotificationById = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const userId = req.user.userId;
+
+    // Check cache first
+    const cacheKey = `notification:${notificationId}:user:${userId}`;
+    const cachedNotification = await cache.get(cacheKey);
+    
+    if (cachedNotification) {
+      return res.status(200).json({
+        success: true,
+        data: JSON.parse(cachedNotification)
+      });
+    }
+
+    // Fetch from database
+    const notification = await prisma.notification.findFirst({
+      where: {
+        id: notificationId,
+        userId: userId // Security: ensure notification belongs to user
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true
+          }
+        }
+      }
+    });
+
+    // Check if notification exists
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found or you do not have access to it.'
+      });
+    }
+
+    // Cache the result for 10 minutes
+    await cache.set(cacheKey, JSON.stringify(notification), 600);
+
+    res.status(200).json({
+      success: true,
+      data: notification
+    });
+  } catch (error) {
+    console.error('Error fetching notification by ID:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};

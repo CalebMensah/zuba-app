@@ -1,0 +1,8 @@
+// controllers/orderController.js
+import prisma from '../config/prisma.js'
+import { cache } from '../config/redis.js';
+// --- Import the new utilities ---
+import { sendNotification } from './notificationController.js'; // Or the correct path to your notification utility
+import { sendEmailNotification } from '../utils/sendEmailNotification.js'; // Adjust path if necessary
+// --- End of new imports ---
+

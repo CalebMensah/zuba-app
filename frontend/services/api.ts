@@ -2,14 +2,42 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_URL = 'http://YOUR_API_URL/api'; // Replace with your actual API URL
+// Get API URL from environment variable with fallback
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 const api = axios.create({
   baseURL: API_URL,
+  timeout: parseInt(process.env.EXPO_PUBLIC_API_TIMEOUT || '10000'),
   headers: {
     'Content-Type': 'application/json',
   },
 });
+
+// Optional: Enable logging in development
+if (process.env.EXPO_PUBLIC_ENABLE_API_LOGGING === 'true') {
+  api.interceptors.request.use(
+    (request) => {
+      console.log('🚀 API Request:', request.method?.toUpperCase(), request.url);
+      console.log('📦 Data:', request.data);
+      return request;
+    },
+    (error) => {
+      console.error('❌ Request Error:', error);
+      return Promise.reject(error);
+    }
+  );
+
+  api.interceptors.response.use(
+    (response) => {
+      console.log('✅ API Response:', response.status, response.config.url);
+      return response;
+    },
+    (error) => {
+      console.error('❌ Response Error:', error.response?.status, error.config?.url);
+      return Promise.reject(error);
+    }
+  );
+}
 
 // Add token to requests
 api.interceptors.request.use(

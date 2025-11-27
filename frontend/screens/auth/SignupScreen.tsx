@@ -15,6 +15,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList, UserRole } from '../../types/navigation';
 import { authAPI, SignupData } from '../../services/api';
+import { Colors } from '../../constants/colors';
 
 type SignupScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Signup'>;
 
@@ -120,126 +121,226 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Sign up to get started</Text>
-        </View>
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Decorative Background Elements */}
+        <View style={styles.decorativeCircle1} />
+        <View style={styles.decorativeCircle2} />
+        <View style={styles.decorativeCircle3} />
 
-        <View style={styles.form}>
-          {/* Role Selection */}
-          <Text style={styles.label}>Select Role</Text>
-          <View style={styles.roleContainer}>
-            {(['BUYER', 'SELLER', 'ADMIN'] as UserRole[]).map((r) => (
-              <TouchableOpacity
-                key={r}
-                style={[styles.roleButton, role === r && styles.roleButtonActive]}
-                onPress={() => setRole(r)}
+        <View style={styles.content}>
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.brandContainer}>
+              <Text style={styles.brandName}>ZUBA</Text>
+              <View style={styles.brandAccent} />
+            </View>
+            <Text style={styles.title}>Join the Movement</Text>
+            <Text style={styles.subtitle}>Create your account and start your journey</Text>
+          </View>
+
+          {/* Form */}
+          <View style={styles.form}>
+            {/* Role Selection - Compact Design */}
+            <View style={styles.roleSection}>
+              <Text style={styles.roleSectionLabel}>I want to</Text>
+              <View style={styles.roleToggleContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.roleToggle,
+                    role === 'BUYER' && styles.roleToggleActive,
+                  ]}
+                  onPress={() => setRole('BUYER')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.roleToggleText, role === 'BUYER' && styles.roleToggleTextActive]}>
+                    Buy
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.roleToggle,
+                    role === 'SELLER' && styles.roleToggleActive,
+                  ]}
+                  onPress={() => setRole('SELLER')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.roleToggleText, role === 'SELLER' && styles.roleToggleTextActive]}>
+                    Sell
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Name Fields in Row */}
+            <View style={styles.rowContainer}>
+              <View style={[styles.inputWrapper, styles.halfWidth]}>
+                <Text style={styles.label}>First Name</Text>
+                <View style={[styles.inputContainer, errors.firstName && styles.inputContainerError]}>
+                  <TextInput
+                    style={styles.input}
+                    value={formData.firstName}
+                    onChangeText={(value) => updateFormData('firstName', value)}
+                    placeholder="John"
+                    placeholderTextColor={Colors.textTertiary}
+                    autoCapitalize="words"
+                    editable={!loading}
+                  />
+                </View>
+                {errors.firstName && (
+                  <Text style={styles.errorText}>⚠ {errors.firstName}</Text>
+                )}
+              </View>
+
+              <View style={[styles.inputWrapper, styles.halfWidth]}>
+                <Text style={styles.label}>Last Name</Text>
+                <View style={[styles.inputContainer, errors.lastName && styles.inputContainerError]}>
+                  <TextInput
+                    style={styles.input}
+                    value={formData.lastName}
+                    onChangeText={(value) => updateFormData('lastName', value)}
+                    placeholder="Doe"
+                    placeholderTextColor={Colors.textTertiary}
+                    autoCapitalize="words"
+                    editable={!loading}
+                  />
+                </View>
+                {errors.lastName && (
+                  <Text style={styles.errorText}>⚠ {errors.lastName}</Text>
+                )}
+              </View>
+            </View>
+
+            {/* Email */}
+            <View style={styles.inputWrapper}>
+              <Text style={styles.label}>Email Address</Text>
+              <View style={[styles.inputContainer, errors.email && styles.inputContainerError]}>
+                <TextInput
+                  style={styles.input}
+                  value={formData.email}
+                  onChangeText={(value) => updateFormData('email', value)}
+                  placeholder="john.doe@example.com"
+                  placeholderTextColor={Colors.textTertiary}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  editable={!loading}
+                />
+              </View>
+              {errors.email && (
+                <Text style={styles.errorText}>⚠ {errors.email}</Text>
+              )}
+            </View>
+
+            {/* Phone */}
+            <View style={styles.inputWrapper}>
+              <Text style={styles.label}>Phone Number</Text>
+              <View style={[styles.inputContainer, errors.phone && styles.inputContainerError]}>
+                <TextInput
+                  style={styles.input}
+                  value={formData.phone}
+                  onChangeText={(value) => updateFormData('phone', value)}
+                  placeholder="+233 XX XXX XXXX"
+                  placeholderTextColor={Colors.textTertiary}
+                  keyboardType="phone-pad"
+                  editable={!loading}
+                />
+              </View>
+              {errors.phone && (
+                <Text style={styles.errorText}>⚠ {errors.phone}</Text>
+              )}
+            </View>
+
+            {/* Password */}
+            <View style={styles.inputWrapper}>
+              <Text style={styles.label}>Password</Text>
+              <View style={[styles.inputContainer, errors.password && styles.inputContainerError]}>
+                <TextInput
+                  style={styles.input}
+                  value={formData.password}
+                  onChangeText={(value) => updateFormData('password', value)}
+                  placeholder="Create a strong password"
+                  placeholderTextColor={Colors.textTertiary}
+                  secureTextEntry
+                  editable={!loading}
+                />
+              </View>
+              {errors.password && (
+                <Text style={styles.errorText}>⚠ {errors.password}</Text>
+              )}
+            </View>
+
+            {/* Confirm Password */}
+            <View style={styles.inputWrapper}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <View style={[styles.inputContainer, errors.confirmPassword && styles.inputContainerError]}>
+                <TextInput
+                  style={styles.input}
+                  value={formData.confirmPassword}
+                  onChangeText={(value) => updateFormData('confirmPassword', value)}
+                  placeholder="Confirm your password"
+                  placeholderTextColor={Colors.textTertiary}
+                  secureTextEntry
+                  editable={!loading}
+                />
+              </View>
+              {errors.confirmPassword && (
+                <Text style={styles.errorText}>⚠ {errors.confirmPassword}</Text>
+              )}
+            </View>
+
+            {/* Signup Button */}
+            <TouchableOpacity
+              style={[styles.signupButton, loading && styles.signupButtonDisabled]}
+              onPress={handleSignup}
+              disabled={loading}
+              activeOpacity={0.8}
+            >
+              {loading ? (
+                <ActivityIndicator color={Colors.white} size="small" />
+              ) : (
+                <Text style={styles.signupButtonText}>Join Now</Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Terms */}
+            <Text style={styles.termsText}>
+              By signing up, you agree to our{' '}
+              <Text 
+                style={styles.termsLink}
+                onPress={() => navigation.navigate('Terms')}
               >
-                <Text style={[styles.roleText, role === r && styles.roleTextActive]}>{r}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                Terms and Conditions
+              </Text>
+              {' '}and{' '}
+              <Text 
+                style={styles.termsLink}
+                onPress={() => navigation.navigate('Privacy')}
+              >
+                Privacy Policy
+              </Text>
+            </Text>
 
-          {/* First Name */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>First Name</Text>
-            <TextInput
-              style={[styles.input, errors.firstName && styles.inputError]}
-              value={formData.firstName}
-              onChangeText={(value) => updateFormData('firstName', value)}
-              placeholder="Enter your first name"
-              autoCapitalize="words"
-            />
-            {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
-          </View>
+            {/* Divider */}
+            <View style={styles.dividerContainer}>
+              <View style={styles.divider} />
+              <View style={styles.dividerTextContainer}>
+                <Text style={styles.dividerText}>Already a member?</Text>
+              </View>
+              <View style={styles.divider} />
+            </View>
 
-          {/* Last Name */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Last Name</Text>
-            <TextInput
-              style={[styles.input, errors.lastName && styles.inputError]}
-              value={formData.lastName}
-              onChangeText={(value) => updateFormData('lastName', value)}
-              placeholder="Enter your last name"
-              autoCapitalize="words"
-            />
-            {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
-          </View>
-
-          {/* Email */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={[styles.input, errors.email && styles.inputError]}
-              value={formData.email}
-              onChangeText={(value) => updateFormData('email', value)}
-              placeholder="Enter your email"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-            {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
-          </View>
-
-          {/* Phone */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Phone Number</Text>
-            <TextInput
-              style={[styles.input, errors.phone && styles.inputError]}
-              value={formData.phone}
-              onChangeText={(value) => updateFormData('phone', value)}
-              placeholder="Enter your phone number"
-              keyboardType="phone-pad"
-            />
-            {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
-          </View>
-
-          {/* Password */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={[styles.input, errors.password && styles.inputError]}
-              value={formData.password}
-              onChangeText={(value) => updateFormData('password', value)}
-              placeholder="Enter your password"
-              secureTextEntry
-            />
-            {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
-          </View>
-
-          {/* Confirm Password */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Confirm Password</Text>
-            <TextInput
-              style={[styles.input, errors.confirmPassword && styles.inputError]}
-              value={formData.confirmPassword}
-              onChangeText={(value) => updateFormData('confirmPassword', value)}
-              placeholder="Confirm your password"
-              secureTextEntry
-            />
-            {errors.confirmPassword && (
-              <Text style={styles.errorText}>{errors.confirmPassword}</Text>
-            )}
-          </View>
-
-          {/* Signup Button */}
-          <TouchableOpacity
-            style={[styles.signupButton, loading && styles.signupButtonDisabled]}
-            onPress={handleSignup}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.signupButtonText}>Sign Up</Text>
-            )}
-          </TouchableOpacity>
-
-          {/* Login Link */}
-          <View style={styles.loginContainer}>
-            <Text style={styles.loginText}>Already have an account? </Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-              <Text style={styles.loginLink}>Login</Text>
+            {/* Login Link */}
+            <TouchableOpacity 
+              style={styles.loginButton}
+              onPress={() => navigation.navigate('Login')}
+              disabled={loading}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.loginButtonText}>Sign In to Your Account</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -251,111 +352,227 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: Colors.background,
   },
   scrollContent: {
     flexGrow: 1,
-    padding: 20,
+  },
+  decorativeCircle1: {
+    position: 'absolute',
+    top: -100,
+    right: -100,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: Colors.primaryLight + '15',
+  },
+  decorativeCircle2: {
+    position: 'absolute',
+    top: 200,
+    left: -80,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: Colors.success + '10',
+  },
+  decorativeCircle3: {
+    position: 'absolute',
+    bottom: 100,
+    right: -50,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: Colors.accent + '10',
+  },
+  content: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 50,
+    paddingBottom: 40,
   },
   header: {
-    marginTop: 40,
-    marginBottom: 30,
+    marginBottom: 36,
+    alignItems: 'center',
+  },
+  brandContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  brandName: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: Colors.primary,
+    letterSpacing: 2,
+  },
+  brandAccent: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.accent,
+    marginLeft: 6,
+    marginBottom: 16,
   },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 28,
+    fontWeight: '800',
+    color: Colors.textPrimary,
     marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: 15,
+    color: Colors.textSecondary,
+    textAlign: 'center',
   },
   form: {
     flex: 1,
   },
-  label: {
+  roleSection: {
+    marginBottom: 24,
+  },
+  roleSectionLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
+    color: Colors.textPrimary,
+    marginBottom: 12,
   },
-  roleContainer: {
+  roleToggleContainer: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 20,
+    backgroundColor: Colors.backgroundSecondary,
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  roleButton: {
+  roleToggle: {
     flex: 1,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
     alignItems: 'center',
   },
-  roleButtonActive: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+  roleToggleActive: {
+    backgroundColor: Colors.primary,
   },
-  roleText: {
-    fontSize: 14,
+  roleToggleText: {
+    fontSize: 15,
     fontWeight: '600',
-    color: '#666',
+    color: Colors.textSecondary,
   },
-  roleTextActive: {
-    color: '#fff',
+  roleToggleTextActive: {
+    color: Colors.white,
   },
-  inputContainer: {
+  rowContainer: {
+    flexDirection: 'row',
+    gap: 12,
     marginBottom: 20,
   },
-  input: {
-    height: 50,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
+  halfWidth: {
+    flex: 1,
   },
-  inputError: {
-    borderColor: '#ff3b30',
+  inputWrapper: {
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    marginBottom: 8,
+  },
+  inputContainer: {
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.backgroundSecondary,
+    paddingHorizontal: 16,
+  },
+  inputContainerError: {
+    borderColor: Colors.error,
+    backgroundColor: Colors.errorLight,
+  },
+  input: {
+    flex: 1,
+    fontSize: 15,
+    color: Colors.textPrimary,
   },
   errorText: {
-    color: '#ff3b30',
     fontSize: 12,
-    marginTop: 4,
+    color: Colors.error,
+    marginTop: 6,
+    fontWeight: '500',
   },
   signupButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 16,
-    borderRadius: 8,
+    height: 56,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
     alignItems: 'center',
-    marginTop: 10,
+    justifyContent: 'center',
+    marginTop: 8,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 6,
   },
   signupButtonDisabled: {
     opacity: 0.6,
+    shadowOpacity: 0.1,
   },
   signupButtonText: {
-    color: '#fff',
+    color: Colors.white,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  loginContainer: {
+  termsText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 16,
+    lineHeight: 18,
+  },
+  termsLink: {
+    color: Colors.primary,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  dividerContainer: {
     flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 28,
+  },
+  divider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  dividerTextContainer: {
+    paddingHorizontal: 16,
+    backgroundColor: Colors.background,
+  },
+  dividerText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    fontWeight: '500',
+  },
+  loginButton: {
+    height: 56,
+    backgroundColor: Colors.background,
+    borderRadius: 12,
+    alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 20,
+    borderWidth: 2,
+    borderColor: Colors.primary,
     marginBottom: 20,
   },
-  loginText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  loginLink: {
-    fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '600',
+  loginButtonText: {
+    fontSize: 15,
+    color: Colors.primary,
+    fontWeight: '700',
   },
 });
 

@@ -7,7 +7,11 @@ import {
   getSellerProductByIdForPublicUse,
   getAllSellerProductsForPublicUse,
   getUserProducts,
-  getAllProducts // Import the new controller
+  getAllProducts, // Import the new controller
+  getTopSellingProducts,
+  getRecommendedProducts,
+  getProductsYouMayLike,
+  getTrendingProducts
 } from '../controllers/productcontroller.js';
 import { authenticateToken } from '../middleware/authmiddleware.js';
 import { uploadProductImages, handleMulterError } from '../config/multerproduct.js';
@@ -25,5 +29,9 @@ router.post('/', authenticateToken, uploadProductImages, handleMulterError, crea
 router.get('/my-products', authenticateToken, getUserProducts); 
 router.put('/:productId', authenticateToken, uploadProductImages, handleMulterError, updateProduct);
 router.delete('/:productId', authenticateToken, deleteProduct);
+router.get('/top-selling', getTopSellingProducts);
+router.get('/recommended/:productUrl', getRecommendedProducts);
+router.get('/you-may-like', getProductsYouMayLike);
+router.get('/trending', getTrendingProducts);
 
 export default router;

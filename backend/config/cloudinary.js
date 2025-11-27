@@ -10,17 +10,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-/**
- * Upload file buffer to Cloudinary
- * @param {Buffer} buffer - File buffer from multer
- * @param {Object} options - Upload options
- * @param {string} options.folder - Cloudinary folder name (e.g., 'avatars', 'products', 'reviews', 'stores')
- * @param {number} options.width - Image width (optional)
- * @param {number} options.height - Image height (optional)
- * @param {string} options.crop - Crop mode (optional, default: 'fill')
- * @param {string} options.gravity - Gravity for cropping (optional, default: 'auto')
- * @returns {Promise<Object>} - Cloudinary upload result
- */
 export const uploadToCloudinary = (buffer, options = {}) => {
   const {
     folder = 'uploads',
@@ -65,12 +54,6 @@ export const uploadToCloudinary = (buffer, options = {}) => {
   });
 };
 
-/**
- * Upload multiple files to Cloudinary
- * @param {Array<Buffer>} buffers - Array of file buffers
- * @param {Object} options - Upload options
- * @returns {Promise<Array>} - Array of Cloudinary upload results
- */
 export const uploadMultipleToCloudinary = async (buffers, options = {}) => {
   try {
     const uploadPromises = buffers.map(buffer => 
@@ -82,11 +65,6 @@ export const uploadMultipleToCloudinary = async (buffers, options = {}) => {
   }
 };
 
-/**
- * Delete image from Cloudinary
- * @param {string} imageUrl - Cloudinary image URL
- * @returns {Promise<void>}
- */
 export const deleteFromCloudinary = async (imageUrl) => {
   try {
     if (!imageUrl) return;
@@ -103,11 +81,6 @@ export const deleteFromCloudinary = async (imageUrl) => {
   }
 };
 
-/**
- * Delete multiple images from Cloudinary
- * @param {Array<string>} imageUrls - Array of Cloudinary image URLs
- * @returns {Promise<void>}
- */
 export const deleteMultipleFromCloudinary = async (imageUrls) => {
   try {
     const deletePromises = imageUrls
@@ -121,9 +94,6 @@ export const deleteMultipleFromCloudinary = async (imageUrls) => {
   }
 };
 
-/**
- * Preset configurations for different upload types
- */
 export const uploadPresets = {
   avatar: {
     folder: 'avatars',

@@ -8,9 +8,11 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  hasSeenOnboarding: boolean;
   login: (token: string, user: User) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (user: User) => Promise<void>;
+  setHasSeenOnboarding: (value: boolean) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -19,6 +21,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasSeenOnboarding, setHasSeenOnboardingState] = useState(false);
 
   useEffect(() => {
     loadStoredAuth();
@@ -26,15 +29,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loadStoredAuth = async () => {
     try {
-      const [storedToken, storedUser] = await Promise.all([
+      const [storedToken, storedUser, onboardingStatus] = await Promise.all([
         AsyncStorage.getItem('token'),
         AsyncStorage.getItem('user'),
+        AsyncStorage.getItem('hasSeenOnboarding'),
       ]);
 
       if (storedToken && storedUser) {
         setToken(storedToken);
         setUser(JSON.parse(storedUser));
       }
+
+      setHasSeenOnboardingState(onboardingStatus === 'true');
     } catch (error) {
       console.error('Error loading auth:', error);
     } finally {
@@ -79,6 +85,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const setHasSeenOnboarding = async (value: boolean) => {
+    try {
+      await AsyncStorage.setItem('hasSeenOnboarding', value.toString());
+      setHasSeenOnboardingState(value);
+    } catch (error) {
+      console.error('Error saving onboarding status:', error);
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -86,9 +102,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         isLoading,
         isAuthenticated: !!token && !!user,
+        hasSeenOnboarding,
         login,
         logout,
         updateUser,
+        setHasSeenOnboarding,
       }}
     >
       {children}

@@ -1,24 +1,69 @@
-import { cache } from '../config/redis.js'; 
-import prisma from '../config/prisma.js';
+// controllers/payoutController.js
+import prisma from "../config/prisma.js";
+import { cache } from "../config/redis.js";
+import axios from "axios";
+import dotenv from "dotenv";
+dotenv.config();
+
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
+
+const createPaystackRecipient = async ({ accountType, bankName, accountNumber, accountName, provider, mobileNumber }) => {
+  try {
+    let payload = {};
+
+    if (accountType === "bank") {
+      payload = {
+        type: "nuban",
+        name: accountName,
+        account_number: accountNumber,
+        bank_code: bankName,
+        currency: "GHS",
+      };
+    }
+
+    if (accountType === "mobile_money") {
+      payload = {
+        type: "mobile_money",
+        name: accountName || "Mobile Money User",
+        account_number: mobileNumber,   // REQUIRED
+        bank_code: provider,            // MTN, VOD, TGO
+        currency: "GHS",
+      };
+    }
+
+    const response = await axios.post(
+      "https://api.paystack.co/transferrecipient",
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data.data.recipient_code;
+
+  } catch (error) {
+    console.error("PAYSTACK RECIPIENT CREATION ERROR:", error.response?.data || error);
+    throw new Error("Failed to create Paystack transfer recipient");
+  }
+};
+
 
 export const upsertPaymentAccount = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Fetch the user's store ID
-    const userStore = await prisma.store.findUnique({
+    const store = await prisma.store.findUnique({
       where: { userId },
-      select: { id: true }
+      select: { id: true, url: true },
     });
 
-    if (!userStore) {
-      return res.status(400).json({
-        success: false,
-        message: 'Store not found. User must have an active store.'
-      });
-    }
+    if (!store)
+      return res.status(400).json({ success: false, message: "Store not found." });
 
-    const storeId = userStore.id;
+    const storeId = store.id;
 
     const {
       accountType,
@@ -27,47 +72,61 @@ export const upsertPaymentAccount = async (req, res) => {
       accountName,
       provider,
       mobileNumber,
-      isPrimary = true, // Default to true if not provided
-      isActive = true   // Default to true if not provided
+      isPrimary = true,
+      isActive = true
     } = req.body;
 
-    // Validate required fields based on accountType
-    if (accountType === 'bank') {
-      if (!bankName || !accountNumber || !accountName) {
-        return res.status(400).json({
-          success: false,
-          message: 'For bank accounts, bankName, accountNumber, and accountName are required.'
-        });
-      }
-      // Ensure mobile money fields are not provided for bank accounts
-      if (provider || mobileNumber) {
-         return res.status(400).json({
-          success: false,
-          message: 'Provider and mobileNumber should not be provided for bank accounts.'
-        });
-      }
-    } else if (accountType === 'mobile_money') {
-      if (!provider || !mobileNumber) {
-        return res.status(400).json({
-          success: false,
-          message: 'For mobile money accounts, provider and mobileNumber are required.'
-        });
-      }
-      // Ensure bank fields are not provided for mobile money accounts
-      if (bankName || accountNumber || accountName) {
-         return res.status(400).json({
-          success: false,
-          message: 'Bank name, account number, and account name should not be provided for mobile money accounts.'
-        });
-      }
-    } else {
+    // Validate type
+    if (!["bank", "mobile_money"].includes(accountType)) {
       return res.status(400).json({
         success: false,
         message: "accountType must be 'bank' or 'mobile_money'."
       });
     }
 
-    // Prepare data object for Prisma upsert
+    // Validation: Bank
+    if (accountType === "bank") {
+      if (!bankName || !accountNumber || !accountName) {
+        return res.status(400).json({
+          success: false,
+          message: "For bank accounts, bankName, accountNumber, and accountName are required."
+        });
+      }
+    }
+
+    // Validation: Mobile Money
+    if (accountType === "mobile_money") {
+      if (!provider || !mobileNumber) {
+        return res.status(400).json({
+          success: false,
+          message: "For mobile money accounts, provider and mobileNumber are required."
+        });
+      }
+    }
+
+    /* -----------------------------------------
+        CREATE PAYSTACK RECIPIENT IF MISSING
+    ------------------------------------------ */
+    let recipientCode;
+
+    const existing = await prisma.paymentAccount.findUnique({
+      where: { storeId },
+    });
+
+    if (!existing || !existing.paystackRecipientCode) {
+      recipientCode = await createPaystackRecipient({
+        accountType,
+        bankName,
+        accountNumber,
+        accountName,
+        provider,
+        mobileNumber
+      });
+    }
+
+    /* -----------------------------------------
+        UPSERT DATABASE RECORD
+    ------------------------------------------ */
     const data = {
       accountType,
       bankName: bankName || null,
@@ -77,78 +136,58 @@ export const upsertPaymentAccount = async (req, res) => {
       mobileNumber: mobileNumber || null,
       isPrimary,
       isActive,
-      store: { connect: { id: storeId } } // Connect to the user's store
+      paystackRecipientCode: recipientCode || existing?.paystackRecipientCode || null,
+      store: { connect: { id: storeId } }
     };
 
-    // Upsert: Create if not exists, update if exists (based on storeId)
     const paymentAccount = await prisma.paymentAccount.upsert({
-      where: { storeId }, // This is the unique field ensuring one account per store
-      update: data,
-      create: data
+      where: { storeId },
+      create: data,
+      update: data
     });
 
-    // Invalidate related caches (e.g., user's store details which might include payment info)
+    // Clear cache
     await cache.del(`user:${userId}:store`);
-    await cache.del(`store:slug:${userStore.url}`); // Assuming you have the store URL
+    await cache.del(`store:slug:${store.url}`);
 
-    res.status(200).json({
+    console.log("Upserted Payment Account:", paymentAccount);
+
+    res.json({
       success: true,
-      message: 'Payment account created/updated successfully.',
-       paymentAccount
+      message: "Payment account saved successfully.",
+      paymentAccount
     });
 
   } catch (error) {
-    console.error('Error upserting payment account:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
+    console.error("Error in upsertPaymentAccount:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const getUserPaymentAccount = async (req, res) => {
   try {
-    const userId = req.user.userId; 
+    const userId = req.user.userId;
 
-    // Fetch the user's store ID
-    const userStore = await prisma.store.findFirst({
+    const store = await prisma.store.findUnique({
       where: { userId },
       select: { id: true }
     });
 
-    if (!userStore) {
-      return res.status(400).json({
-        success: false,
-        message: 'Store not found. User must have an active store.'
-      });
-    }
+    if (!store)
+      return res.status(400).json({ success: false, message: "Store not found." });
 
-    const storeId = userStore.id;
-
-    const paymentAccount = await prisma.paymentAccount.findUnique({
-      where: { storeId } // Find by the unique storeId
+    const payment = await prisma.paymentAccount.findUnique({
+      where: { storeId: store.id }
     });
 
-    if (!paymentAccount) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment account not found for this store.'
-      });
-    }
+    if (!payment)
+      return res.status(404).json({ success: false, message: "No payment account found." });
 
-    res.status(200).json({
-      success: true,
-       paymentAccount
-    });
+    res.json({ success: true, paymentAccount: payment });
 
   } catch (error) {
-    console.error('Error fetching user payment account:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
+    console.error("Error getUserPaymentAccount:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -156,44 +195,26 @@ export const getPaymentAccountByStoreUrl = async (req, res) => {
   try {
     const { storeUrl } = req.params;
 
-    // Find the store ID first
     const store = await prisma.store.findFirst({
-      where: { url: storeUrl, isActive: true }, // Ensure store exists and is active
+      where: { url: storeUrl, isActive: true },
       select: { id: true }
     });
 
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found or not active.'
-      });
-    }
+    if (!store)
+      return res.status(404).json({ success: false, message: "Store not found." });
 
-    const storeId = store.id;
-
-    // Fetch the associated payment account
-    const paymentAccount = await prisma.paymentAccount.findUnique({
-      where: { storeId }
+    const payment = await prisma.paymentAccount.findUnique({
+      where: { storeId: store.id }
     });
 
-    if (!paymentAccount) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment account not found for this store.'
-      });
-    }
-    res.status(200).json({
-      success: true,
-       paymentAccount
-    });
+    if (!payment)
+      return res.status(404).json({ success: false, message: "Payment account not found." });
+
+    res.json({ success: true, paymentAccount: payment });
 
   } catch (error) {
-    console.error('Error fetching payment account by store URL:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
+    console.error("Error getPaymentAccountByStoreUrl:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -201,53 +222,26 @@ export const deletePaymentAccount = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Fetch the user's store ID
-    const userStore = await prisma.store.findFirst({
+    const store = await prisma.store.findUnique({
       where: { userId },
-      select: { id: true }
+      select: { id: true, url: true }
     });
 
-    if (!userStore) {
-      return res.status(400).json({
-        success: false,
-        message: 'Store not found. User must have an active store.'
-      });
-    }
+    if (!store)
+      return res.status(400).json({ success: false, message: "Store not found." });
 
-    const storeId = userStore.id;
-
-    // Find the existing payment account
-    const existingAccount = await prisma.paymentAccount.findUnique({
-      where: { storeId }
-    });
-
-    if (!existingAccount) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment account not found for this store.'
-      });
-    }
-
-    // Delete the payment account
     await prisma.paymentAccount.delete({
-      where: { storeId }
+      where: { storeId: store.id }
     });
 
-    // Invalidate related caches
+    // Clear cache
     await cache.del(`user:${userId}:store`);
-    await cache.del(`store:slug:${userStore.url}`);
+    await cache.del(`store:slug:${store.url}`);
 
-    res.status(200).json({
-      success: true,
-      message: 'Payment account deleted successfully.'
-    });
+    res.json({ success: true, message: "Payment account deleted." });
 
   } catch (error) {
-    console.error('Error deleting payment account:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
+    console.error("Error deletePaymentAccount:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -18,10 +18,6 @@ export const sendNotification = async (userId, title, message, type, data = null
     await cache.del(`notifications:user:${userId}:all`);
     await cache.del(`notifications:user:${userId}:unread`);
 
-    // Here you could potentially emit a Socket.IO event to the user
-    // if real-time notifications are desired.
-    // io.to(userId).emit('newNotification', notification);
-
     return notification;
   } catch (error) {
     console.error('Error sending notification:', error);

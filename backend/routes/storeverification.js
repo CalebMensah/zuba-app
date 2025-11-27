@@ -31,42 +31,42 @@ router.get(
 router.get(
   '/stats',
   authenticateToken,
-  authorizeRoles(['ADMIN']),
+  authorizeRoles('ADMIN'),
   getVerificationStats
 );
 
 router.get(
   '/pending',
   authenticateToken,
-  authorizeRoles(['ADMIN']),
+  authorizeRoles('ADMIN'),
   getPendingVerifications
 );
 
 router.get(
   '/all',
   authenticateToken,
-  authorizeRoles(['ADMIN']),
+  authorizeRoles('ADMIN'),
   getAllVerifications
 );
 
 router.get(
   '/:verificationId',
   authenticateToken,
-  authorizeRoles(['ADMIN']),
+  authorizeRoles('ADMIN'),
   getVerificationDetails
 );
 
 router.patch(
   '/:verificationId/status',
   authenticateToken,
-  authorizeRoles(['ADMIN']),
+  authorizeRoles('ADMIN'),
   updateVerificationStatus
 );
 
 router.delete(
   '/:verificationId',
   authenticateToken,
-  authorizeRoles(['ADMIN']),
+  authorizeRoles('ADMIN'),
   deleteVerification
 );
 
