@@ -1,429 +1,414 @@
-import { uploadToCloudinary, deleteFromCloudinary, uploadPresets } from '../config/cloudinary.js';
+import { uploadToCloudinary, deleteFromCloudinary } from '../config/cloudinary.js';
 import { cache } from '../config/redis.js';
 import prisma from '../config/prisma.js';
 import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
+import crypto from 'crypto';
+
+// Sanitize output - remove sensitive data
+const sanitizeVerificationForUser = (verification) => {
+  const { ghanaCardFront, ghanaCardBack, selfie, businessDoc, ...safe } = verification;
+  return safe;
+};
+
+const sanitizeVerificationForAdmin = (verification) => {
+  // Admins get full access but we can still add signed URLs in the future
+  return verification;
+};
+
+// Generate signed URLs for documents (implement this based on your Cloudinary setup)
+const generateSignedDocumentUrls = async (verification) => {
+  // This is a placeholder - implement actual Cloudinary signed URL generation
+  return {
+    ghanaCardFront: verification.ghanaCardFront,
+    ghanaCardBack: verification.ghanaCardBack,
+    selfie: verification.selfie,
+    businessDoc: verification.businessDoc
+  };
+};
 
 export const submitStoreVerification = async (req, res) => {
-  try {
-    const { rejectionReason } = req.body;
-    const userId = req.user.userId;
+  // Start transaction for atomicity
+  const transaction = await prisma.$transaction(async (tx) => {
+    try {
+      const { rejectionReason } = req.body;
+      const userId = req.user.userId;
 
-    // Find the user's store
-    const store = await prisma.store.findFirst({
-      where: { userId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            email: true
+      // Find the user's store with transaction
+      const store = await tx.store.findFirst({
+        where: { userId },
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              email: true
+            }
           }
         }
+      });
+
+      if (!store) {
+        throw new Error('STORE_NOT_FOUND');
       }
-    });
 
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found. You must create a store first.'
+      // Verify ownership (additional security layer)
+      if (store.userId !== userId) {
+        throw new Error('UNAUTHORIZED_STORE_ACCESS');
+      }
+
+      // Check if verification already exists
+      const existingVerification = await tx.storeVerification.findUnique({
+        where: { storeId: store.id }
       });
-    }
 
-    // Check if verification already exists and is pending/verified
-    let existingVerification = await prisma.storeVerification.findUnique({
-      where: { storeId: store.id }
-    });
+      if (existingVerification && existingVerification.status === 'verified') {
+        throw new Error('ALREADY_VERIFIED');
+      }
 
-    if (existingVerification && existingVerification.status === 'verified') {
-      return res.status(400).json({
-        success: false,
-        message: 'Store is already verified.'
-      });
-    }
-
-    // Validate required files are present
-    const { ghanaCardFront, ghanaCardBack, selfie, businessDoc } = req.files || {};
-    
-    if (!ghanaCardFront || !ghanaCardBack || !selfie) {
-      return res.status(400).json({
-        success: false,
-        message: 'Ghana Card Front, Back, and Selfie are required.'
-      });
-    }
-
-    // Upload documents to Cloudinary
-    let ghanaCardFrontUrl, ghanaCardBackUrl, selfieUrl, businessDocUrl = null;
-    const uploadedUrls = []; // Track successfully uploaded URLs for cleanup
-
-    try {
-      // Upload required documents
-      const frontRes = await uploadToCloudinary(
-        ghanaCardFront[0].buffer, 
-        { 
-          folder: 'store-verifications/ghana-card', 
-          width: 800, 
-          height: 600, 
-          crop: 'fill',
-          gravity: 'center'
+      // Check for recent submissions to prevent spam
+      if (existingVerification && existingVerification.status === 'pending') {
+        const hoursSinceSubmission = 
+          (Date.now() - existingVerification.createdAt.getTime()) / (1000 * 60 * 60);
+        
+        if (hoursSinceSubmission < 24) {
+          throw new Error('PENDING_VERIFICATION_EXISTS');
         }
-      );
-      ghanaCardFrontUrl = frontRes.secure_url;
-      uploadedUrls.push(ghanaCardFrontUrl);
+      }
 
-      const backRes = await uploadToCloudinary(
-        ghanaCardBack[0].buffer, 
-        { 
-          folder: 'store-verifications/ghana-card', 
-          width: 800, 
-          height: 600, 
-          crop: 'fill',
-          gravity: 'center'
-        }
-      );
-      ghanaCardBackUrl = backRes.secure_url;
-      uploadedUrls.push(ghanaCardBackUrl);
+      const { ghanaCardFront, ghanaCardBack, selfie, businessDoc } = req.files;
 
-      const selfieRes = await uploadToCloudinary(
-        selfie[0].buffer, 
-        { 
-          folder: 'store-verifications/selfie',
-          width: 500,
-          height: 500,
-          crop: 'fill',
-          gravity: 'face'
-        }
-      );
-      selfieUrl = selfieRes.secure_url;
-      uploadedUrls.push(selfieUrl);
+      // Upload documents to Cloudinary with authenticated access
+      let uploadedUrls = [];
+      let ghanaCardFrontUrl, ghanaCardBackUrl, selfieUrl, businessDocUrl = null;
 
-      // Upload optional business document if provided
-      if (businessDoc && businessDoc.length > 0) {
-        const businessDocRes = await uploadToCloudinary(
-          businessDoc[0].buffer, 
+      try {
+        // Upload with authenticated access and transformations
+        const frontRes = await uploadToCloudinary(
+          ghanaCardFront[0].buffer, 
           { 
-            folder: 'store-verifications/business-docs', 
-            width: 1000, 
-            height: 1000, 
-            crop: 'fill',
-            gravity: 'center'
+            folder: 'store-verifications/ghana-card',
+            resource_type: 'image',
+            type: 'authenticated', // Important: authenticated access
+            access_mode: 'authenticated',
+            invalidate: true,
+            transformation: [
+              { width: 800, height: 600, crop: 'limit', quality: 'auto' },
+              { fetch_format: 'auto' }
+            ]
           }
         );
-        businessDocUrl = businessDocRes.secure_url;
-        uploadedUrls.push(businessDocUrl);
-      }
-    } catch (uploadError) {
-      console.error('Error uploading verification documents to Cloudinary:', uploadError);
-      
-      // Clean up any successfully uploaded files
-      for (const url of uploadedUrls) {
-        try {
-          await deleteFromCloudinary(url);
-        } catch (deleteError) {
-          console.error('Error cleaning up uploaded file:', deleteError);
+        ghanaCardFrontUrl = frontRes.secure_url;
+        uploadedUrls.push(ghanaCardFrontUrl);
+
+        const backRes = await uploadToCloudinary(
+          ghanaCardBack[0].buffer, 
+          { 
+            folder: 'store-verifications/ghana-card',
+            resource_type: 'image',
+            type: 'authenticated',
+            access_mode: 'authenticated',
+            invalidate: true,
+            transformation: [
+              { width: 800, height: 600, crop: 'limit', quality: 'auto' },
+              { fetch_format: 'auto' }
+            ]
+          }
+        );
+        ghanaCardBackUrl = backRes.secure_url;
+        uploadedUrls.push(ghanaCardBackUrl);
+
+        const selfieRes = await uploadToCloudinary(
+          selfie[0].buffer, 
+          { 
+            folder: 'store-verifications/selfie',
+            resource_type: 'image',
+            type: 'authenticated',
+            access_mode: 'authenticated',
+            invalidate: true,
+            transformation: [
+              { width: 500, height: 500, crop: 'limit', quality: 'auto', gravity: 'face' },
+              { fetch_format: 'auto' }
+            ]
+          }
+        );
+        selfieUrl = selfieRes.secure_url;
+        uploadedUrls.push(selfieUrl);
+
+        // Upload optional business document
+        if (businessDoc && businessDoc.length > 0) {
+          const businessDocRes = await uploadToCloudinary(
+            businessDoc[0].buffer, 
+            { 
+              folder: 'store-verifications/business-docs',
+              resource_type: 'image',
+              type: 'authenticated',
+              access_mode: 'authenticated',
+              invalidate: true,
+              transformation: [
+                { width: 1000, height: 1000, crop: 'limit', quality: 'auto' },
+                { fetch_format: 'auto' }
+              ]
+            }
+          );
+          businessDocUrl = businessDocRes.secure_url;
+          uploadedUrls.push(businessDocUrl);
         }
-      }
-
-      return res.status(500).json({
-        success: false,
-        message: 'Error uploading verification documents.',
-        error: uploadError.message
-      });
-    }
-
-    const verificationData = {
-      ghanaCardFront: ghanaCardFrontUrl,
-      ghanaCardBack: ghanaCardBackUrl,
-      selfie: selfieUrl,
-      businessDoc: businessDocUrl,
-      status: 'pending',
-      rejectionReason: rejectionReason || null,
-      verifiedAt: null,
-    };
-
-    let verification;
-    const isResubmission = !!existingVerification;
-
-    if (existingVerification) {
-      // Delete old documents if they exist
-      const oldUrls = [
-        existingVerification.ghanaCardFront,
-        existingVerification.ghanaCardBack,
-        existingVerification.selfie,
-        existingVerification.businessDoc
-      ].filter(Boolean);
-
-      for (const url of oldUrls) {
-        try {
-          await deleteFromCloudinary(url);
-        } catch (deleteError) {
-          console.error('Error deleting old verification document:', deleteError);
+      } catch (uploadError) {
+        console.error('Upload error:', uploadError);
+        
+        // Cleanup uploaded files
+        for (const url of uploadedUrls) {
+          try {
+            await deleteFromCloudinary(url);
+          } catch (cleanupError) {
+            console.error('Cleanup error:', cleanupError);
+          }
         }
+        
+        throw new Error('UPLOAD_FAILED');
       }
 
-      // Update existing verification record
-      verification = await prisma.storeVerification.update({
-        where: { storeId: store.id },
-        data: verificationData,
-      });
+      const verificationData = {
+        ghanaCardFront: ghanaCardFrontUrl,
+        ghanaCardBack: ghanaCardBackUrl,
+        selfie: selfieUrl,
+        businessDoc: businessDocUrl,
+        status: 'pending',
+        rejectionReason: null,
+        verifiedAt: null,
+      };
 
-      // Reset store's active status if resubmitting
-      await prisma.store.update({
-        where: { id: store.id },
-        data: { isActive: false }
-      });
-    } else {
-      // Create new verification record
-      verification = await prisma.storeVerification.create({
+      let verification;
+      const isResubmission = !!existingVerification;
+
+      if (existingVerification) {
+        // Delete old documents
+        const oldUrls = [
+          existingVerification.ghanaCardFront,
+          existingVerification.ghanaCardBack,
+          existingVerification.selfie,
+          existingVerification.businessDoc
+        ].filter(Boolean);
+
+        // Delete in background (don't block the response)
+        Promise.all(oldUrls.map(url => 
+          deleteFromCloudinary(url).catch(err => 
+            console.error('Background deletion error:', err)
+          )
+        ));
+
+        // Update existing verification
+        verification = await tx.storeVerification.update({
+          where: { storeId: store.id },
+          data: verificationData,
+        });
+
+        // Reset store active status
+        await tx.store.update({
+          where: { id: store.id },
+          data: { isActive: false }
+        });
+      } else {
+        // Create new verification
+        verification = await tx.storeVerification.create({
+          data: {
+            ...verificationData,
+            storeId: store.id,
+          },
+        });
+      }
+
+      // Create audit log
+      await tx.verificationAuditLog.create({
         data: {
-          ...verificationData,
-          storeId: store.id,
-        },
+          verificationId: verification.id,
+          action: isResubmission ? 'RESUBMITTED' : 'SUBMITTED',
+          performedBy: userId,
+          metadata: {
+            ipAddress: req.ip,
+            userAgent: req.get('user-agent'),
+            filesUploaded: {
+              ghanaCardFront: !!ghanaCardFrontUrl,
+              ghanaCardBack: !!ghanaCardBackUrl,
+              selfie: !!selfieUrl,
+              businessDoc: !!businessDocUrl
+            }
+          }
+        }
       });
+
+      return { verification, store, isResubmission };
+    } catch (error) {
+      throw error;
     }
+  });
 
-    // Invalidate cache
-    await cache.del(`store:slug:${store.url}`);
-    await cache.del(`user:${userId}:store`);
+  const { verification, store, isResubmission } = transaction;
 
-    // Send in-app notification
-    await sendNotification(
-      userId,
+  // Invalidate cache (outside transaction)
+  await Promise.all([
+    cache.del(`store:slug:${store.url}`),
+    cache.del(`user:${req.user.userId}:store`),
+    cache.del(`store:${store.id}:verification`)
+  ]);
+
+  // Send notifications (outside transaction, non-blocking)
+  Promise.all([
+    sendNotification(
+      req.user.userId,
       'Verification Submitted',
       isResubmission 
-        ? `Your updated verification documents for "${store.name}" have been submitted and are under review.`
-        : `Your verification documents for "${store.name}" have been submitted successfully. We'll review them shortly.`,
+        ? `Your updated verification documents for "${store.name}" are under review.`
+        : `Your verification documents for "${store.name}" have been submitted successfully.`,
       'store_verification',
       { 
         storeId: store.id, 
         verificationId: verification.id,
         status: 'pending'
       }
-    );
+    ).catch(err => console.error('Notification error:', err)),
 
-    // Send confirmation email
-    try {
-      await sendEmailNotification({
-        to: store.user.email,
-        toName: store.user.firstName,
-        subject: isResubmission 
-          ? 'Verification Documents Resubmitted'
-          : 'Store Verification Submitted - Under Review',
-        template: 'generic',
-        templateData: {
-          title: isResubmission ? 'Documents Resubmitted ✓' : 'Verification Submitted ✓',
-          message: isResubmission
-            ? `Your updated verification documents for <strong>${store.name}</strong> have been received and are currently under review. We'll notify you once the review is complete.`
-            : `Thank you for submitting your verification documents for <strong>${store.name}</strong>. Our team is reviewing your submission and will get back to you within 24-48 hours.`,
-          ctaText: 'Check Status',
-          ctaUrl: `${process.env.FRONTEND_URL}/dashboard/store/verification`
-        }
-      });
-    } catch (emailError) {
-      console.error('Error sending verification submission email:', emailError);
-      // Don't fail the request if email fails
-    }
+    sendEmailNotification({
+      to: store.user.email,
+      toName: store.user.firstName,
+      subject: isResubmission 
+        ? 'Verification Documents Resubmitted'
+        : 'Store Verification Submitted - Under Review',
+      template: 'generic',
+      templateData: {
+        title: isResubmission ? 'Documents Resubmitted ✓' : 'Verification Submitted ✓',
+        message: isResubmission
+          ? `Your updated verification documents for <strong>${store.name}</strong> are under review.`
+          : `Thank you for submitting your verification documents for <strong>${store.name}</strong>. Review within 24-48 hours.`,
+        ctaText: 'Check Status',
+        ctaUrl: `${process.env.FRONTEND_URL}/dashboard/store/verification`
+      }
+    }).catch(err => console.error('Email error:', err))
+  ]);
 
-    res.status(201).json({
-      success: true,
-      message: 'Store verification submitted successfully. Awaiting review.',
-      data: verification
-    });
-
-  } catch (error) {
-    console.error('Error submitting store verification:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
+  res.status(201).json({
+    success: true,
+    message: 'Store verification submitted successfully. Awaiting review.',
+    data: sanitizeVerificationForUser(verification)
+  });
 };
 
-export const getMyStoreVerificationStatus = async (req, res) => {
-  try {
-    const userId = req.user.userId;
+// Error handler wrapper
+export const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch((error) => {
+    console.error('Controller error:', error);
 
-    const store = await prisma.store.findFirst({
-      where: { userId }
-    });
-
-    if (!store) {
+    // Handle specific errors
+    if (error.message === 'STORE_NOT_FOUND') {
       return res.status(404).json({
         success: false,
-        message: 'Store not found.'
+        message: 'Store not found. Please create a store first.'
       });
     }
 
-    const verification = await prisma.storeVerification.findUnique({
-      where: { storeId: store.id },
-      include: {
-        store: {
-          select: {
-            id: true,
-            name: true,
-            url: true,
-            isActive: true
-          }
+    if (error.message === 'UNAUTHORIZED_STORE_ACCESS') {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to access this store.'
+      });
+    }
+
+    if (error.message === 'ALREADY_VERIFIED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Store is already verified.'
+      });
+    }
+
+    if (error.message === 'PENDING_VERIFICATION_EXISTS') {
+      return res.status(400).json({
+        success: false,
+        message: 'A verification request is already pending. Please wait 24 hours before resubmitting.'
+      });
+    }
+
+    if (error.message === 'UPLOAD_FAILED') {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to upload verification documents. Please try again.'
+      });
+    }
+
+    // Generic error
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred while processing your request.',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
+  });
+};
+
+export const getMyStoreVerificationStatus = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+
+  // Check cache first
+  const cacheKey = `user:${userId}:verification-status`;
+  const cached = await cache.get(cacheKey);
+  
+  if (cached) {
+    return res.status(200).json({
+      success: true,
+      data: JSON.parse(cached)
+    });
+  }
+
+  const store = await prisma.store.findFirst({
+    where: { userId }
+  });
+
+  if (!store) {
+    return res.status(404).json({
+      success: false,
+      message: 'Store not found.'
+    });
+  }
+
+  const verification = await prisma.storeVerification.findUnique({
+    where: { storeId: store.id },
+    include: {
+      store: {
+        select: {
+          id: true,
+          name: true,
+          url: true,
+          isActive: true
         }
       }
-    });
-
-    if (!verification) {
-      return res.status(404).json({
-        success: false,
-        message: 'Verification not submitted yet.'
-      });
     }
+  });
 
-    res.status(200).json({
-      success: true,
-      data: verification
-    });
-
-  } catch (error) {
-    console.error('Error fetching verification status:', error);
-    res.status(500).json({
+  if (!verification) {
+    return res.status(404).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Verification not submitted yet.'
     });
   }
-};
 
-export const getPendingVerifications = async (req, res) => {
-  try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+  // Don't expose document URLs to user
+  const sanitized = sanitizeVerificationForUser(verification);
 
-    const [verifications, total] = await Promise.all([
-      prisma.storeVerification.findMany({
-        where: { status: 'pending' },
-        include: {
-          store: {
-            include: {
-              user: {
-                select: { 
-                  id: true, 
-                  firstName: true, 
-                  email: true,
-                  phone: true
-                }
-              }
-            }
-          }
-        },
-        skip: skip,
-        take: parseInt(limit),
-        orderBy: { createdAt: 'asc' }
-      }),
-      prisma.storeVerification.count({
-        where: { status: 'pending' }
-      })
-    ]);
+  // Cache for 5 minutes
+  await cache.set(cacheKey, 300, JSON.stringify(sanitized));
 
-    res.status(200).json({
-      success: true,
-      data: verifications,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / parseInt(limit))
-      }
-    });
+  res.status(200).json({
+    success: true,
+    data: sanitized
+  });
+});
 
-  } catch (error) {
-    console.error('Error fetching pending verifications:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+export const getPendingVerifications = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10 } = req.query;
+  const skip = (page - 1) * limit;
 
-export const getAllVerifications = async (req, res) => {
-  try {
-    const { page = 1, limit = 10, status, storeId, search } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    // Build where clause
-    const where = {};
-    
-    if (status && ['pending', 'verified', 'rejected'].includes(status)) {
-      where.status = status;
-    }
-    
-    if (storeId) {
-      where.storeId = storeId;
-    }
-
-    if (search) {
-      where.store = {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { user: { 
-            OR: [
-              { name: { contains: search, mode: 'insensitive' } },
-              { email: { contains: search, mode: 'insensitive' } }
-            ]
-          }}
-        ]
-      };
-    }
-
-    const [verifications, total] = await Promise.all([
-      prisma.storeVerification.findMany({
-        where,
-        include: {
-          store: {
-            include: {
-              user: {
-                select: { 
-                  id: true, 
-                  firstName: true, 
-                  email: true,
-                  phone: true
-                }
-              }
-            }
-          }
-        },
-        skip: skip,
-        take: parseInt(limit),
-        orderBy: { createdAt: 'desc' }
-      }),
-      prisma.storeVerification.count({ where })
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: verifications,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / parseInt(limit))
-      }
-    });
-
-  } catch (error) {
-    console.error('Error fetching all verifications:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const getVerificationDetails = async (req, res) => {
-  try {
-    const { verificationId } = req.params;
-
-    const verification = await prisma.storeVerification.findUnique({
-      where: { id: verificationId },
+  const [verifications, total] = await Promise.all([
+    prisma.storeVerification.findMany({
+      where: { status: 'pending' },
       include: {
         store: {
           include: {
@@ -432,60 +417,141 @@ export const getVerificationDetails = async (req, res) => {
                 id: true, 
                 firstName: true, 
                 email: true,
-                phone: true,
-                createdAt: true
+                phone: true
               }
             }
           }
         }
-      }
-    });
+      },
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'asc' }
+    }),
+    prisma.storeVerification.count({
+      where: { status: 'pending' }
+    })
+  ]);
 
-    if (!verification) {
-      return res.status(404).json({
-        success: false,
-        message: 'Verification record not found.'
-      });
+  res.status(200).json({
+    success: true,
+    data: verifications.map(sanitizeVerificationForAdmin),
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
     }
+  });
+});
 
-    res.status(200).json({
-      success: true,
-      data: verification
-    });
+export const getAllVerifications = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10, status, storeId, search } = req.query;
+  const skip = (page - 1) * limit;
 
-  } catch (error) {
-    console.error('Error fetching verification details:', error);
-    res.status(500).json({
+  const where = {};
+  
+  if (status) {
+    where.status = status;
+  }
+  
+  if (storeId) {
+    where.storeId = storeId;
+  }
+
+  // Secure search implementation
+  if (search) {
+    where.store = {
+      name: { 
+        contains: search, 
+        mode: 'insensitive' 
+      }
+    };
+  }
+
+  const [verifications, total] = await Promise.all([
+    prisma.storeVerification.findMany({
+      where,
+      include: {
+        store: {
+          include: {
+            user: {
+              select: { 
+                id: true, 
+                firstName: true, 
+                email: true,
+                phone: true
+              }
+            }
+          }
+        }
+      },
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'desc' }
+    }),
+    prisma.storeVerification.count({ where })
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: verifications.map(sanitizeVerificationForAdmin),
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    }
+  });
+});
+
+export const getVerificationDetails = asyncHandler(async (req, res) => {
+  const { verificationId } = req.params;
+
+  const verification = await prisma.storeVerification.findUnique({
+    where: { id: verificationId },
+    include: {
+      store: {
+        include: {
+          user: {
+            select: { 
+              id: true, 
+              firstName: true, 
+              email: true,
+              phone: true,
+              createdAt: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!verification) {
+    return res.status(404).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Verification record not found.'
     });
   }
-};
 
-export const updateVerificationStatus = async (req, res) => {
-  try {
-    const { verificationId } = req.params;
-    const { status, rejectionReason } = req.body;
+  // Generate signed URLs for document access
+  const documentUrls = await generateSignedDocumentUrls(verification);
 
-    // Validate status
-    if (!['verified', 'rejected'].includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Status must be 'verified' or 'rejected'."
-      });
+  res.status(200).json({
+    success: true,
+    data: {
+      ...sanitizeVerificationForAdmin(verification),
+      documents: documentUrls
     }
+  });
+});
 
-    // Require rejection reason when rejecting
-    if (status === 'rejected' && !rejectionReason) {
-      return res.status(400).json({
-        success: false,
-        message: 'Rejection reason is required when rejecting verification.'
-      });
-    }
+export const updateVerificationStatus = asyncHandler(async (req, res) => {
+  const { verificationId } = req.params;
+  const { status, rejectionReason } = req.body;
+  const adminId = req.user.userId;
 
-    // Fetch the verification record
-    const verification = await prisma.storeVerification.findUnique({
+  const result = await prisma.$transaction(async (tx) => {
+    const verification = await tx.storeVerification.findUnique({
       where: { id: verificationId },
       include: {
         store: {
@@ -503,18 +569,11 @@ export const updateVerificationStatus = async (req, res) => {
     });
 
     if (!verification) {
-      return res.status(404).json({
-        success: false,
-        message: 'Verification record not found.'
-      });
+      throw new Error('VERIFICATION_NOT_FOUND');
     }
 
-    // Check if already in the same status
     if (verification.status === status) {
-      return res.status(400).json({
-        success: false,
-        message: `Verification is already ${status}.`
-      });
+      throw new Error('SAME_STATUS');
     }
 
     // Prepare update data
@@ -527,8 +586,8 @@ export const updateVerificationStatus = async (req, res) => {
       updateData.verifiedAt = null;
     }
 
-    // Update the verification record
-    const updatedVerification = await prisma.storeVerification.update({
+    // Update verification
+    const updatedVerification = await tx.storeVerification.update({
       where: { id: verificationId },
       data: updateData,
       include: {
@@ -546,197 +605,201 @@ export const updateVerificationStatus = async (req, res) => {
       }
     });
 
-    // Update the associated store's active status
-    const store = updatedVerification.store;
-    await prisma.store.update({
-      where: { id: store.id },
+    // Update store active status
+    await tx.store.update({
+      where: { id: verification.store.id },
       data: { isActive: status === 'verified' }
     });
 
-    // Invalidate relevant caches
-    await cache.del(`store:slug:${store.url}`);
-    await cache.del(`user:${store.userId}:store`);
-    await cache.del(`store:${store.id}:verification`);
+    // Create audit log
+    await tx.verificationAuditLog.create({
+      data: {
+        verificationId,
+        action: status === 'verified' ? 'APPROVED' : 'REJECTED',
+        performedBy: adminId,
+        metadata: {
+          rejectionReason: status === 'rejected' ? rejectionReason : null,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        }
+      }
+    });
 
-    // Send in-app notification to store owner
-    const notificationTitle = status === 'verified' 
-      ? 'Store Verified! 🎉' 
-      : 'Verification Needs Attention';
-    
-    const notificationMessage = status === 'verified'
-      ? `Congratulations! Your store "${store.name}" has been verified and is now live on Zuba.`
-      : `Your verification for "${store.name}" requires some updates. ${rejectionReason}`;
+    return updatedVerification;
+  });
 
-    await sendNotification(
+  const store = result.store;
+
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`store:slug:${store.url}`),
+    cache.del(`user:${store.userId}:store`),
+    cache.del(`store:${store.id}:verification`),
+    cache.del(`user:${store.userId}:verification-status`)
+  ]);
+
+  // Send notifications
+  const notificationTitle = status === 'verified' 
+    ? 'Store Verified! 🎉' 
+    : 'Verification Needs Attention';
+  
+  const notificationMessage = status === 'verified'
+    ? `Congratulations! Your store "${store.name}" has been verified and is now live.`
+    : `Your verification for "${store.name}" requires updates. ${rejectionReason}`;
+
+  Promise.all([
+    sendNotification(
       store.userId,
       notificationTitle,
       notificationMessage,
       'store_verification',
       { 
         storeId: store.id, 
-        verificationId: updatedVerification.id,
-        status: status,
+        verificationId: result.id,
+        status,
         rejectionReason: status === 'rejected' ? rejectionReason : null
       }
-    );
+    ).catch(err => console.error('Notification error:', err)),
 
-    // Send email notification to store owner
-    try {
-      await sendEmailNotification({
-        to: store.user.email,
-        toName: store.user.name,
-        subject: status === 'verified' 
-          ? `${store.name} - Store Verified!` 
-          : `${store.name} - Verification Update Required`,
-        template: 'verification_status',
-        templateData: {
-          storeName: store.name,
-          status: status,
-          reason: rejectionReason,
-          storeUrl: status === 'verified' 
-            ? `${process.env.FRONTEND_URL}/store/${store.url}`
-            : `${process.env.FRONTEND_URL}/dashboard/store/verification`
-        }
-      });
+    sendEmailNotification({
+      to: store.user.email,
+      toName: store.user.firstName,
+      subject: status === 'verified' 
+        ? `${store.name} - Store Verified!` 
+        : `${store.name} - Verification Update Required`,
+      template: 'verification_status',
+      templateData: {
+        storeName: store.name,
+        status,
+        reason: rejectionReason,
+        storeUrl: status === 'verified' 
+          ? `${process.env.FRONTEND_URL}/store/${store.url}`
+          : `${process.env.FRONTEND_URL}/dashboard/store/verification`
+      }
+    }).catch(err => console.error('Email error:', err))
+  ]);
 
-      console.log(`Verification ${status} email sent to ${store.user.email}`);
-    } catch (emailError) {
-      console.error('Error sending verification status email:', emailError);
-      // Log but don't fail the request if email fails
-    }
+  res.status(200).json({
+    success: true,
+    message: `Store verification ${status} successfully.`,
+    data: sanitizeVerificationForAdmin(result)
+  });
+});
 
-    res.status(200).json({
-      success: true,
-      message: `Store verification status updated to ${status}.`,
-      data: updatedVerification
-    });
+export const deleteVerification = asyncHandler(async (req, res) => {
+  const { verificationId } = req.params;
+  const adminId = req.user.userId;
 
-  } catch (error) {
-    console.error('Error updating verification status:', error);
-    res.status(500).json({
+  const verification = await prisma.storeVerification.findUnique({
+    where: { id: verificationId },
+    include: { store: true }
+  });
+
+  if (!verification) {
+    return res.status(404).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Verification record not found.'
     });
   }
-};
 
-export const deleteVerification = async (req, res) => {
-  try {
-    const { verificationId } = req.params;
-
-    // Fetch the verification record
-    const verification = await prisma.storeVerification.findUnique({
-      where: { id: verificationId },
-      include: {
-        store: true
+  // Delete from database first
+  await prisma.$transaction([
+    prisma.verificationAuditLog.create({
+      data: {
+        verificationId,
+        action: 'DELETED',
+        performedBy: adminId,
+        metadata: {
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        }
       }
-    });
-
-    if (!verification) {
-      return res.status(404).json({
-        success: false,
-        message: 'Verification record not found.'
-      });
-    }
-
-    // Delete documents from Cloudinary
-    const documentUrls = [
-      verification.ghanaCardFront,
-      verification.ghanaCardBack,
-      verification.selfie,
-      verification.businessDoc
-    ].filter(Boolean);
-
-    for (const url of documentUrls) {
-      try {
-        await deleteFromCloudinary(url);
-      } catch (deleteError) {
-        console.error('Error deleting document from Cloudinary:', deleteError);
-      }
-    }
-
-    // Delete verification record from database
-    await prisma.storeVerification.delete({
+    }),
+    prisma.storeVerification.delete({
       where: { id: verificationId }
-    });
-
-    // Update store status to inactive
-    await prisma.store.update({
+    }),
+    prisma.store.update({
       where: { id: verification.storeId },
       data: { isActive: false }
-    });
+    })
+  ]);
 
-    // Invalidate caches
-    await cache.del(`store:slug:${verification.store.url}`);
-    await cache.del(`user:${verification.store.userId}:store`);
-    await cache.del(`store:${verification.storeId}:verification`);
+  // Delete files in background
+  const documentUrls = [
+    verification.ghanaCardFront,
+    verification.ghanaCardBack,
+    verification.selfie,
+    verification.businessDoc
+  ].filter(Boolean);
 
-    res.status(200).json({
+  Promise.all(documentUrls.map(url => 
+    deleteFromCloudinary(url).catch(err => 
+      console.error('File deletion error:', err)
+    )
+  ));
+
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`store:slug:${verification.store.url}`),
+    cache.del(`user:${verification.store.userId}:store`),
+    cache.del(`store:${verification.storeId}:verification`)
+  ]);
+
+  res.status(200).json({
+    success: true,
+    message: 'Verification record deleted successfully.'
+  });
+});
+
+export const getVerificationStats = asyncHandler(async (req, res) => {
+  const cacheKey = 'verification:stats';
+  const cached = await cache.get(cacheKey);
+
+  if (cached) {
+    return res.status(200).json({
       success: true,
-      message: 'Verification record deleted successfully.'
-    });
-
-  } catch (error) {
-    console.error('Error deleting verification:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
+      data: JSON.parse(cached)
     });
   }
-};
 
-export const getVerificationStats = async (req, res) => {
-  try {
-    const [totalPending, totalVerified, totalRejected, recentVerifications] = await Promise.all([
-      prisma.storeVerification.count({
-        where: { status: 'pending' }
-      }),
-      prisma.storeVerification.count({
-        where: { status: 'verified' }
-      }),
-      prisma.storeVerification.count({
-        where: { status: 'rejected' }
-      }),
-      prisma.storeVerification.findMany({
-        where: { status: 'pending' },
-        take: 5,
-        orderBy: { createdAt: 'asc' },
-        include: {
-          store: {
-            select: {
-              id: true,
-              name: true,
-              user: {
-                select: {
-                  firstName: true,
-                  email: true
-                }
+  const [totalPending, totalVerified, totalRejected, recentVerifications] = await Promise.all([
+    prisma.storeVerification.count({ where: { status: 'pending' } }),
+    prisma.storeVerification.count({ where: { status: 'verified' } }),
+    prisma.storeVerification.count({ where: { status: 'rejected' } }),
+    prisma.storeVerification.findMany({
+      where: { status: 'pending' },
+      take: 5,
+      orderBy: { createdAt: 'asc' },
+      include: {
+        store: {
+          select: {
+            id: true,
+            name: true,
+            user: {
+              select: {
+                firstName: true,
+                email: true
               }
             }
           }
         }
-      })
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        totalPending,
-        totalVerified,
-        totalRejected,
-        total: totalPending + totalVerified + totalRejected,
-        recentVerifications
       }
-    });
+    })
+  ]);
 
-  } catch (error) {
-    console.error('Error fetching verification stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+  const stats = {
+    totalPending,
+    totalVerified,
+    totalRejected,
+    total: totalPending + totalVerified + totalRejected,
+    recentVerifications: recentVerifications.map(v => sanitizeVerificationForAdmin(v))
+  };
+
+  // Cache for 2 minutes
+  await cache.set(cacheKey, 120, JSON.stringify(stats));
+
+  res.status(200).json({
+    success: true,
+    data: stats
+  });
+});

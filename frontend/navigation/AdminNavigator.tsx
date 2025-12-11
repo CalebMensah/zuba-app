@@ -17,8 +17,10 @@ import DisputeDetailsScreen from '../screens/buyer/DisputeDetailsScreen';
 import OrderManagement from '../screens/admin/OrderManagement';
 import AllPendingStoreVerificationsScreen from '../screens/admin/PendingStoreVerificationsScreen';
 import VerificationDetailsScreen from '../screens/admin/VerificationDetails';
-import SellerPublicProductsScreen from '../screens/seller/SellerPublicProductsScreen';
+import SellerPublicProductsScreen from '../screens/admin/StoreProducts';
 import AdminEscrowScreen from '../screens/admin/AdminEscrowScreen'
+import PaymentsScreen from '../screens/admin/PaymentsScreen';
+import PaymentDetailsScreen from '../screens/shared/PaymentDetailsScreen';
 
 const Tab = createBottomTabNavigator<AdminStackParamList>();
 const Stack = createNativeStackNavigator<AdminStackParamList>();
@@ -84,6 +86,8 @@ const AdminNavigator: React.FC = () => {
       <Stack.Screen name="VerificationDetails" component={VerificationDetailsScreen} />
       <Stack.Screen name="SellerPublicProducts" component={SellerPublicProductsScreen} />
       <Stack.Screen name="AdminEscrow" component={AdminEscrowScreen} />
+      <Stack.Screen name="PaymentsScreen" component={PaymentsScreen} />
+      <Stack.Screen name="PaymentDetails" component={PaymentDetailsScreen} />
 
       {/* Add more admin-related screens here if needed */}
     </Stack.Navigator>

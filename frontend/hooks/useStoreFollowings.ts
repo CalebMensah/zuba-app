@@ -176,6 +176,32 @@ export const useStoreFollowing = () => {
     }
   }, [checkIfFollowing, followStore, unfollowStore]);
 
+  const getMyStoreFollowerCount = useCallback(async () => {
+  setLoading(true);
+  setError(null);
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_BASE_URL}/store-following/my-store/count`, {
+      method: 'GET',
+      headers,
+    });
+
+    const data: ApiResponse<{ count: number }> = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch your store follower count');
+    }
+
+    return data.data?.count || 0;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'An error occurred';
+    setError(message);
+    throw err;
+  } finally {
+    setLoading(false);
+  }
+}, []);
+
   return {
     loading,
     error,
@@ -185,5 +211,6 @@ export const useStoreFollowing = () => {
     getStoreFollowerCount,
     checkIfFollowing,
     toggleFollow,
+    getMyStoreFollowerCount,
   };
 };

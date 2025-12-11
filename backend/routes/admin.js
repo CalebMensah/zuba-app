@@ -14,6 +14,7 @@ import {
   getAllOrdersForAdmin
 } from '../controllers/admincontrollers.js';
 import { updateOrderStatus } from '../controllers/ordercontrollers.js';
+import { getCommissionStats, getCommissionTrend } from '../controllers/admindashboardcontrollers.js';
 
 const router = express.Router();
 
@@ -29,6 +30,9 @@ router.put('/:storeId/suspend', suspendStore);
 router.delete('/:storeId', deleteStore);
 router.get('/orders',getAllOrdersForAdmin )
 router.put('/orders/:orderId/status', updateOrderStatus)
+router.get("/commission-stats", getCommissionStats);
+router.get("/commission-trend", getCommissionTrend);
+
 
 
 

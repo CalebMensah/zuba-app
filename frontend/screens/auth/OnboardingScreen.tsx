@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   FlatList,
   Animated,
+  Image,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../types/navigation';
@@ -30,11 +31,11 @@ interface OnboardingSlide {
   description: string;
   icon: keyof typeof Ionicons.glyphMap;
   gradient: string[];
-  emoji: string;
+  image: any; // Image source
   features: string[];
 }
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 const slides: OnboardingSlide[] = [
   {
@@ -43,7 +44,7 @@ const slides: OnboardingSlide[] = [
     description: 'Where social commerce meets community. Buy, sell, and connect with trust.',
     icon: 'rocket-outline',
     gradient: [Colors.primary, Colors.primaryLight],
-    emoji: '🚀',
+    image: require('../../assets/onboarding-1b.jpg'), // Image 1
     features: ['Safe & Secure', 'Verified Sellers', 'Fast Delivery'],
   },
   {
@@ -52,7 +53,7 @@ const slides: OnboardingSlide[] = [
     description: 'Discover amazing products from trusted sellers. Enjoy buyer protection on every purchase.',
     icon: 'shield-checkmark-outline',
     gradient: [Colors.success, Colors.successLight],
-    emoji: '🛍️',
+    image: require('../../assets/onboarding-8.jpg'), // Image 2
     features: ['Best Prices', 'Quality Products', 'Easy Returns'],
   },
   {
@@ -61,7 +62,7 @@ const slides: OnboardingSlide[] = [
     description: 'Turn your passion into profit. Reach thousands of buyers and grow your business.',
     icon: 'trending-up-outline',
     gradient: [Colors.accent, Colors.accentLight],
-    emoji: '📈',
+    image: require('../../assets/onboarding-5.jpg'), // Image 3
     features: ['Easy Setup', 'Wide Reach', 'Business Tools'],
   },
   {
@@ -70,7 +71,7 @@ const slides: OnboardingSlide[] = [
     description: 'Be part of a thriving marketplace built on trust, quality, and amazing experiences.',
     icon: 'people-outline',
     gradient: [Colors.primaryLight, Colors.primary],
-    emoji: '🤝',
+    image: require('../../assets/onboarding-6.jpg'), // Image 4
     features: ['Trusted Network', 'Active Community', 'Great Support'],
   },
 ];
@@ -118,25 +119,19 @@ const OnboardingScreen: React.FC<Props> = ({ navigation }) => {
 
   const renderItem = ({ item, index }: { item: OnboardingSlide; index: number }) => (
     <View style={styles.slide}>
-      {/* Animated Background Circles */}
-      <View style={[styles.bgCircle1, { backgroundColor: item.gradient[0] + '15' }]} />
-      <View style={[styles.bgCircle2, { backgroundColor: item.gradient[1] + '10' }]} />
+      {/* Subtle Background Gradient */}
+      <View style={[styles.bgGradient, { backgroundColor: item.gradient[0] + '08' }]} />
 
       <View style={styles.slideContent}>
-        {/* Icon Section */}
-        <View style={styles.iconSection}>
-          <View style={[styles.iconOuterCircle, { backgroundColor: item.gradient[0] + '15' }]}>
-            <View style={[styles.iconMiddleCircle, { backgroundColor: item.gradient[0] + '25' }]}>
-              <View style={[styles.iconInnerCircle, { backgroundColor: item.gradient[0] }]}>
-                <Text style={styles.emoji}>{item.emoji}</Text>
-              </View>
-            </View>
+        {/* Image Section */}
+        <View style={styles.imageSection}>
+          <View style={styles.imageContainer}>
+            <Image 
+              source={item.image} 
+              style={styles.slideImage}
+              resizeMode="contain"
+            />
           </View>
-
-          {/* Floating particles */}
-          <View style={[styles.particle, styles.particle1, { backgroundColor: item.gradient[1] }]} />
-          <View style={[styles.particle, styles.particle2, { backgroundColor: item.gradient[0] }]} />
-          <View style={[styles.particle, styles.particle3, { backgroundColor: item.gradient[1] }]} />
         </View>
 
         {/* Text Section */}
@@ -210,8 +205,12 @@ const OnboardingScreen: React.FC<Props> = ({ navigation }) => {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.brandContainer}>
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>Z</Text>
+          <View >
+            <Image 
+              source={require('../../assets/logo.png')}
+              style={styles.logoText}
+              resizeMode="contain"
+            />
           </View>
           <View>
             <Text style={styles.brandName}>ZUBA</Text>
@@ -270,7 +269,7 @@ const OnboardingScreen: React.FC<Props> = ({ navigation }) => {
               >
                 <View style={styles.buttonContent}>
                   <Text style={styles.buttonTextPrimary}>Get Started</Text>
-                  <Text style={styles.buttonArrow}><Ionicons name="arrow-forward" size={24} color={Colors.white} /></Text>
+                  <Ionicons name="arrow-forward" size={24} color={Colors.white} />
                 </View>
               </TouchableOpacity>
 
@@ -337,23 +336,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  logoCircle: {
+
+  logoText: {
+    borderRadius:50,
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  logoText: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: Colors.white,
   },
   brandName: {
     fontSize: 24,
@@ -391,21 +378,12 @@ const styles = StyleSheet.create({
     width,
     position: 'relative',
   },
-  bgCircle1: {
+  bgGradient: {
     position: 'absolute',
-    top: 50,
-    right: -100,
-    width: 300,
-    height: 300,
-    borderRadius: 150,
-  },
-  bgCircle2: {
-    position: 'absolute',
-    bottom: 100,
-    left: -80,
-    width: 250,
-    height: 250,
-    borderRadius: 125,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   slideContent: {
     flex: 1,
@@ -413,61 +391,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
-  iconSection: {
-    marginBottom: 40,
-    position: 'relative',
+  imageSection: {
+    marginBottom: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 20,
   },
-  iconOuterCircle: {
-    width: 200,
-    height: 200,
-    borderRadius: 100,
+  imageContainer: {
+    width: width * 0.7,
+    height: height * 0.35,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  iconMiddleCircle: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconInnerCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  emoji: {
-    fontSize: 50,
-  },
-  particle: {
-    position: 'absolute',
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    opacity: 0.6,
-  },
-  particle1: {
-    top: 20,
-    right: 20,
-  },
-  particle2: {
-    bottom: 30,
-    left: 15,
-    width: 8,
-    height: 8,
-  },
-  particle3: {
-    top: 100,
-    left: -10,
-    width: 10,
-    height: 10,
+  slideImage: {
+    width: '100%',
+    height: '100%',
   },
   textSection: {
     alignItems: 'center',
@@ -494,7 +432,7 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 24,
-    marginBottom: 24,
+    marginBottom: 14,
   },
   featuresContainer: {
     flexDirection: 'row',
@@ -548,7 +486,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
   },
   buttonsContainer: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 12,
   },
   finalButtons: {
     gap: 12,
@@ -579,11 +517,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     letterSpacing: 0.5,
-  },
-  buttonArrow: {
-    color: Colors.white,
-    fontSize: 22,
-    fontWeight: '700',
   },
   buttonTextSecondary: {
     fontSize: 16,

@@ -2,9 +2,15 @@
 
 export interface User {
   id: string;
-  name: string;
+  firstName: string;
   email: string;
   avatar?: string;
+  role?: string;
+  store?: {
+    id: string;
+    name: string;
+    logo?: string;
+  };
 }
 
 export interface ChatRoomParticipant {
@@ -127,7 +133,7 @@ export interface SendMessageParams {
 
 export interface ChatPreferences {
   notifyOnNewMessage: boolean;
-  muteNotificationsUntil?: Date || null;
+  muteNotificationsUntil?: Date | null;
 }
 
 export interface PaginationParams {

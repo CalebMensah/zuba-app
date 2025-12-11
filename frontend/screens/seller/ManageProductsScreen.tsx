@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useStore } from '../../hooks/useStore';
 import { useProduct } from '../../hooks/useProducts';
@@ -30,6 +30,7 @@ interface Product {
   category?: string;
   isActive: boolean;
   quantityBought: number;
+  url?: string;
 }
 
 export default function ManageProductsScreen() {
@@ -51,6 +52,12 @@ export default function ManageProductsScreen() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [])
+  );
 
   const loadData = async () => {
     const userStore = await getUserStore();
@@ -227,7 +234,10 @@ const handleEditProduct = (product: Product) => {
         <View style={styles.productsList}>
           {products.map((product) => (
             <View key={product.id} style={styles.productCard}>
-              <View style={styles.productImageContainer}>
+              <TouchableOpacity
+                style={styles.productImageContainer}
+                onPress={() => navigation.navigate('SellerProductDetails', { productUrl: product.url })}
+              >
                 {product.images && product.images.length > 0 ? (
                   <Image
                     source={{ uri: product.images[0] }}
@@ -248,12 +258,14 @@ const handleEditProduct = (product: Product) => {
                     <Text style={styles.inactiveBadgeText}>Inactive</Text>
                   </View>
                 )}
-              </View>
+              </TouchableOpacity>
 
               <View style={styles.productInfo}>
-                <Text style={styles.productName} numberOfLines={2}>
-                  {product.name}
-                </Text>
+                <TouchableOpacity onPress={() => navigation.navigate('SellerProductDetails', { productUrl: product.url })}>
+                  <Text style={styles.productName} numberOfLines={2}>
+                    {product.name}
+                  </Text>
+                </TouchableOpacity>
                 {product.description && (
                   <Text style={styles.productDescription} numberOfLines={1}>
                     {product.description}

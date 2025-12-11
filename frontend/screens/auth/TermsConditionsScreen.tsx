@@ -11,6 +11,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../types/navigation';
 import { Colors } from '../../constants/colors';
+import { Ionicons } from '@expo/vector-icons';
 
 type TermsScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Terms'>;
 
@@ -26,7 +27,9 @@ const TermsConditionsScreen: React.FC<Props> = ({ navigation }) => {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Text style={styles.backButtonText}>← Back</Text>
+          <Text style={styles.backButtonText}>
+            <Ionicons name="chevron-back" size={20} color={Colors.primary} /> Back
+          </Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Terms & Conditions</Text>
         <View style={styles.placeholder} />
@@ -119,7 +122,7 @@ const TermsConditionsScreen: React.FC<Props> = ({ navigation }) => {
           </View>
           <View style={styles.highlightBox}>
             <Text style={styles.highlightText}>
-              ⚠️ Submitting false or fraudulent documents will result in immediate account suspension and may lead to legal action.
+              <Ionicons name="warning-outline" size={16} color={Colors.warning} />Submitting false or fraudulent documents will result in immediate account suspension and may lead to legal action.
             </Text>
           </View>
         </View>
@@ -437,9 +440,12 @@ const TermsConditionsScreen: React.FC<Props> = ({ navigation }) => {
             If you have questions about these Terms and Conditions, please contact us:
           </Text>
           <View style={styles.contactBox}>
-            <Text style={styles.contactText}>📧 Email: support@zuba.com</Text>
-            <Text style={styles.contactText}>📱 Phone: +233 XX XXX XXXX</Text>
-            <Text style={styles.contactText}>📍 Address: Accra, Ghana</Text>
+            <Text style={styles.contactText}>
+              <Ionicons name="mail-outline" size={16} color={Colors.primary} /> Email: zubamobileapp@gmail.com</Text>
+            <Text style={styles.contactText}>
+              <Ionicons name="call-outline" size={16} color={Colors.primary} /> Phone: +233 598 785 053</Text>
+            <Text style={styles.contactText}>
+              <Ionicons name="location-outline" size={16} color={Colors.primary} /> Address: Accra, Ghana</Text>
           </View>
         </View>
 
@@ -457,6 +463,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+    marginTop: 30,
   },
   header: {
     flexDirection: 'row',
@@ -477,9 +484,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 21,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
   placeholder: {
     width: 60,
@@ -506,7 +513,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginBottom: 12,
   },
   subsectionTitle: {

@@ -55,15 +55,14 @@ export const upsertPaymentAccount = async (req, res) => {
   try {
     const userId = req.user.userId;
 
+    // Verify user owns a store
     const store = await prisma.store.findUnique({
       where: { userId },
       select: { id: true, url: true },
     });
-
-    if (!store)
+    if (!store) {
       return res.status(400).json({ success: false, message: "Store not found." });
-
-    const storeId = store.id;
+    }
 
     const {
       accountType,
@@ -73,60 +72,49 @@ export const upsertPaymentAccount = async (req, res) => {
       provider,
       mobileNumber,
       isPrimary = true,
-      isActive = true
+      isActive = true,
     } = req.body;
 
-    // Validate type
+    // Validate account type
     if (!["bank", "mobile_money"].includes(accountType)) {
-      return res.status(400).json({
-        success: false,
-        message: "accountType must be 'bank' or 'mobile_money'."
-      });
+      return res.status(400).json({ success: false, message: "Invalid account type." });
     }
 
-    // Validation: Bank
-    if (accountType === "bank") {
-      if (!bankName || !accountNumber || !accountName) {
-        return res.status(400).json({
-          success: false,
-          message: "For bank accounts, bankName, accountNumber, and accountName are required."
-        });
-      }
+    // Validate required fields
+    if (accountType === "bank" && (!bankName || !accountNumber || !accountName)) {
+      return res.status(400).json({ success: false, message: "Bank details incomplete." });
+    }
+    if (accountType === "mobile_money" && (!provider || !mobileNumber)) {
+      return res.status(400).json({ success: false, message: "Mobile money details incomplete." });
     }
 
-    // Validation: Mobile Money
-    if (accountType === "mobile_money") {
-      if (!provider || !mobileNumber) {
-        return res.status(400).json({
-          success: false,
-          message: "For mobile money accounts, provider and mobileNumber are required."
-        });
-      }
-    }
-
-    /* -----------------------------------------
-        CREATE PAYSTACK RECIPIENT IF MISSING
-    ------------------------------------------ */
-    let recipientCode;
-
+    // Check existing record
     const existing = await prisma.paymentAccount.findUnique({
-      where: { storeId },
+      where: { storeId: store.id },
     });
 
-    if (!existing || !existing.paystackRecipientCode) {
+    let recipientCode = existing?.paystackRecipientCode;
+
+    // Only create new recipient if details changed
+    const detailsChanged =
+      !existing ||
+      (accountType === "bank" &&
+        (existing.bankName !== bankName || existing.accountNumber !== accountNumber)) ||
+      (accountType === "mobile_money" &&
+        (existing.provider !== provider || existing.mobileNumber !== mobileNumber));
+
+    if (detailsChanged) {
       recipientCode = await createPaystackRecipient({
         accountType,
         bankName,
         accountNumber,
         accountName,
         provider,
-        mobileNumber
+        mobileNumber,
       });
     }
 
-    /* -----------------------------------------
-        UPSERT DATABASE RECORD
-    ------------------------------------------ */
+    //  Save to DB (never expose recipient code)
     const data = {
       accountType,
       bankName: bankName || null,
@@ -136,31 +124,37 @@ export const upsertPaymentAccount = async (req, res) => {
       mobileNumber: mobileNumber || null,
       isPrimary,
       isActive,
-      paystackRecipientCode: recipientCode || existing?.paystackRecipientCode || null,
-      store: { connect: { id: storeId } }
+      paystackRecipientCode: recipientCode,
+      store: { connect: { id: store.id } },
     };
 
     const paymentAccount = await prisma.paymentAccount.upsert({
-      where: { storeId },
+      where: { storeId: store.id },
       create: data,
-      update: data
+      update: data,
     });
 
-    // Clear cache
+    // Clear caches
     await cache.del(`user:${userId}:store`);
     await cache.del(`store:slug:${store.url}`);
 
-    console.log("Upserted Payment Account:", paymentAccount);
+    // Return SAFE data (no recipient code!)
+    const safeResponse = {
+      id: paymentAccount.id,
+      accountType: paymentAccount.accountType,
+      bankName: paymentAccount.bankName,
+      accountNumber: paymentAccount.accountNumber,
+      accountName: paymentAccount.accountName,
+      provider: paymentAccount.provider,
+      // mobileNumber: paymentAccount.mobileNumber, //
+      isPrimary: paymentAccount.isPrimary,
+      isActive: paymentAccount.isActive,
+    };
 
-    res.json({
-      success: true,
-      message: "Payment account saved successfully.",
-      paymentAccount
-    });
-
+    res.json({ success: true, message: "Payment account saved.", paymentAccount: safeResponse });
   } catch (error) {
-    console.error("Error in upsertPaymentAccount:", error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error("PAYOUT ERROR:", error);
+    res.status(500).json({ success: false, message: "Could not save payment details." });
   }
 };
 

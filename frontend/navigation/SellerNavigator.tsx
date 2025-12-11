@@ -33,6 +33,10 @@ import ManagePayoutAccounts from '../screens/seller/ManagePayout';
 import MyStoreReviews from '../screens/seller/MyStoreReviews';
 import SellerOrderDetails from '../screens/seller/SellerOrderDetails';
 import EditProfileScreen from '../screens/buyer/EditProfile';
+import PaymentsScreen from '../screens/shared/UserPaymentScreen';
+import PaymentDetailsScreen from '../screens/shared/PaymentDetailsScreen';
+import AboutScreen from '../screens/shared/Aboutscreen';
+import ContactUsScreen from '../screens/shared/ContactUs';
 
 const Stack = createNativeStackNavigator<SellerStackParamList>();
 const Tab = createBottomTabNavigator<SellerStackParamList>();
@@ -113,6 +117,11 @@ const SellerNavigator: React.FC = () => {
           <Stack.Screen name="MyStoreReviews" component={MyStoreReviews} />
           <Stack.Screen name="SellerOrderDetails" component={SellerOrderDetails} />
           <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+          <Stack.Screen name="PaymentsScreen" component={PaymentsScreen} />
+          <Stack.Screen name="PaymentDetails" component={PaymentDetailsScreen} />
+          <Stack.Screen name="SellerEscrow" component={PaymentsScreen} />
+          <Stack.Screen name="About" component={AboutScreen} />
+          <Stack.Screen name="ContactUs" component={ContactUsScreen} />
     </Stack.Navigator>
   );
 };

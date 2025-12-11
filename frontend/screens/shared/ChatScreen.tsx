@@ -25,6 +25,7 @@ import { useAuth } from '../../context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import { Video, ResizeMode } from 'expo-av';
 import { Colors } from '../../constants/colors';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -48,6 +49,8 @@ const ChatScreen: React.FC = () => {
     storeName,
     storeLogo 
   } = route.params as RouteParams;
+
+  console.log('ChatScreen Route Params:', route.params);
   
   const {
     messages,
@@ -192,7 +195,7 @@ const ChatScreen: React.FC = () => {
       isRead: false,
       sender: {
         id: currentUserId,
-        name: user?.firstName || 'You',
+        firstName: user?.firstName || 'You',
         avatar: user?.avatar,
         email: user?.email || ''
       }
@@ -325,13 +328,20 @@ const ChatScreen: React.FC = () => {
                   styles.repliedToName,
                   isOwnMessage && styles.repliedToNameOwn
                 ]}>
-                  {item.repliedTo.sender.name}
+                  {item.repliedTo.sender.firstName}
                 </Text>
                 <Text style={[
                   styles.repliedToText,
                   isOwnMessage && styles.repliedToTextOwn
                 ]} numberOfLines={1}>
-                  {item.repliedTo.content || '📎 Media'}
+                  {item.repliedTo.content ? (
+                    item.repliedTo.content
+                  ) : (
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Ionicons name="attach" size={13} color={isOwnMessage ? '#4CAF50' : Colors.textSecondary} />
+                      <Text> Media</Text>
+                    </View>
+                  )}
                 </Text>
               </View>
             </View>
@@ -383,9 +393,13 @@ const ChatScreen: React.FC = () => {
             </Text>
             
             {isOwnMessage && (
-              <Text style={styles.readReceipt}>
-                {item.isRead ? '✓✓' : '✓'}
-              </Text>
+              <View style={styles.readReceipt}>
+                {item.isRead ? (
+                  <Ionicons name="checkmark-done" size={12} color="#4CAF50" />
+                ) : (
+                  <Ionicons name="checkmark" size={12} color="#4CAF50" />
+                )}
+              </View>
             )}
           </View>
         </TouchableOpacity>
@@ -443,17 +457,24 @@ const ChatScreen: React.FC = () => {
         <View style={styles.inputHeaderIndicator} />
         <View style={styles.inputHeaderContent}>
           <Text style={styles.inputHeaderLabel}>
-            {editingMessage ? 'Edit message' : 'Reply to ' + message?.sender.name}
+            {editingMessage ? 'Edit message' : 'Reply to ' + message?.sender.firstName}
           </Text>
           <Text style={styles.inputHeaderText} numberOfLines={1}>
-            {message?.content || '📎 Media'}
+            {message?.content ? (
+              message.content
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="attach" size={13} color={Colors.textSecondary} />
+                <Text> Media</Text>
+              </View>
+            )}
           </Text>
         </View>
         <TouchableOpacity
           onPress={cancelReplyOrEdit}
           style={styles.inputHeaderClose}
         >
-          <Text style={styles.inputHeaderCloseText}>✕</Text>
+          <Ionicons name="close" size={20} color={Colors.textSecondary} />
         </TouchableOpacity>
       </View>
     );
@@ -479,7 +500,7 @@ const ChatScreen: React.FC = () => {
               onPress={() => setSelectedMedia(prev => prev.filter((_, i) => i !== index))}
               style={styles.removeMediaButton}
             >
-              <Text style={styles.removeMediaText}>✕</Text>
+              <Ionicons name="close" size={14} color={Colors.white} />
             </TouchableOpacity>
           </View>
         ))}
@@ -510,7 +531,7 @@ const ChatScreen: React.FC = () => {
               onPress={handleReply}
             >
               <View style={styles.actionIconContainer}>
-                <Text style={styles.actionButtonIcon}>↩️</Text>
+                <Ionicons name="return-up-back" size={20} color={Colors.textPrimary} />
               </View>
               <Text style={styles.actionButtonText}>Reply</Text>
             </TouchableOpacity>
@@ -521,7 +542,7 @@ const ChatScreen: React.FC = () => {
                 onPress={copyMessage}
               >
                 <View style={styles.actionIconContainer}>
-                  <Text style={styles.actionButtonIcon}>📋</Text>
+                  <Ionicons name="copy" size={20} color={Colors.textPrimary} />
                 </View>
                 <Text style={styles.actionButtonText}>Copy</Text>
               </TouchableOpacity>
@@ -532,7 +553,7 @@ const ChatScreen: React.FC = () => {
               onPress={handleForward}
             >
               <View style={styles.actionIconContainer}>
-                <Text style={styles.actionButtonIcon}>➡️</Text>
+                <Ionicons name="arrow-forward" size={20} color={Colors.textPrimary} />
               </View>
               <Text style={styles.actionButtonText}>Forward</Text>
             </TouchableOpacity>
@@ -543,7 +564,7 @@ const ChatScreen: React.FC = () => {
                 onPress={handleDelete}
               >
                 <View style={styles.actionIconContainer}>
-                  <Text style={styles.actionButtonIcon}>🗑️</Text>
+                  <Ionicons name="trash" size={20} color={Colors.error} />
                 </View>
                 <Text style={[styles.actionButtonText, styles.deleteButtonText]}>
                   Delete
@@ -605,17 +626,97 @@ const ChatScreen: React.FC = () => {
     );
   };
 
+  if (!user) {
+    return (
+      <View style={{
+        flex: 1,
+        backgroundColor: '#F5F7FA',
+        marginTop: 30
+      }}>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 12,
+          paddingTop: Platform.OS === 'ios' ? 50 : 12,
+          paddingBottom: 12,
+          backgroundColor: Colors.white,
+          borderBottomWidth: 1,
+          borderBottomColor: '#E8EDF2'
+        }}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{
+            padding: 8,
+            marginRight: 4,
+          }}>
+            <Ionicons name="chevron-back" size={28} color={Colors.primary} />
+          </TouchableOpacity>
+          <Text style={{
+            fontSize: 17,
+            fontWeight: '600',
+            color: Colors.textPrimary,
+            flex: 1
+          }}>Chat</Text>
+        </View>
+        <View style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 20,
+        }}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={{
+            color: Colors.textSecondary,
+            fontSize: 16,
+            textAlign: 'center',
+            fontWeight: '500',
+            marginTop: 16
+          }}>Loading...</Text>
+        </View>
+      </View>
+    );
+  }
+
   if (error) {
     return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backButtonText}>←</Text>
+      <View style={{
+        flex: 1,
+        backgroundColor: '#F5F7FA',
+        marginTop: 30
+      }}>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 12,
+          paddingTop: Platform.OS === 'ios' ? 50 : 12,
+          paddingBottom: 12,
+          backgroundColor: Colors.white,
+          borderBottomWidth: 1,
+          borderBottomColor: '#E8EDF2'
+        }}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{
+            padding: 8,
+            marginRight: 4,
+          }}>
+            <Ionicons name="chevron-back" size={28} color={Colors.primary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Chat</Text>
+          <Text style={{
+            fontSize: 17,
+            fontWeight: '600',
+            color: Colors.textPrimary,
+            flex: 1
+          }}>Chat</Text>
         </View>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{error}</Text>
+        <View style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 20,
+        }}>
+          <Text style={{
+            color: Colors.error,
+            fontSize: 16,
+            textAlign: 'center',
+            fontWeight: '500',
+          }}>{error}</Text>
         </View>
       </View>
     );
@@ -627,13 +728,13 @@ const ChatScreen: React.FC = () => {
       
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backButtonText}>←</Text>
+          <Ionicons name="chevron-back" size={28} color={Colors.primary} />
         </TouchableOpacity>
         
         {renderHeaderInfo()}
 
         <TouchableOpacity style={styles.moreButton}>
-          <Text style={styles.moreButtonText}>⋮</Text>
+          <Ionicons name="ellipsis-vertical" size={24} color={Colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -671,7 +772,7 @@ const ChatScreen: React.FC = () => {
           
           <View style={styles.inputContainer}>
             <TouchableOpacity onPress={showMediaOptions} style={styles.attachButton}>
-              <Text style={styles.attachButtonText}>+</Text>
+              <Ionicons name="add" size={24} color={Colors.primary} />
             </TouchableOpacity>
 
             <TextInput
@@ -693,9 +794,11 @@ const ChatScreen: React.FC = () => {
               ]}
               disabled={!inputText.trim() && selectedMedia.length === 0}
             >
-              <Text style={styles.sendButtonText}>
-                {editingMessage ? '✓' : '➤'}
-              </Text>
+              {editingMessage ? (
+                <Ionicons name="checkmark" size={18} color={Colors.white} />
+              ) : (
+                <Ionicons name="send" size={18} color={Colors.white} />
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -709,7 +812,8 @@ const ChatScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F7FA'
+    backgroundColor: '#F5F7FA',
+    marginTop: 30
   },
   header: {
     flexDirection: 'row',
@@ -842,7 +946,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
   },
   repliedToOwn: {
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: Colors.white,
   },
   repliedToOther: {
     borderLeftColor: Colors.primary,
@@ -905,8 +1009,9 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
   },
   readReceipt: {
-    fontSize: 12,
-    color: '#4CAF50',
+    marginLeft: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   typingContainer: {
     padding: 8,

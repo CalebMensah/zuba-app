@@ -307,6 +307,7 @@ export const useStore = () => {
 
       if (result.data) {
         setStore(result.data);
+        console.log('user store details', result.data);
         return result.data;
       }
 

@@ -12,8 +12,28 @@ import {
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders, Order } from '../../hooks/useOrder';
+import { useOrders } from '../../hooks/useOrder';
 import { Colors } from '../../constants/colors';
+
+interface Order {
+  id: string;
+  createdAt: string;
+  store?: {
+    name?: string;
+    logo?: string;
+  } | null;
+  items: {
+    product?: {
+      images?: string[] | null;
+      name?: string | null;
+    } | null;
+    quantity: number;
+    total: number;
+  }[];
+  currency?: string;
+  checkoutSession?: string;
+  totalAmount: number;
+}
 
 const UnpaidOrdersScreen = () => {
   const navigation = useNavigation();
@@ -424,6 +444,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 20,
   },
   scrollView: {
     flex: 1,
@@ -451,7 +472,7 @@ const styles = StyleSheet.create({
   summaryTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginLeft: 8,
   },
   summaryGrid: {

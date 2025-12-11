@@ -10,9 +10,12 @@ import {
   Alert,
   StyleSheet,
   Dimensions,
+  Share,
 } from 'react-native';
 import { RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as Clipboard from 'expo-clipboard';
+import { Ionicons } from '@expo/vector-icons';
 import { useProduct } from '../../hooks/useProducts';
 import { Colors } from '../../constants/colors';
 import { SellerStackParamList } from '../../types/navigation';
@@ -91,6 +94,31 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
       ]);
     } else {
       Alert.alert('Error', 'Failed to delete product. Please try again.');
+    }
+  };
+
+  const handleCopyUrl = async () => {
+    console.log('Copy URL pressed');
+    console.log('Product slug:', product?.url);
+    if (product?.url) {
+      const productUrl = `https://zuba-web.vercel.app/product/${product.url}`;
+      await Clipboard.setStringAsync(productUrl);
+      Alert.alert('Success', 'Product URL copied to clipboard!');
+    }
+  };
+
+  const handleShareUrl = async () => {
+    console.log('Share URL pressed');
+    if (product?.url) {
+      const productUrl = `https://zuba-web.vercel.app/product/${product.url}`;
+      try {
+        await Share.share({
+          message: `Check out this product: ${product.name}\n${productUrl}`,
+          title: product.name,
+        });
+      } catch (error) {
+        console.error('Error sharing:', error);
+      }
     }
   };
 
@@ -186,6 +214,23 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
           <View style={styles.header}>
             <Text style={styles.productName}>{product.name}</Text>
             <Text style={styles.price}>${product.price.toFixed(2)}</Text>
+          </View>
+
+          {/* Header Actions */}
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.iconButton}
+              onPress={handleCopyUrl}
+            >
+              <Ionicons name="copy-outline" size={24} color={Colors.gray700} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.iconButton}
+              onPress={handleShareUrl}
+            >
+              <Ionicons name="share-social-outline" size={24} color={Colors.gray700} />
+            </TouchableOpacity>
           </View>
 
           {/* Stock Info */}
@@ -426,6 +471,19 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: Colors.primary,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   stockSection: {
     flexDirection: 'row',

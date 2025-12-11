@@ -489,6 +489,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F9FAFB',
+    marginTop: Platform.OS === 'ios' ? 50 : 30,
   },
   loadingContainer: {
     flex: 1,

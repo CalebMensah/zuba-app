@@ -28,7 +28,7 @@ const SellerStoreReviews: React.FC = () => {
   const route = useRoute<SellerStoreReviewsRouteProp>();
   const navigation = useNavigation<SellerStoreReviewsNavigationProp>();
 
-  const { getSellerStoreReviews, loading, error } = useReviews();
+  const { getPublicStoreReviews, loading, error } = useReviews();
 
   const [reviews, setReviews] = useState<Review[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -39,32 +39,29 @@ const SellerStoreReviews: React.FC = () => {
   const [averageRating, setAverageRating] = useState(0);
 
   // Fetch reviews
-  const fetchReviews = useCallback(async (pageNum: number = 1, append: boolean = false) => {
+const fetchReviews = useCallback(async (pageNumber: number, append: boolean = false) => {
+    if (!route.params?.storeId) return;
+
     try {
-      const result = await getSellerStoreReviews({
-        page: pageNum,
+      const response = await getPublicStoreReviews(route.params.storeId, {
+        page: pageNumber,
         limit: 10,
       });
+      if (response) {
+        setTotalPages(response.pagination.total);
+        setTotalReviews(response.pagination.total);
+        setAverageRating(response.averageRating || 0);
 
-      if (result) {
         if (append) {
-          setReviews((prev) => [...prev, ...result.reviews]);
+          setReviews((prevReviews) => [...prevReviews, ...response.reviews]);
         } else {
-          setReviews(result.reviews);
-        }
-        setTotalPages(result.pagination.pages);
-        setTotalReviews(result.pagination.total);
-        
-        // Calculate average rating
-        if (result.reviews.length > 0) {
-          const avg = result.reviews.reduce((sum, review) => sum + review.rating, 0) / result.reviews.length;
-          setAverageRating(avg);
+          setReviews(response.reviews);
         }
       }
     } catch (err) {
       console.error('Error fetching reviews:', err);
     }
-  }, [getSellerStoreReviews]);
+  }, [getPublicStoreReviews, route.params?.storeId]);
 
   useEffect(() => {
     fetchReviews(1);
@@ -322,6 +319,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 20,
   },
   loadingContainer: {
     flex: 1,

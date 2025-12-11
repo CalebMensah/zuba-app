@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/colors';
 import { useOrders, Order } from '../../hooks/useOrder';
+import { Ionicons } from '@expo/vector-icons';
 
 interface OrderDetailsProps {
   route: {
@@ -123,10 +124,12 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
     });
   };
 
-  const handleAddReview = () => {
-    navigation.navigate('AddReview', {
-      orderId: order?.id,
-      items: order?.items,
+  const handleAddReview = (productId: string, productName: string, orderId: string, productImage: string) => {
+    navigation.navigate('ManageReview', {
+      orderId,
+      productId,
+      productName,
+      productImage
     });
   };
 
@@ -146,7 +149,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           step: 1,
           title: 'Order Placed Successfully',
           description: 'Your order has been received and is awaiting confirmation from the seller. You will be notified once the seller confirms your order.',
-          icon: '📦',
+          icon: 'cube-outline',
           color: Colors.warning,
           actions: ['cancel', 'chat'],
         };
@@ -155,7 +158,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           step: 2,
           title: 'Order Confirmed',
           description: 'Great news! The seller has confirmed your order and is preparing it for shipment. You will receive delivery details soon.',
-          icon: '✅',
+          icon: 'checkmark-circle-outline',
           color: Colors.info,
           actions: ['cancel', 'chat'],
         };
@@ -164,7 +167,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           step: 3,
           title: 'Order Shipped',
           description: 'Your order is on its way! The seller has shipped your package. Track your delivery below.',
-          icon: '🚚',
+          icon: 'car-outline',
           color: Colors.primaryLight,
           actions: ['delivery', 'chat'],
         };
@@ -173,7 +176,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           step: 4,
           title: 'Order Delivered',
           description: `Your order has been delivered! Please confirm receipt to release payment to the seller. If not confirmed within ${daysRemaining} day(s), funds will be automatically released.`,
-          icon: '🎉',
+          icon: 'gift-outline',
           color: Colors.success,
           actions: ['confirm', 'refund', 'chat'],
         };
@@ -182,7 +185,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           step: 5,
           title: 'Order Completed',
           description: 'Thank you for your purchase! Your order is complete. Share your experience by reviewing the products you purchased and earn reward points.',
-          icon: '⭐',
+          icon: 'star-outline',
           color: Colors.successDark,
           actions: ['review'],
         };
@@ -191,7 +194,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           step: 6,
           title: 'Order Cancelled',
           description: 'This order has been cancelled. If you were charged, your refund will be processed within 3-5 business days.',
-          icon: '❌',
+          icon: 'close-circle-outline',
           color: Colors.error,
           actions: [],
         };
@@ -230,7 +233,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backButtonText}>←</Text>
+            <Text style={styles.backButtonText}><Text style={styles.buttonArrow}><Ionicons name="arrow-back" size={24} color={Colors.textPrimary} /></Text></Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Order Details</Text>
           <View style={styles.placeholder} />
@@ -322,7 +325,7 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
 
         {/* Status Card */}
         <View style={[styles.statusCard, { borderLeftColor: stepInfo?.color }]}>
-          <Text style={styles.statusIcon}>{stepInfo?.icon}</Text>
+          <Ionicons name={stepInfo?.icon as any} size={48} color={stepInfo?.color} style={styles.statusIcon} />
           <Text style={styles.statusTitle}>{stepInfo?.title}</Text>
           <Text style={styles.statusDescription}>{stepInfo?.description}</Text>
         </View>
@@ -397,7 +400,10 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
               style={styles.deliveryButton}
               onPress={handleViewDeliveryDetails}
             >
-              <Text style={styles.deliveryButtonText}>📦 View Delivery Details</Text>
+              <View style={styles.buttonContent}>
+                <Ionicons name="cube-outline" size={20} color={Colors.white} />
+                <Text style={styles.deliveryButtonText}>View Delivery Details</Text>
+              </View>
             </TouchableOpacity>
           )}
 
@@ -410,7 +416,10 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
               {actionLoading ? (
                 <ActivityIndicator size="small" color={Colors.white} />
               ) : (
-                <Text style={styles.confirmButtonText}>✓ Confirm Receipt</Text>
+                <View style={styles.buttonContent}>
+                  <Ionicons name="checkmark-circle-outline" size={20} color={Colors.white} />
+                  <Text style={styles.confirmButtonText}>Confirm Receipt</Text>
+                </View>
               )}
             </TouchableOpacity>
           )}
@@ -427,9 +436,17 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
           {stepInfo?.actions.includes('review') && (
             <TouchableOpacity
               style={styles.reviewButton}
-              onPress={handleAddReview}
+              onPress={() => handleAddReview(
+                order.items[0]?.product?.id || '',
+                order.items[0]?.product?.name || '',
+                order.id,
+                order.items[0]?.product?.images?.[0] || 'https://via.placeholder.com/100'
+              )}
             >
-              <Text style={styles.reviewButtonText}>⭐ Write a Review & Earn Points</Text>
+              <View style={styles.buttonContent}>
+                <Ionicons name="star-outline" size={20} color={Colors.white} />
+                <Text style={styles.reviewButtonText}>Write a Review & Earn Points</Text>
+              </View>
             </TouchableOpacity>
           )}
 
@@ -494,9 +511,9 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
   placeholder: {
     width: 40,
@@ -588,6 +605,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: Colors.textPrimary,
+  },
+    buttonArrow: {
+    color: Colors.white,
+    fontSize: 22,
+    fontWeight: '700',
   },
   totalRow: {
     flexDirection: 'row',
@@ -857,6 +879,11 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 32,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 });
 

@@ -1,26 +1,60 @@
 import prisma from '../config/prisma.js';
 import { cache } from '../config/redis.js';
 
+// Helper function to sanitize error messages in production
+const sanitizeError = (error) => {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Error:', error);
+    return 'Internal server error';
+  }
+  return error.message;
+};
+
+// Helper function to invalidate notification caches
+const invalidateNotificationCaches = async (userId) => {
+  const cacheKeys = [
+    `notifications:user:${userId}:all`,
+    `notifications:user:${userId}:unread`,
+    `notifications:user:${userId}:unread:count`
+  ];
+
+  // Also invalidate paginated cache keys (delete pattern)
+  // Note: This is a simple approach. For production, consider using Redis SCAN
+  for (let page = 1; page <= 10; page++) {
+    for (const readFilter of ['true', 'false', 'undefined']) {
+      cacheKeys.push(`notifications:user:${userId}:page:${page}:limit:10:read:${readFilter}`);
+      cacheKeys.push(`notifications:user:${userId}:page:${page}:limit:20:read:${readFilter}`);
+    }
+  }
+
+  await Promise.allSettled(cacheKeys.map(key => cache.del(key)));
+};
 
 export const createNotification = async (req, res) => {
   try {
     const { userId, title, message, type, data } = req.body;
 
-    // Validate required fields
-    if (!userId || !title || !message || !type) {
-      return res.status(400).json({
+    // Verify user exists (security check)
+    const userExists = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true }
+    });
+
+    if (!userExists) {
+      return res.status(404).json({
         success: false,
-        message: 'userId, title, message, and type are required.'
+        message: 'User not found.'
       });
     }
 
+    // Create notification
     const notification = await prisma.notification.create({
       data: {
         userId,
         title,
         message,
         type,
-        data: data || null, // Store data as JSON if provided
+        data: data || null,
       },
       include: {
         user: {
@@ -32,21 +66,20 @@ export const createNotification = async (req, res) => {
       }
     });
 
-    // Invalidate user's notification cache (if you cache them)
-    await cache.del(`notifications:user:${userId}:all`);
-    await cache.del(`notifications:user:${userId}:unread`);
+    // Invalidate user's notification cache
+    await invalidateNotificationCaches(userId);
 
     res.status(201).json({
       success: true,
       message: 'Notification created successfully.',
       data: notification
     });
+
   } catch (error) {
     console.error('Error creating notification:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: sanitizeError(error)
     });
   }
 };
@@ -55,10 +88,11 @@ export const getUserNotifications = async (req, res) => {
   try {
     const userId = req.user.userId;
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 100); // Max 100
     const offset = (page - 1) * limit;
-    const readFilter = req.query.read; // 'true', 'false', or undefined
+    const readFilter = req.query.read;
 
+    // Build where clause
     let whereClause = { userId };
     if (readFilter !== undefined) {
       whereClause.read = readFilter === 'true';
@@ -66,37 +100,59 @@ export const getUserNotifications = async (req, res) => {
 
     const cacheKey = `notifications:user:${userId}:page:${page}:limit:${limit}:read:${readFilter}`;
 
-    const notifications = await prisma.notification.findMany({
-      where: whereClause,
-      orderBy: { createdAt: 'desc' }, // Newest first
-      skip: offset,
-      take: limit,
-    });
+    // Check cache first
+    const cachedData = await cache.get(cacheKey);
+    if (cachedData) {
+      return res.status(200).json({
+        success: true,
+        data: JSON.parse(cachedData)
+      });
+    }
 
-    const total = await prisma.notification.count({ where: whereClause });
+    // Fetch from database
+    const [notifications, total] = await Promise.all([
+      prisma.notification.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        select: {
+          id: true,
+          title: true,
+          message: true,
+          type: true,
+          data: true,
+          read: true,
+          readAt: true,
+          createdAt: true
+        }
+      }),
+      prisma.notification.count({ where: whereClause })
+    ]);
+
+    const resultData = {
+      notifications,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+
+    // Cache for 2 minutes
+    await cache.set(cacheKey, JSON.stringify(resultData), 120);
 
     res.status(200).json({
       success: true,
-      data: {
-        notifications,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+      data: resultData
     });
-
-    // If you implement caching later, set the cache here
-    // await cache.set(cacheKey, resultData, 300); // Cache for 5 minutes
 
   } catch (error) {
     console.error('Error fetching notifications:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: sanitizeError(error)
     });
   }
 };
@@ -106,10 +162,34 @@ export const markNotificationAsRead = async (req, res) => {
     const { notificationId } = req.params;
     const userId = req.user.userId;
 
-    const notification = await prisma.notification.update({
+    // First check if notification exists and belongs to user
+    const existingNotification = await prisma.notification.findFirst({
       where: {
         id: notificationId,
-        userId: userId // Security check
+        userId: userId
+      }
+    });
+
+    if (!existingNotification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found or does not belong to you.'
+      });
+    }
+
+    // Check if already read
+    if (existingNotification.read) {
+      return res.status(200).json({
+        success: true,
+        message: 'Notification was already marked as read.',
+        data: existingNotification
+      });
+    }
+
+    // Update notification
+    const notification = await prisma.notification.update({
+      where: {
+        id: notificationId
       },
       data: {
         read: true,
@@ -117,28 +197,23 @@ export const markNotificationAsRead = async (req, res) => {
       }
     });
 
-    if (!notification) {
-      return res.status(404).json({
-        success: false,
-        message: 'Notification not found or does not belong to user.'
-      });
-    }
-
     // Invalidate user's notification cache
-    await cache.del(`notifications:user:${userId}:all`);
-    await cache.del(`notifications:user:${userId}:unread`);
+    await invalidateNotificationCaches(userId);
+
+    // Also invalidate specific notification cache
+    await cache.del(`notification:${notificationId}:user:${userId}`);
 
     res.status(200).json({
       success: true,
       message: 'Notification marked as read.',
       data: notification
     });
+
   } catch (error) {
     console.error('Error marking notification as read:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: sanitizeError(error)
     });
   }
 };
@@ -147,10 +222,11 @@ export const markAllNotificationsAsRead = async (req, res) => {
   try {
     const userId = req.user.userId;
 
+    // Update all unread notifications for the user
     const result = await prisma.notification.updateMany({
       where: {
         userId: userId,
-        read: false // Only update unread ones
+        read: false
       },
       data: {
         read: true,
@@ -159,39 +235,42 @@ export const markAllNotificationsAsRead = async (req, res) => {
     });
 
     // Invalidate user's notification cache
-    await cache.del(`notifications:user:${userId}:all`);
-    await cache.del(`notifications:user:${userId}:unread`);
+    await invalidateNotificationCaches(userId);
 
     res.status(200).json({
       success: true,
-      message: `${result.count} notifications marked as read.`,
+      message: `${result.count} notification(s) marked as read.`,
       updatedCount: result.count
     });
+
   } catch (error) {
     console.error('Error marking all notifications as read:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: sanitizeError(error)
     });
   }
 };
 
 export const getUnreadNotificationCount = async (req, res) => {
   try {
-    const userId = req.user.id;
+    // FIXED: Use req.user.userId (consistent with other endpoints)
+    const userId = req.user.userId;
 
     const cacheKey = `notifications:user:${userId}:unread:count`;
 
     // Try to get count from cache first
     const cachedCount = await cache.get(cacheKey);
-    if (cachedCount !== null) { // Check for null explicitly as 0 is a valid count
+    if (cachedCount !== null && cachedCount !== undefined) {
+      // Parse if it's a string
+      const count = typeof cachedCount === 'string' ? parseInt(cachedCount, 10) : cachedCount;
       return res.status(200).json({
         success: true,
-        data: { count: cachedCount }
+        data: { count }
       });
     }
 
+    // Fetch unread count from database
     const count = await prisma.notification.count({
       where: {
         userId,
@@ -199,19 +278,19 @@ export const getUnreadNotificationCount = async (req, res) => {
       }
     });
 
-    // Cache for 5 minutes
-    await cache.set(cacheKey, count, 300);
+    // Cache for 2 minutes (shorter than other caches for real-time feel)
+    await cache.set(cacheKey, count, 120);
 
     res.status(200).json({
       success: true,
       data: { count }
     });
+
   } catch (error) {
     console.error('Error fetching unread notification count:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: sanitizeError(error)
     });
   }
 };
@@ -238,7 +317,15 @@ export const getNotificationById = async (req, res) => {
         id: notificationId,
         userId: userId // Security: ensure notification belongs to user
       },
-      include: {
+      select: {
+        id: true,
+        title: true,
+        message: true,
+        type: true,
+        data: true,
+        read: true,
+        readAt: true,
+        createdAt: true,
         user: {
           select: {
             id: true,
@@ -258,19 +345,94 @@ export const getNotificationById = async (req, res) => {
       });
     }
 
-    // Cache the result for 10 minutes
-    await cache.set(cacheKey, JSON.stringify(notification), 600);
+    // Cache the result for 5 minutes
+    await cache.set(cacheKey, JSON.stringify(notification), 300);
 
     res.status(200).json({
       success: true,
       data: notification
     });
+
   } catch (error) {
     console.error('Error fetching notification by ID:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: sanitizeError(error)
+    });
+  }
+};
+
+export const deleteNotification = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const userId = req.user.userId;
+
+    // Check if notification exists and belongs to user
+    const notification = await prisma.notification.findFirst({
+      where: {
+        id: notificationId,
+        userId: userId
+      }
+    });
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found or does not belong to you.'
+      });
+    }
+
+    // Delete notification
+    await prisma.notification.delete({
+      where: {
+        id: notificationId
+      }
+    });
+
+    // Invalidate caches
+    await invalidateNotificationCaches(userId);
+    await cache.del(`notification:${notificationId}:user:${userId}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Notification deleted successfully.'
+    });
+
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    res.status(500).json({
+      success: false,
+      message: sanitizeError(error)
+    });
+  }
+};
+
+export const deleteAllReadNotifications = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Delete all read notifications for the user
+    const result = await prisma.notification.deleteMany({
+      where: {
+        userId: userId,
+        read: true
+      }
+    });
+
+    // Invalidate caches
+    await invalidateNotificationCaches(userId);
+
+    res.status(200).json({
+      success: true,
+      message: `${result.count} read notification(s) deleted successfully.`,
+      deletedCount: result.count
+    });
+
+  } catch (error) {
+    console.error('Error deleting read notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: sanitizeError(error)
     });
   }
 };

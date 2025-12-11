@@ -29,26 +29,32 @@ interface Address {
   isDefault: boolean;
 }
 
-interface OrderSummary {
+interface CartItem {
+  productId: string;
+  name: string;
+  price: number;
+  quantity: number;
+  imageURL?: string;
+  color?: string;
+  size?: string;
   storeId: string;
   storeName: string;
-  items: any[];
-  subtotal: number;
-  checkoutSession: string;
 }
 
 const CheckoutScreen = ({ navigation, route }: any) => {
-  const { cart, loading: cartLoading, fetchCart } = useCart();
+  const { cart, loading: cartLoading, fetchCart, clearCart } = useCart();
   const { getUserAddresses, loading: addressLoading } = useAddress();
   const { createOrder, loading: orderLoading } = useOrders();
 
-  // Get orders data from route params (passed from CartScreen)
-  const ordersFromCart: OrderSummary[] = route.params?.orders || [];
-
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [deliveryFee] = useState(0); // You can calculate this dynamically per store
-  const [placingOrders, setPlacingOrders] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
+
+  // Constants
+  const deliveryFee = 0; // To be negotiated with seller
+  const taxAmount = 0;
+  const discount = 0;
+  const PAYSTACK_COLLECTION_PERCENT = 1.95; // 1.95% collection fee
 
   useEffect(() => {
     loadCheckoutData();
@@ -73,39 +79,108 @@ const CheckoutScreen = ({ navigation, route }: any) => {
     setRefreshing(false);
   };
 
-  const handlePlaceOrders = async () => {
+  // Calculate Paystack collection fee (what buyer pays)
+  const calculatePaystackCollectionFee = (amount: number) => {
+    const percentFee = amount * (PAYSTACK_COLLECTION_PERCENT / 100);
+    return parseFloat(percentFee.toFixed(2));
+  };
+
+  // Group cart items by store
+  const groupItemsByStore = () => {
+    if (!cart?.items) return [];
+
+    const storeMap: { [key: string]: CartItem[] } = {};
+
+    cart.items.forEach((cartItem) => {
+      const item: CartItem = {
+        productId: cartItem.productId,
+        name: cartItem.product.name,
+        price: cartItem.product.price,
+        quantity: cartItem.quantity,
+        imageURL: cartItem.product.images[0],
+        color: cartItem.product.color?.[0],
+        size: cartItem.product.sizes?.[0],
+        storeId: cartItem.product.storeId,
+        storeName: cartItem.product.store?.name || 'Unknown Store',
+      };
+
+      if (!storeMap[item.storeId]) {
+        storeMap[item.storeId] = [];
+      }
+      storeMap[item.storeId].push(item);
+    });
+
+    return Object.entries(storeMap).map(([storeId, items]) => ({
+      storeId,
+      storeName: items[0].storeName,
+      items,
+      subtotal: items.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+    }));
+  };
+
+  const storeGroups = groupItemsByStore();
+
+  // Calculate totals
+  const calculateTotals = () => {
+    const subtotal = storeGroups.reduce((sum, group) => sum + group.subtotal, 0);
+    const totalDeliveryFee = deliveryFee * storeGroups.length; // Per store
+    const orderSubtotal = subtotal + totalDeliveryFee + taxAmount - discount;
+    const paystackCollectionFee = calculatePaystackCollectionFee(orderSubtotal);
+    const total = orderSubtotal + paystackCollectionFee;
+    const totalItems = cart?.items?.length || 0;
+
+    return { 
+      subtotal, 
+      totalDeliveryFee, 
+      taxAmount,
+      discount,
+      orderSubtotal,
+      paystackCollectionFee, 
+      total, 
+      totalItems 
+    };
+  };
+
+  const { 
+    subtotal, 
+    totalDeliveryFee, 
+    orderSubtotal, 
+    paystackCollectionFee, 
+    total, 
+    totalItems 
+  } = calculateTotals();
+
+  const handlePlaceOrder = async () => {
     if (!selectedAddress) {
       Alert.alert('Address Required', 'Please add a delivery address to continue');
       return;
     }
 
-    if (!ordersFromCart || ordersFromCart.length === 0) {
+    if (!cart?.items || cart.items.length === 0) {
       Alert.alert('Empty Cart', 'No items to checkout');
       return;
     }
 
     // Show confirmation for multiple stores
-    if (ordersFromCart.length > 1) {
+    if (storeGroups.length > 1) {
       Alert.alert(
         'Confirm Orders',
-        `You are placing ${ordersFromCart.length} separate orders from different stores. Continue?`,
+        `You are placing ${storeGroups.length} separate orders from different stores. Continue?`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Confirm', onPress: () => processOrders() },
+          { text: 'Confirm', onPress: () => processOrder() },
         ]
       );
     } else {
-      processOrders();
+      processOrder();
     }
   };
 
-  const processOrders = async () => {
-    setPlacingOrders(true);
-    const successfulOrders: any[] = [];
-    const failedOrders: string[] = [];
+  const processOrder = async () => {
+    setPlacingOrder(true);
 
     try {
-      // Map address to delivery info
+      // Prepare delivery info
       const deliveryInfo = {
         recipient: selectedAddress!.recipient,
         phone: selectedAddress!.phone,
@@ -114,86 +189,58 @@ const CheckoutScreen = ({ navigation, route }: any) => {
         region: selectedAddress!.region,
         country: selectedAddress!.country || 'Ghana',
         postalCode: selectedAddress!.postalCode || undefined,
-        deliveryFee: deliveryFee,
-        notes: '',
       };
 
-      // Create order for each store
-      for (const orderSummary of ordersFromCart) {
-        try {
-          const totalAmount = orderSummary.subtotal + deliveryFee;
+      // Prepare items in the format backend expects
+      const items = cart?.items?.map((cartItem) => ({
+        productId: cartItem.productId,
+        quantity: cartItem.quantity,
+        price: cartItem.product.price,
+      })) || [];
 
-          const orderData = {
-            storeId: orderSummary.storeId,
-            items: orderSummary.items,
-            deliveryInfo,
-            totalAmount,
-            subtotal: orderSummary.subtotal,
-            deliveryFee,
-            currency: 'GHS',
-            checkoutSession: orderSummary.checkoutSession, // Use the session from cart
-          };
+      // Generate checkout session ID
+      const checkoutSession = `cs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-          const order = await createOrder(orderData);
+      // Create order data (backend will handle multi-seller grouping)
+      const orderData = {
+        items,
+        deliveryInfo,
+        deliveryFee,
+        taxAmount,
+        discount,
+        currency: 'GHS',
+        checkoutSession,
+      };
 
-          if (order) {
-            successfulOrders.push({
-              orderId: order.id,
-              storeName: orderSummary.storeName,
-              checkoutSession: orderSummary.checkoutSession,
-            });
-          } else {
-            failedOrders.push(orderSummary.storeName);
-          }
-        } catch (error) {
-          console.error(`Failed to create order for ${orderSummary.storeName}:`, error);
-          failedOrders.push(orderSummary.storeName);
-        }
-      }
+      const result = await createOrder(orderData);
 
-      // Show results and navigate
-      if (successfulOrders.length > 0 && failedOrders.length === 0) {
-        // All orders successful
+      if (result && result.orders && result.orders.length > 0) {
+        // Clear cart after successful order creation
+        await clearCart();
+
         Alert.alert(
           'Orders Created!',
-          `${successfulOrders.length} order(s) created successfully. Proceed to payment.`,
+          `${result.orders.length} order(s) created successfully. Proceed to payment.`,
           [
             {
               text: 'Go to Payment',
               onPress: () => {
-                // Navigate to payment with all order IDs
+                // Navigate to payment with all order details
                 navigation.navigate('Payment', {
-                  orders: successfulOrders,
-                  totalOrders: successfulOrders.length,
-                });
-              },
-            },
-          ]
-        );
-      } else if (successfulOrders.length > 0 && failedOrders.length > 0) {
-        // Partial success
-        Alert.alert(
-          'Partial Success',
-          `${successfulOrders.length} order(s) created successfully.\n${failedOrders.length} order(s) failed for: ${failedOrders.join(', ')}\n\nDo you want to proceed with successful orders?`,
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-              onPress: () => navigation.goBack(),
-            },
-            {
-              text: 'Proceed',
-              onPress: () => {
-                navigation.navigate('Payment', {
-                  orders: successfulOrders,
-                  totalOrders: successfulOrders.length,
+                  orders: result.orders.map(order => ({
+                    orderId: order.id,
+                    storeName: order.store?.name,
+                    amount: order.buyerTotalAmount,
+                    checkoutSession: order.checkoutSession,
+                  })),
+                  totalAmount: result.orders.reduce((sum, order) => sum + order.buyerTotalAmount, 0),
+                  totalOrders: result.orders.length,
                 });
               },
             },
           ]
         );
       } else {
-        // All failed
         Alert.alert(
           'Order Failed',
           'Failed to create orders. Please try again.',
@@ -204,7 +251,7 @@ const CheckoutScreen = ({ navigation, route }: any) => {
       console.error('Order creation error:', error);
       Alert.alert('Error', 'Something went wrong. Please try again.');
     } finally {
-      setPlacingOrders(false);
+      setPlacingOrder(false);
     }
   };
 
@@ -212,19 +259,7 @@ const CheckoutScreen = ({ navigation, route }: any) => {
     return `GH₵ ${price.toFixed(2)}`;
   };
 
-  // Calculate totals across all stores
-  const calculateTotals = () => {
-    const subtotal = ordersFromCart.reduce((sum, order) => sum + order.subtotal, 0);
-    const totalDeliveryFee = deliveryFee * ordersFromCart.length; // Delivery fee per store
-    const total = subtotal + totalDeliveryFee;
-    const totalItems = ordersFromCart.reduce((sum, order) => sum + order.items.length, 0);
-
-    return { subtotal, totalDeliveryFee, total, totalItems };
-  };
-
-  const { subtotal, totalDeliveryFee, total, totalItems } = calculateTotals();
-
-  if (cartLoading && ordersFromCart.length === 0) {
+  if (cartLoading || !cart) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.primary} />
@@ -233,7 +268,7 @@ const CheckoutScreen = ({ navigation, route }: any) => {
     );
   }
 
-  if (ordersFromCart.length === 0) {
+  if (!cart.items || cart.items.length === 0) {
     return (
       <View style={styles.emptyContainer}>
         <Ionicons name="cart-outline" size={80} color={Colors.gray300} />
@@ -271,12 +306,12 @@ const CheckoutScreen = ({ navigation, route }: any) => {
         }
       >
         {/* Multi-Store Notice */}
-        {ordersFromCart.length > 1 && (
+        {storeGroups.length > 1 && (
           <View style={styles.multiStoreNotice}>
             <Ionicons name="information-circle" size={20} color={Colors.warning} />
             <Text style={styles.multiStoreText}>
-              You're ordering from {ordersFromCart.length} different stores. 
-              This will create {ordersFromCart.length} separate orders.
+              You're ordering from {storeGroups.length} different stores. 
+              This will create {storeGroups.length} separate orders.
             </Text>
           </View>
         )}
@@ -343,27 +378,27 @@ const CheckoutScreen = ({ navigation, route }: any) => {
         </View>
 
         {/* Order Items by Store */}
-        {ordersFromCart.map((orderSummary, storeIndex) => (
-          <View key={orderSummary.checkoutSession} style={styles.section}>
+        {storeGroups.map((group, storeIndex) => (
+          <View key={group.storeId} style={styles.section}>
             <View style={styles.sectionHeader}>
               <View style={styles.sectionTitleContainer}>
                 <Ionicons name="storefront" size={20} color={Colors.primary} />
                 <Text style={styles.sectionTitle}>
-                  {orderSummary.storeName} ({orderSummary.items.length} items)
+                  {group.storeName} ({group.items.length} items)
                 </Text>
               </View>
             </View>
 
             <View style={styles.itemsContainer}>
-              {orderSummary.items.map((item, itemIndex) => (
-                <View key={`${orderSummary.storeId}-${item.productId}-${itemIndex}`} style={styles.orderItem}>
+              {group.items.map((item, itemIndex) => (
+                <View key={`${item.productId}-${itemIndex}`} style={styles.orderItem}>
                   <Image
                     source={{ uri: item.imageURL || 'https://via.placeholder.com/80' }}
                     style={styles.productImage}
                   />
                   <View style={styles.productDetails}>
                     <Text style={styles.productName} numberOfLines={2}>
-                      {item.name || `Product #${item.productId.substring(0, 8)}`}
+                      {item.name}
                     </Text>
                     <View style={styles.productMeta}>
                       {item.color && (
@@ -391,7 +426,7 @@ const CheckoutScreen = ({ navigation, route }: any) => {
             {/* Store Subtotal */}
             <View style={styles.storeSubtotal}>
               <Text style={styles.storeSubtotalLabel}>Store Subtotal</Text>
-              <Text style={styles.storeSubtotalValue}>{formatPrice(orderSummary.subtotal)}</Text>
+              <Text style={styles.storeSubtotalValue}>{formatPrice(group.subtotal)}</Text>
             </View>
           </View>
         ))}
@@ -410,18 +445,59 @@ const CheckoutScreen = ({ navigation, route }: any) => {
               <Text style={styles.summaryLabel}>Subtotal ({totalItems} items)</Text>
               <Text style={styles.summaryValue}>{formatPrice(subtotal)}</Text>
             </View>
+            
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>
-                Delivery Fee ({ordersFromCart.length} {ordersFromCart.length === 1 ? 'store' : 'stores'})
+                Delivery Fee ({storeGroups.length} {storeGroups.length === 1 ? 'store' : 'stores'})
               </Text>
               <Text style={styles.summaryValue}>{formatPrice(totalDeliveryFee)}</Text>
             </View>
-            <Text style={{ ...styles.summaryLabel, marginLeft: 16, fontStyle: 'italic', fontSize: 12, color: '#555' }}>
+            <Text style={styles.deliveryNote}>
               To be negotiated with seller
             </Text>
+
+            {taxAmount > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Tax</Text>
+                <Text style={styles.summaryValue}>{formatPrice(taxAmount)}</Text>
+              </View>
+            )}
+
+            {discount > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Discount</Text>
+                <Text style={[styles.summaryValue, styles.discountValue]}>
+                  -{formatPrice(discount)}
+                </Text>
+              </View>
+            )}
+
             <View style={styles.divider} />
+
             <View style={styles.summaryRow}>
-              <Text style={styles.totalLabel}>Total</Text>
+              <Text style={styles.summaryLabel}>Order Subtotal</Text>
+              <Text style={styles.summaryValue}>{formatPrice(orderSubtotal)}</Text>
+            </View>
+
+            <View style={styles.summaryRow}>
+              <View style={styles.feeInfoContainer}>
+                <Text style={styles.summaryLabel}>Payment Processing Fee</Text>
+                <TouchableOpacity 
+                  onPress={() => Alert.alert(
+                    'Payment Processing Fee',
+                    `Paystack charges ${PAYSTACK_COLLECTION_PERCENT}% to process your payment securely.`
+                  )}
+                >
+                  <Ionicons name="information-circle-outline" size={16} color={Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.summaryValue}>{formatPrice(paystackCollectionFee)}</Text>
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.summaryRow}>
+              <Text style={styles.totalLabel}>Total to Pay</Text>
               <Text style={styles.totalValue}>{formatPrice(total)}</Text>
             </View>
           </View>
@@ -440,17 +516,17 @@ const CheckoutScreen = ({ navigation, route }: any) => {
         <TouchableOpacity
           style={[
             styles.checkoutButton,
-            (!selectedAddress || placingOrders) && styles.checkoutButtonDisabled,
+            (!selectedAddress || placingOrder) && styles.checkoutButtonDisabled,
           ]}
-          onPress={handlePlaceOrders}
-          disabled={!selectedAddress || placingOrders}
+          onPress={handlePlaceOrder}
+          disabled={!selectedAddress || placingOrder}
         >
-          {placingOrders ? (
+          {placingOrder ? (
             <ActivityIndicator color={Colors.white} />
           ) : (
             <>
               <Text style={styles.checkoutButtonText}>
-                Place {ordersFromCart.length === 1 ? 'Order' : `${ordersFromCart.length} Orders`}
+                Place {storeGroups.length === 1 ? 'Order' : `${storeGroups.length} Orders`}
               </Text>
               <Ionicons name="arrow-forward" size={20} color={Colors.white} />
             </>
@@ -465,6 +541,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 20,
   },
   loadingContainer: {
     flex: 1,
@@ -493,7 +570,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: Colors.textSecondary,
+    color: Colors.primary,
     textAlign: 'center',
     marginBottom: 32,
   },
@@ -524,7 +601,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
   placeholder: {
     width: 40,
@@ -751,6 +828,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: Colors.textPrimary,
+  },
+  discountValue: {
+    color: Colors.success,
+  },
+  deliveryNote: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    color: Colors.textTertiary,
+    marginLeft: 16,
+    marginTop: -4,
+    marginBottom: 4,
+  },
+  feeInfoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   divider: {
     height: 1,

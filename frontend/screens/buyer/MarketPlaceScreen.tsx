@@ -22,6 +22,7 @@ import Feather from '@expo/vector-icons/Feather';
 import AntDesign from '@expo/vector-icons/AntDesign';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import EvilIcons from '@expo/vector-icons/EvilIcons';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2;
@@ -141,16 +142,14 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
   const handleAddToCart = async (product: any) => {
     if (!product) return;
 
-    // Validate size selection if sizes exist
+    // Auto-select first size if exists and not selected
     if (product.sizes && product.sizes.length > 0 && !selectedSize) {
-      Alert.alert('Select Size', 'Please select a size before adding to cart.');
-      return;
+      setSelectedSize(product.sizes[0]);
     }
 
-    // Validate color selection if colors exist
+    // Auto-select first color if exists and not selected
     if (product.color && product.color.length > 0 && !selectedColor) {
-      Alert.alert('Select Color', 'Please select a color before adding to cart.');
-      return;
+      setSelectedColor(product.color[0]);
     }
 
     setAddingToCart(true);
@@ -248,9 +247,14 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
           onPress={() => handleAddToCart(item)}
           disabled={item.stock === 0}
         >
-          <Text style={styles.addToCartText}>
-            {item.stock === 0 ? 'Out of Stock' : '🛒 Add'}
-          </Text>
+          <View style={styles.addToCartContent}>
+            {item.stock !== 0 && (
+              <Ionicons name="cart" size={18} color={Colors.white} style={styles.cartIcon} />
+            )}
+            <Text style={styles.addToCartText}>
+              {item.stock === 0 ? 'Out of Stock' : 'Add'}
+            </Text>
+          </View>
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
@@ -662,7 +666,7 @@ const styles = StyleSheet.create({
     borderWidth: 0.1,
   },
   title: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: 'bold',
     color: Colors.primaryDark,
   },
@@ -830,9 +834,18 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   addToCartBtnDisabled: {
     backgroundColor: Colors.gray300,
+  },
+  addToCartContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartIcon: {
+    marginRight: 4,
   },
   addToCartText: {
     color: Colors.white,

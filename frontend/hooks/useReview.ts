@@ -83,6 +83,7 @@ interface PaginatedReviews {
     total: number;
     pages: number;
   };
+  averageRating: number;
 }
 
 interface ApiResponse<T> {
@@ -366,7 +367,8 @@ const getPublicStoreReviews = useCallback(async (
     page?: number;
     limit?: number;
     productId?: string;
-  }
+  },
+  
 ) => {
   const params = new URLSearchParams();
 

@@ -20,6 +20,7 @@ import { AuthStackParamList } from '../../types/navigation';
 import { useAuth } from '../../context/AuthContext';
 import { authAPI, LoginData } from '../../services/api';
 import { Colors } from '../../constants/colors';
+import { useGoogleLogin } from '../../hooks/useGoogle';
 
 type LoginScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 
@@ -29,6 +30,7 @@ interface Props {
 
 const LoginScreen: React.FC<Props> = ({ navigation }) => {
   const { login } = useAuth();
+  const { signInWithGoogle, isLoading: googleLoading, error: googleError } = useGoogleLogin();
   const [formData, setFormData] = useState<LoginData>({
     email: '',
     password: '',
@@ -123,11 +125,10 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
           {/* Logo Section */}
           <View style={styles.logoSection}>
             <Image
-              source={require('../../assets/zuba-logo.png')}
+              source={require('../../assets/logo.png')}
               style={styles.logo}
               resizeMode="contain"
             />
-            <Text style={styles.tagline}>Buy. Sell. Trust</Text>
           </View>
 
           {/* Welcome Section */}
@@ -241,14 +242,14 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
               By signing in, you agree to our{' '}
               <Text 
                 style={styles.footerLink}
-                onPress={() => navigation.navigate('TermsAndConditions' as any)}
+                onPress={() => navigation.navigate('Terms' as any)}
               >
                 Terms
               </Text>
               {' & '}
               <Text 
                 style={styles.footerLink}
-                onPress={() => navigation.navigate('PrivacyPolicy' as any)}
+                onPress={() => navigation.navigate('Privacy' as any)}
               >
                 Privacy Policy
               </Text>
@@ -288,18 +289,12 @@ const styles = StyleSheet.create({
   },
   logoSection: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 20,
   },
   logo: {
-    width: 120,
-    height: 120,
+    width: 150,
+    height: 150,
     marginBottom: 12,
-  },
-  tagline: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.accent,
-    letterSpacing: 1,
   },
   welcomeSection: {
     marginBottom: 32,
@@ -307,13 +302,15 @@ const styles = StyleSheet.create({
   welcomeTitle: {
     fontSize: 28,
     fontWeight: '800',
-    color: Colors.textPrimary,
+    color: Colors.primary,
+    alignSelf: 'center',
     marginBottom: 8,
   },
   welcomeSubtitle: {
     fontSize: 15,
     color: Colors.textSecondary,
     lineHeight: 22,
+    alignSelf: 'center',
   },
   formContainer: {
     marginBottom: 24,
@@ -449,6 +446,34 @@ const styles = StyleSheet.create({
   footerLink: {
     color: Colors.primary,
     fontWeight: '600',
+  },
+  googleButton: {
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.backgroundSecondary,
+    marginBottom: 24,
+    shadowColor: Colors.gray400,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  googleButtonDisabled: {
+    opacity: 0.6,
+  },
+  googleIcon: {
+    marginRight: 12,
+  },
+  googleButtonText: {
+    color: Colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
 });
 

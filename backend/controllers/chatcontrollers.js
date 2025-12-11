@@ -112,7 +112,7 @@ export const getOrCreateOrderChatRoom = async (req, res) => {
         otherUserId,
         'New Chat Room',
         `A new chat has been created for Order #${order.id.slice(-8)}`,
-        'chat_room_created',
+        'message',
         { chatRoomId: chatRoom.id, orderId }
       );
     }
@@ -266,7 +266,7 @@ export const getOrCreateProductChatRoom = async (req, res) => {
         product.store.userId,
         'New Product Inquiry',
         `Someone is interested in your product: ${product.name}`,
-        'product_inquiry',
+        'message',
         { chatRoomId: chatRoom.id, productId }
       );
     }
@@ -317,9 +317,17 @@ export const getUserChatRooms = async (req, res) => {
                   id: true,
                   firstName: true,
                   email: true,
-                  avatar: true
+                  avatar: true,
+                  role: true,
+                  store: {
+                    select: {
+                      id: true,
+                      name: true,
+                      logo: true
+                    }
+                  }
                 }
-              }
+              },
             }
           },
           messages: {
@@ -594,11 +602,13 @@ export const sendMessage = async (req, res) => {
     const ioMessageData = {
       id: message.id,
       chatRoomId: message.chatRoomId,
+      senderId: message.senderId,
       sender: message.sender,
       content: message.content,
       media: message.media,
       repliedTo: message.repliedTo || null,
       createdAt: message.createdAt,
+      updatedAt: message.updatedAt,
       isRead: false
     };
 
@@ -636,7 +646,7 @@ export const sendMessage = async (req, res) => {
           participant.userId,
           'New Message',
           `${message.sender.name}: ${content ? content.substring(0, 50) : 'Sent media'}`,
-          'chat_new_message',
+          'new_message',
           { 
             chatRoomId, 
             messageId: message.id, 

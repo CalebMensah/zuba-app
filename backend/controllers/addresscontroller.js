@@ -1,11 +1,35 @@
 // controllers/addressController.js
 import prisma from '../config/prisma.js';
 import { cache } from '../config/redis.js';
-
+import { 
+  validateAddressData, 
+  checkAddressLimit, 
+  VALID_REGIONS 
+} from '../utils/addressValidation.js';
 
 export const createAddress = async (req, res) => {
   try {
     const userId = req.user.userId;
+
+    // Validate and sanitize input
+    const validation = validateAddressData(req.body, false);
+    
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: validation.errors
+      });
+    }
+
+    // Check address limit
+    const canAddMore = await checkAddressLimit(prisma, userId, 10);
+    if (!canAddMore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum address limit (10) reached. Please delete an existing address first.'
+      });
+    }
 
     const {
       recipient,
@@ -17,26 +41,7 @@ export const createAddress = async (req, res) => {
       country = "Ghana",
       postalCode,
       isDefault = false
-    } = req.body;
-
-    if (!recipient || !phone || !addressLine1 || !city || !region) {
-      return res.status(400).json({
-        success: false,
-        message: 'Recipient, phone, addressLine1, city, and region are required.'
-      });
-    }
-
-    const validRegions = [
-      "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern", "Greater Accra",
-      "North East", "Northern", "Oti", "Savannah", "Upper East", "Upper West", "Volta", "Western", "Western North"
-    ];
-    
-    if (!validRegions.includes(region)) {
-      return res.status(400).json({
-        success: false,
-        message: `Region must be one of the valid Ghana regions. Received: ${region}`
-      });
-    }
+    } = validation.sanitizedData;
 
     let shouldBeDefault = isDefault;
 
@@ -84,8 +89,7 @@ export const createAddress = async (req, res) => {
     console.error('Error creating address:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal server error'
     });
   }
 };
@@ -123,8 +127,7 @@ export const getUserAddresses = async (req, res) => {
     console.error('Error fetching user addresses:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal server error'
     });
   }
 };
@@ -133,6 +136,14 @@ export const getUserAddressById = async (req, res) => {
   try {
     const { addressId } = req.params;
     const userId = req.user.userId;
+
+    // Basic sanitization for addressId
+    if (!addressId || typeof addressId !== 'string' || addressId.length > 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid address ID'
+      });
+    }
 
     const address = await prisma.address.findFirst({
       where: {
@@ -157,8 +168,7 @@ export const getUserAddressById = async (req, res) => {
     console.error('Error fetching user address by ID:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal server error'
     });
   }
 };
@@ -168,17 +178,24 @@ export const updateAddress = async (req, res) => {
     const { addressId } = req.params;
     const userId = req.user.userId;
 
-    const {
-      recipient,
-      phone,
-      addressLine1,
-      addressLine2,
-      city,
-      region,
-      country,
-      postalCode,
-      isDefault
-    } = req.body;
+    // Basic sanitization for addressId
+    if (!addressId || typeof addressId !== 'string' || addressId.length > 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid address ID'
+      });
+    }
+
+    // Validate and sanitize input (partial validation for updates)
+    const validation = validateAddressData(req.body, true);
+    
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: validation.errors
+      });
+    }
 
     const existingAddress = await prisma.address.findFirst({
       where: {
@@ -194,39 +211,18 @@ export const updateAddress = async (req, res) => {
       });
     }
 
-    const updateData = {};
-    if (recipient !== undefined) updateData.recipient = recipient;
-    if (phone !== undefined) updateData.phone = phone;
-    if (addressLine1 !== undefined) updateData.addressLine1 = addressLine1;
-    if (addressLine2 !== undefined) updateData.addressLine2 = addressLine2 || null;
-    if (city !== undefined) updateData.city = city;
-    if (region !== undefined) {
-      const validRegions = [
-        "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern", "Greater Accra",
-        "North East", "Northern", "Oti", "Savannah", "Upper East", "Upper West", "Volta", "Western", "Western North"
-      ];
-      if (!validRegions.includes(region)) {
-        return res.status(400).json({
-          success: false,
-          message: `Region must be one of the valid Ghana regions. Received: ${region}`
-        });
-      }
-      updateData.region = region;
-    }
-    if (country !== undefined) updateData.country = country;
-    if (postalCode !== undefined) updateData.postalCode = postalCode || null;
-    if (isDefault !== undefined) {
-      updateData.isDefault = isDefault;
-      if (isDefault) {
-        await prisma.address.updateMany({
-          where: {
-            userId,
-            isDefault: true,
-            NOT: { id: addressId }
-          },
-          data: { isDefault: false }
-        });
-      }
+    const updateData = validation.sanitizedData;
+
+    // Handle isDefault logic
+    if (updateData.isDefault === true) {
+      await prisma.address.updateMany({
+        where: {
+          userId,
+          isDefault: true,
+          NOT: { id: addressId }
+        },
+        data: { isDefault: false }
+      });
     }
 
     const updatedAddress = await prisma.address.update({
@@ -246,8 +242,7 @@ export const updateAddress = async (req, res) => {
     console.error('Error updating address:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal server error'
     });
   }
 };
@@ -256,6 +251,14 @@ export const deleteAddress = async (req, res) => {
   try {
     const { addressId } = req.params;
     const userId = req.user.userId;
+
+    // Basic sanitization for addressId
+    if (!addressId || typeof addressId !== 'string' || addressId.length > 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid address ID'
+      });
+    }
 
     const addressToDelete = await prisma.address.findFirst({
       where: {
@@ -301,8 +304,7 @@ export const deleteAddress = async (req, res) => {
     console.error('Error deleting address:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal server error'
     });
   }
 };
@@ -311,6 +313,14 @@ export const setDefaultAddress = async (req, res) => {
   try {
     const { addressId } = req.params;
     const userId = req.user.userId;
+
+    // Basic sanitization for addressId
+    if (!addressId || typeof addressId !== 'string' || addressId.length > 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid address ID'
+      });
+    }
 
     const addressToSetDefault = await prisma.address.findFirst({
       where: {
@@ -352,8 +362,7 @@ export const setDefaultAddress = async (req, res) => {
     console.error('Error setting default address:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal server error'
     });
   }
 };

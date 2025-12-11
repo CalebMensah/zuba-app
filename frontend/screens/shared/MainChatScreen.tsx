@@ -13,6 +13,7 @@ import {
   Platform
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useChat } from '../../hooks/useChat';
 import { ChatRoom } from '../../types/chat';
 import { Colors } from '../../constants/colors';
@@ -45,8 +46,23 @@ const ChatListScreen: React.FC = () => {
     setRefreshing(false);
   };
 
-  const navigateToChatRoom = (chatRoomId: string) => {
-    (navigation as any).navigate('Chat' as never, { chatRoomId } as never);
+  const navigateToChatRoom = (item: ChatRoom) => {
+    const otherUser = getOtherParticipant(item);
+    const otherUserName = otherUser?.role === 'SELLER' && otherUser?.store?.name ? otherUser.store.name : otherUser?.firstName || 'Unknown User';
+    const otherUserAvatar = otherUser?.role === 'SELLER' && otherUser?.store?.logo ? otherUser.store.logo : otherUser?.avatar;
+    const otherUserType = user?.role === 'BUYER' ? 'seller' : 'buyer';
+    const storeName = otherUserType === 'seller' ? otherUser?.store?.name : undefined;
+    const storeLogo = otherUserType === 'seller' ? otherUser?.store?.logo : undefined;
+
+    // Use parent navigation to navigate to stack screen from tab screen
+    navigation.getParent()?.navigate('Chat' as any, {
+      chatRoomId: item.id,
+      otherUserName,
+      otherUserAvatar,
+      otherUserType,
+      storeName,
+      storeLogo
+    } as never);
   };
 
   const getOtherParticipant = (room: ChatRoom) => {
@@ -61,6 +77,13 @@ const ChatListScreen: React.FC = () => {
 
   const isUserOnline = (userId: string) => {
     return onlineUsers.has(userId);
+  };
+
+  const getOtherUserDisplayName = (otherUser: any) => {
+    if (otherUser?.role === 'SELLER' && otherUser?.store?.name) {
+      return otherUser.store.name;
+    }
+    return otherUser?.firstName || 'Unknown User';
   };
 
   const formatTimestamp = (date: Date) => {
@@ -89,27 +112,32 @@ const ChatListScreen: React.FC = () => {
     const otherUser = getOtherParticipant(item);
     const lastMessage = item.lastMessage;
     const unreadCount = item.unreadCount || 0;
+    const displayName = getOtherUserDisplayName(otherUser);
+    const displayAvatar = otherUser?.role === 'SELLER' && otherUser?.store?.logo ? otherUser.store.logo : otherUser?.avatar;
+    console.log('otherUser', otherUser);
+    console.log('displayName', displayName);
+    console.log('displayAvatar', displayAvatar);
 
     return (
       <TouchableOpacity
         style={styles.chatRoomContainer}
-        onPress={() => navigateToChatRoom(item.id)}
+        onPress={() => navigateToChatRoom(item)}
         activeOpacity={0.7}
       >
         <View style={styles.avatarContainer}>
-          {otherUser?.avatar ? (
+          {displayAvatar ? (
             <Image
-              source={{ uri: otherUser.avatar }}
+              source={{ uri: displayAvatar }}
               style={styles.avatar}
             />
           ) : (
             <View style={[styles.avatar, styles.avatarPlaceholder]}>
               <Text style={styles.avatarText}>
-                {otherUser?.name.charAt(0).toUpperCase()}
+                {displayName?.charAt(0).toUpperCase()}
               </Text>
             </View>
           )}
-          
+
           {otherUser && isUserOnline(otherUser.id) && (
             <View style={styles.onlineIndicator} />
           )}
@@ -118,9 +146,9 @@ const ChatListScreen: React.FC = () => {
         <View style={styles.chatRoomInfo}>
           <View style={styles.chatRoomHeader}>
             <Text style={styles.chatRoomName} numberOfLines={1}>
-              {item.name || otherUser?.name || 'Unknown User'}
+              {displayName}
             </Text>
-            
+
             {lastMessage && (
               <Text style={styles.timestamp}>
                 {formatTimestamp(lastMessage.createdAt)}
@@ -130,16 +158,25 @@ const ChatListScreen: React.FC = () => {
 
           <View style={styles.chatRoomFooter}>
             {lastMessage ? (
-              <Text
-                style={[
-                  styles.lastMessage,
-                  unreadCount > 0 && styles.unreadMessage
-                ]}
-                numberOfLines={2}
-              >
-                {lastMessage.senderId === 'current-user-id' && 'You: '}
-                {lastMessage.content || '📎 Media'}
-              </Text>
+              lastMessage.content ? (
+                <Text
+                  style={[
+                    styles.lastMessage,
+                    unreadCount > 0 && styles.unreadMessage
+                  ]}
+                  numberOfLines={2}
+                >
+                  {lastMessage.senderId === 'current-user-id' && 'You: '}
+                  {lastMessage.content}
+                </Text>
+              ) : (
+                <View style={styles.mediaContainer}>
+                  <MaterialCommunityIcons name="paperclip" size={14} color={Colors.textSecondary} />
+                  <Text style={[styles.lastMessage, unreadCount > 0 && styles.unreadMessage]}>
+                    {lastMessage.senderId === 'current-user-id' && 'You: '}Media
+                  </Text>
+                </View>
+              )
             ) : (
               <Text style={styles.noMessages}>No messages yet</Text>
             )}
@@ -152,18 +189,6 @@ const ChatListScreen: React.FC = () => {
               </View>
             )}
           </View>
-
-          {item.type === 'ORDER' && item.order && (
-            <Text style={[styles.chatRoomType, styles.chatRoomTypeOrder]}>
-              📦 Order #{item.order.id.slice(-8)}
-            </Text>
-          )}
-
-          {item.type === 'PRODUCT_INQUIRY' && item.product && (
-            <Text style={styles.chatRoomType}>
-              🛍️ {item.product.name}
-            </Text>
-          )}
         </View>
       </TouchableOpacity>
     );
@@ -172,7 +197,7 @@ const ChatListScreen: React.FC = () => {
   if (error) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.emptyIcon}>⚠️</Text>
+        <MaterialCommunityIcons name="alert" size={80} color={Colors.error} style={styles.emptyIcon} />
         <Text style={styles.errorText}>{error}</Text>
         <TouchableOpacity
           style={styles.retryButton}
@@ -273,7 +298,7 @@ const styles = StyleSheet.create({
     }),
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: '700',
     color: Colors.primary,
     letterSpacing: -0.5,
@@ -429,9 +454,21 @@ const styles = StyleSheet.create({
     marginTop: 60,
   },
   emptyIcon: {
-    fontSize: 80,
     marginBottom: 24,
     opacity: 0.3,
+  },
+  chatRoomTypeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  lastMessageContainer: {
+    flex: 1,
+    marginRight: 8,
+  },
+  mediaContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   emptyText: {
     fontSize: 22,

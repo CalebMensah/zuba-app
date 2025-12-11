@@ -11,6 +11,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../types/navigation';
 import { Colors } from '../../constants/colors';
+import { Ionicons } from '@expo/vector-icons';
 
 type PrivacyPolicyScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Privacy'>;
 
@@ -26,7 +27,9 @@ const PrivacyPolicyScreen: React.FC<Props> = ({ navigation }) => {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Text style={styles.backButtonText}>← Back</Text>
+          <Text style={styles.backButtonText}>
+            <Ionicons name="chevron-back" size={20} color={Colors.primary} /> Back
+          </Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy Policy</Text>
         <View style={styles.placeholder} />
@@ -81,7 +84,7 @@ const PrivacyPolicyScreen: React.FC<Props> = ({ navigation }) => {
           </View>
           <View style={styles.highlightBox}>
             <Text style={styles.highlightText}>
-              🔒 These documents are encrypted, stored securely, and only used for verification purposes. They are never shared with third parties.
+              <Ionicons name="lock-closed-outline" size={16} color={Colors.primary} />These documents are encrypted, stored securely, and only used for verification purposes. They are never shared with third parties.
             </Text>
           </View>
 
@@ -305,9 +308,9 @@ const PrivacyPolicyScreen: React.FC<Props> = ({ navigation }) => {
             If you have questions about this Privacy Policy or how we handle your data, please contact us:
           </Text>
           <View style={styles.contactBox}>
-            <Text style={styles.contactText}>📧 Email: privacy@zuba.com</Text>
-            <Text style={styles.contactText}>📱 Phone: +233 XX XXX XXXX</Text>
-            <Text style={styles.contactText}>📍 Address: Accra, Ghana</Text>
+            <Text style={styles.contactText}><Ionicons name="mail-outline" size={16} color={Colors.primary} /> Email: zubamobileapp@gmail.com</Text>
+            <Text style={styles.contactText}><Ionicons name="call-outline" size={16} color={Colors.primary} />  Phone: +233 598 785 053</Text>
+            <Text style={styles.contactText}><Ionicons name="location-outline" size={16} color={Colors.primary} /> Address: Accra, Ghana</Text>
           </View>
         </View>
 
@@ -325,6 +328,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+    marginTop: 30,
   },
   header: {
     flexDirection: 'row',
@@ -347,7 +351,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
   placeholder: {
     width: 60,
@@ -374,7 +378,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginBottom: 12,
   },
   subsectionTitle: {

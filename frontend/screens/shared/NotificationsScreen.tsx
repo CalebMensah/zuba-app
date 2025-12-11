@@ -10,6 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useAuth } from '../../context/AuthContext';
 import { useNotifications } from '../../hooks/useNotifications';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -28,6 +29,7 @@ interface Notification {
 
 const NotificationsScreen = () => {
   const navigation = useNavigation();
+  const { user } = useAuth();
   const {
     notifications,
     unreadCount,
@@ -35,6 +37,7 @@ const NotificationsScreen = () => {
     error,
     pagination,
     fetchNotifications,
+    fetchUnreadCount,
     markAsRead,
     markAllAsRead,
     refetch,
@@ -46,8 +49,12 @@ const NotificationsScreen = () => {
   // Handle pull to refresh
   const onRefresh = async () => {
     setRefreshing(true);
-    await refetch(1);
-    setRefreshing(false);
+    try {
+      await refetch(1);
+      await fetchUnreadCount();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // Load more notifications
@@ -67,23 +74,35 @@ const NotificationsScreen = () => {
         await markAsRead(notification.id);
       }
 
-      // Navigate based on type
+      // Navigate based on type and user role
       const { type, data } = notification;
+      const userRole = user?.role;
 
       switch (type.toLowerCase()) {
         case 'order':
         case 'order_created':
         case 'order_updated':
         case 'order_cancelled':
+        case 'order_confirmed':
         case 'order_completed':
-          (navigation as any).navigate('OrderDetails', { orderId: data?.orderId });
+          if (userRole === 'BUYER') {
+            (navigation as any).navigate('OrderDetails', { orderId: data?.orderId });
+          } else if (userRole === 'SELLER') {
+            (navigation as any).navigate('SellerOrderDetails', { orderId: data?.orderId });
+          } else if (userRole === 'ADMIN') {
+            (navigation as any).navigate('OrderManagement');
+          }
           break;
 
         case 'dispute':
         case 'dispute_created':
         case 'dispute_updated':
         case 'dispute_resolved':
-          (navigation as any).navigate('DisputeDetails', { disputeId: data?.disputeId });
+          if (userRole === 'BUYER' || userRole === 'ADMIN') {
+            (navigation as any).navigate('DisputeDetails', { disputeId: data?.disputeId });
+          } else {
+            Alert.alert('Notification', 'Dispute details not available for sellers');
+          }
           break;
 
         case 'payment':
@@ -96,27 +115,46 @@ const NotificationsScreen = () => {
         case 'escrow':
         case 'escrow_released':
         case 'escrow_held':
-          (navigation as any).navigate('EscrowDetails', { escrowId: data?.escrowId });
+          if (userRole === 'SELLER') {
+            (navigation as any).navigate('SellerEscrow');
+          } else if (userRole === 'ADMIN') {
+            (navigation as any).navigate('AdminEscrow');
+          } else {
+            Alert.alert('Notification', 'Escrow details not available for buyers');
+          }
           break;
 
         case 'review':
         case 'review_received':
-          (navigation as any).navigate('ReviewDetails', { reviewId: data?.reviewId });
+          if (userRole === 'BUYER') {
+            (navigation as any).navigate('ProductReviews', { productId: data?.productId });
+          } else if (userRole === 'SELLER') {
+            (navigation as any).navigate('MyStoreReviews');
+          } else {
+            Alert.alert('Notification', 'Review details not available for admins');
+          }
           break;
 
         case 'message':
         case 'new_message':
-          (navigation as any).navigate('ChatDetails', { chatId: data?.chatId });
+          (navigation as any).navigate('ChatScreen', {
+            chatRoomId: data?.chatId,
+            otherUserName: data?.senderName,
+            otherUserAvatar: data?.senderAvatar,
+            otherUserType: data?.senderRole?.toLowerCase(),
+            storeName: data?.storeName,
+            storeLogo: data?.storeLogo
+          });
           break;
 
         case 'profile':
         case 'profile_updated':
-          (navigation as any).navigate('Profile');
+          (navigation as any).navigate('EditProfile');
           break;
 
         case 'wallet':
         case 'wallet_updated':
-          (navigation as any).navigate('Wallet');
+          (navigation as any).navigate('PaymentsScreen');
           break;
 
         default:

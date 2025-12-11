@@ -9,10 +9,11 @@ import {
   createCheckoutSession,
   getPaymentsByCheckoutSession
 } from '../controllers/paymentcontroller.js';
+import { strictLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-router.post('/checkout-session',authenticateToken, createCheckoutSession); // NEW: Checkout session route
+router.post('/checkout-session',strictLimiter,authenticateToken,createCheckoutSession); // NEW: Checkout session route
 router.post('/initiate', authenticateToken, initiatePayment);
 router.post('/webhook', handlePaystackWebhook); 
 router.get('/:paymentId', authenticateToken, getPaymentDetails);

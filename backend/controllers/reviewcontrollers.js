@@ -1,23 +1,117 @@
-import prisma from '../config/prisma.js'
+import prisma from '../config/prisma.js';
 import { cache } from '../config/redis.js';
-import { uploadMultipleToCloudinary, uploadPresets } from '../config/cloudinary.js';
+import { uploadMultipleToCloudinary, deleteFromCloudinary, uploadPresets } from '../config/cloudinary.js';
 import { sendNotification } from '../utils/sendnotification.js';
 
+// Error handler wrapper
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch((error) => {
+    console.error('Review controller error:', error);
+    
+    // Handle specific errors
+    const errorMap = {
+      'INVALID_ORDER': { status: 400, message: 'Invalid order or product not in order.' },
+      'ORDER_NOT_ELIGIBLE': { status: 400, message: 'Order must be DELIVERED or COMPLETED to leave a review.' },
+      'REVIEW_EXISTS': { status: 409, message: 'You have already reviewed this product for this order.' },
+      'PRODUCT_NOT_FOUND': { status: 404, message: 'Product not found.' },
+      'REVIEW_NOT_FOUND': { status: 404, message: 'Review not found.' },
+      'UNAUTHORIZED': { status: 403, message: 'You are not authorized to perform this action.' },
+      'UPLOAD_FAILED': { status: 500, message: 'Failed to upload media. Please try again.' },
+    };
 
-export const createReview = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { orderId, productId, rating: ratingStr, title, comment } = req.body;
-    const rating = parseInt(ratingStr, 10);
-
-    if (!orderId || !productId || isNaN(rating) || rating < 1 || rating > 5) {
-      return res.status(400).json({
+    const errorInfo = errorMap[error.message];
+    if (errorInfo) {
+      return res.status(errorInfo.status).json({
         success: false,
-        message: 'orderId, productId, and a rating between 1 and 5 are required.'
+        message: errorInfo.message
       });
     }
 
-    const order = await prisma.order.findFirst({
+    // Generic error
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred while processing your request.',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
+  });
+};
+
+// Sanitize review data
+const sanitizeReview = (review, includePrivate = false) => {
+  const sanitized = {
+    id: review.id,
+    rating: review.rating,
+    title: review.title,
+    comment: review.comment,
+    media: review.media || [],
+    isVerified: review.isVerified,
+    createdAt: review.createdAt,
+    updatedAt: review.updatedAt,
+  };
+
+  if (review.user) {
+    sanitized.user = {
+      id: review.user.id,
+      firstName: review.user.firstName,
+      lastName: review.user.lastName?.[0] + '.' || '', // Partial last name
+      avatar: review.user.avatar
+    };
+  }
+
+  if (review.product) {
+    sanitized.product = {
+      id: review.product.id,
+      name: review.product.name,
+      images: review.product.images?.[0] || null, // Only first image
+      url: review.product.url
+    };
+  }
+
+  if (review.sellerResponse) {
+    sanitized.sellerResponse = review.sellerResponse;
+  }
+
+  if (review._count?.likes !== undefined) {
+    sanitized.likesCount = review._count.likes;
+  }
+
+  if (includePrivate && review.order) {
+    sanitized.order = {
+      id: review.order.id,
+      createdAt: review.order.createdAt
+    };
+  }
+
+  return sanitized;
+};
+
+// Calculate and update product rating
+const updateProductRating = async (productId, tx = prisma) => {
+  const reviews = await tx.review.findMany({
+    where: { productId },
+    select: { rating: true }
+  });
+
+  const newRating = reviews.length > 0
+    ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
+    : 0;
+
+  await tx.product.update({
+    where: { id: productId },
+    data: { rating: newRating }
+  });
+
+  return newRating;
+};
+
+export const createReview = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { orderId, productId, rating, title, comment } = req.body;
+
+  // Use transaction for atomicity
+  const result = await prisma.$transaction(async (tx) => {
+    // Verify order eligibility
+    const order = await tx.order.findFirst({
       where: {
         id: orderId,
         buyerId: userId,
@@ -32,24 +126,21 @@ export const createReview = async (req, res) => {
     });
 
     if (!order || order.items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid order ID, product not in order, or order not eligible for review.'
-      });
+      throw new Error('INVALID_ORDER');
     }
 
-    const product = await prisma.product.findUnique({
-      where: { id: productId, isActive: true }
+    // Verify product exists and is active
+    const product = await tx.product.findUnique({
+      where: { id: productId, isActive: true },
+      select: { id: true, name: true, url: true, storeId: true }
     });
 
     if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not found or not active.'
-      });
+      throw new Error('PRODUCT_NOT_FOUND');
     }
 
-    const existingReview = await prisma.review.findFirst({
+    // Check for existing review (prevent duplicates)
+    const existingReview = await tx.review.findFirst({
       where: {
         userId,
         orderId,
@@ -58,31 +149,31 @@ export const createReview = async (req, res) => {
     });
 
     if (existingReview) {
-      return res.status(409).json({
-        success: false,
-        message: 'You have already reviewed this product for this order.'
-      });
+      throw new Error('REVIEW_EXISTS');
     }
 
+    // Upload media if provided
     let mediaUrls = [];
     if (req.files && req.files.length > 0) {
       try {
         const uploadResults = await uploadMultipleToCloudinary(
           req.files.map(file => file.buffer),
-          { ...uploadPresets.review, folder: 'reviews' }
+          {
+            ...uploadPresets.review,
+            folder: 'reviews',
+            type: 'authenticated',
+            access_mode: 'authenticated'
+          }
         );
         mediaUrls = uploadResults.map(result => result.secure_url);
       } catch (uploadError) {
-        console.error('Error uploading review media:', uploadError);
-        return res.status(500).json({
-          success: false,
-          message: 'Error uploading review media.',
-          error: uploadError.message
-        });
+        console.error('Media upload error:', uploadError);
+        throw new Error('UPLOAD_FAILED');
       }
     }
 
-    const review = await prisma.review.create({
+    // Create review
+    const review = await tx.review.create({
       data: {
         userId,
         productId,
@@ -91,93 +182,88 @@ export const createReview = async (req, res) => {
         title: title || null,
         comment: comment || null,
         media: mediaUrls,
-        isVerified: true
+        isVerified: true // Verified because linked to order
       }
     });
 
-    const productReviews = await prisma.review.findMany({
-      where: { productId }
-    });
-    const totalRating = productReviews.reduce((sum, r) => sum + r.rating, 0);
-    const newAverageRating = totalRating / productReviews.length;
+    // Update product rating
+    await updateProductRating(productId, tx);
 
-    await prisma.product.update({
-      where: { id: productId },
-      data: { rating: newAverageRating }
-    });
-
-    const updatedUser = await prisma.user.update({
+    // Award points to user
+    const updatedUser = await tx.user.update({
       where: { id: userId },
       data: { points: { increment: 50 } }
     });
 
-    const seller = await prisma.store.findFirst({
+    // Get seller for notification
+    const seller = await tx.store.findUnique({
       where: { id: product.storeId },
       select: { userId: true }
     });
 
-    if (seller) {
-      await sendNotification(
-        seller.userId,
-        'New Product Review',
-        `Your product "${product.name}" has received a new review.`,
-        'REVIEW',
-        { reviewId: review.id, productId, orderId }
-      );
+    return { review, product, updatedUser, seller };
+  });
+
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`product:url:${result.product.url}`),
+    cache.del(`user:${userId}:points`),
+    cache.del(`user:${userId}:reviews`),
+    cache.del(`product:${result.product.id}:reviews`),
+    cache.del(`product:${result.product.id}:review:summary`),
+    cache.del(`store:${result.product.storeId}:reviews`)
+  ]);
+
+  // Send notification (non-blocking)
+  if (result.seller) {
+    sendNotification(
+      result.seller.userId,
+      'New Product Review',
+      `Your product "${result.product.name}" has received a new review.`,
+      'review_received',
+      { reviewId: result.review.id, productId: result.product.id, orderId: result.review.orderId }
+    ).catch(err => console.error('Notification error:', err));
+  }
+
+  res.status(201).json({
+    success: true,
+    message: 'Review created successfully. 50 points awarded.',
+    data: {
+      review: sanitizeReview(result.review, true),
+      awardedPoints: 50,
+      newTotalPoints: result.updatedUser.points
     }
+  });
+});
 
-    await cache.del(`product:url:${product.url}`);
-    await cache.del(`user:${userId}:points`);
-    await cache.del(`product:${productId}:reviews`);
-    await cache.del(`store:${product.storeId}:reviews`);
+export const getProductReviews = asyncHandler(async (req, res) => {
+  const { productId } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = Math.min(parseInt(req.query.limit) || 10, 100); // Max 100
+  const offset = (page - 1) * limit;
+  const sortBy = req.query.sortBy || 'createdAt';
+  const sortOrder = req.query.sortOrder || 'desc';
+  const verifiedOnly = req.query.verifiedOnly === true;
 
-    res.status(201).json({
+  const cacheKey = `product:${productId}:reviews:${page}:${limit}:${sortBy}:${sortOrder}:${verifiedOnly}`;
+
+  // Check cache
+  const cached = await cache.get(cacheKey);
+  if (cached) {
+    return res.status(200).json({
       success: true,
-      message: 'Review created successfully. 50 points awarded.',
-      data: {
-        review,
-        awardedPoints: 50,
-        newTotalPoints: updatedUser.points
-      }
-    });
-
-  } catch (error) {
-    console.error('Error creating review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
+      data: JSON.parse(cached),
+      cached: true
     });
   }
-};
 
-export const getProductReviews = async (req, res) => {
-  try {
-    const { productId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
-    const sortBy = req.query.sortBy || 'createdAt';
-    const sortOrder = req.query.sortOrder || 'desc';
-    const verifiedOnly = req.query.verifiedOnly === 'true';
+  const whereClause = { productId };
+  if (verifiedOnly) {
+    whereClause.isVerified = true;
+  }
 
-    const whereClause = { productId };
-    if (verifiedOnly) {
-      whereClause.isVerified = true;
-    }
-
-    const cacheKey = `product:${productId}:reviews:page:${page}:limit:${limit}:sort:${sortBy}:${sortOrder}:verified:${verifiedOnly}`;
-
-    const cachedReviews = await cache.get(cacheKey);
-    if (cachedReviews) {
-      return res.status(200).json({
-        success: true,
-        data: cachedReviews,
-        cached: true
-      });
-    }
-
-    const reviews = await prisma.review.findMany({
+  const [reviews, total] = await Promise.all([
+    prisma.review.findMany({
       where: whereClause,
       include: {
         user: {
@@ -187,264 +273,97 @@ export const getProductReviews = async (req, res) => {
             lastName: true,
             avatar: true
           }
+        },
+        sellerResponse: true,
+        _count: {
+          select: { likes: true }
         }
       },
       orderBy: { [sortBy]: sortOrder },
       skip: offset,
       take: limit,
-    });
+    }),
+    prisma.review.count({ where: whereClause })
+  ]);
 
-    const total = await prisma.review.count({ where: whereClause });
+  const resultData = {
+    reviews: reviews.map(r => sanitizeReview(r)),
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  };
 
-    const resultData = {
-      reviews,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    };
+  // Cache for 30 minutes
+  await cache.setex(cacheKey, 1800, JSON.stringify(resultData));
 
-    await cache.set(cacheKey, resultData, 1800);
+  res.status(200).json({
+    success: true,
+    data: resultData
+  });
+});
 
-    res.status(200).json({
+export const getMyReviews = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const cacheKey = `user:${userId}:reviews`;
+
+  // Check cache
+  const cached = await cache.get(cacheKey);
+  if (cached) {
+    return res.status(200).json({
       success: true,
-      data: resultData
-    });
-
-  } catch (error) {
-    console.error('Error fetching product reviews:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
+      data: JSON.parse(cached),
+      cached: true
     });
   }
-};
 
-export const getMyReviews = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    const cacheKey = `user:${userId}:reviews`;
-
-    const cachedReviews = await cache.get(cacheKey);
-    if (cachedReviews) {
-      return res.status(200).json({
-        success: true,
-        data: cachedReviews,
-        cached: true
-      });
-    }
-
-    const reviews = await prisma.review.findMany({
-      where: { userId },
-      include: {
-        product: {
-          select: {
-            id: true,
-            name: true,
-            images: true,
-            url: true
-          }
-        },
-        order: {
-          select: { 
-            id: true, 
-            createdAt: true 
-          }
+  const reviews = await prisma.review.findMany({
+    where: { userId },
+    include: {
+      product: {
+        select: {
+          id: true,
+          name: true,
+          images: true,
+          url: true
         }
       },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    await cache.set(cacheKey, reviews, 900);
-
-    res.status(200).json({
-      success: true,
-      data: reviews
-    });
-
-  } catch (error) {
-    console.error('Error fetching user reviews:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const getSellerStoreReviews = async (req, res) => {
-  try {
-    const sellerId = req.user.userId;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const offset = (page - 1) * limit;
-    const productId = req.query.productId;
-
-    const cacheKey = `store:${sellerId}:reviews:page:${page}:limit:${limit}:product:${productId || 'all'}`;
-
-    const cachedReviews = await cache.get(cacheKey);
-    if (cachedReviews) {
-      return res.status(200).json({
-        success: true,
-        data: cachedReviews,
-        cached: true
-      });
-    }
-
-    const store = await prisma.store.findFirst({
-      where: { userId: sellerId },
-      select: { id: true }
-    });
-
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found for this seller.'
-      });
-    }
-
-    const whereClause = {
-      product: {
-        storeId: store.id
-      }
-    };
-
-    if (productId) {
-      whereClause.productId = productId;
-    }
-
-    const [reviews, total] = await Promise.all([
-      prisma.review.findMany({
-        where: whereClause,
-        include: {
-          user: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              avatar: true
-            }
-          },
-          product: {
-            select: {
-              id: true,
-              name: true,
-              images: true,
-              url: true
-            }
-          },
-          order: {
-            select: {
-              id: true,
-              createdAt: true
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: offset,
-        take: limit,
-      }),
-      prisma.review.count({ where: whereClause })
-    ]);
-
-    const resultData = {
-      reviews,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    };
-
-    await cache.set(cacheKey, resultData, 900);
-
-    res.status(200).json({
-      success: true,
-      data: resultData
-    });
-
-  } catch (error) {
-    console.error('Error fetching seller store reviews:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const getProductReviewSummary = async (req, res) => {
-  try {
-    const { productId } = req.params;
-
-    const cacheKey = `product:${productId}:review:summary`;
-
-    const cachedSummary = await cache.get(cacheKey);
-    if (cachedSummary) {
-      return res.status(200).json({
-        success: true,
-        data: cachedSummary,
-        cached: true
-      });
-    }
-
-    const [reviews, count] = await Promise.all([
-      prisma.review.findMany({
-        where: { productId },
-        select: { rating: true }
-      }),
-      prisma.review.count({ where: { productId } })
-    ]);
-
-    if (count === 0) {
-      return res.status(200).json({
-        success: true,
-        data: { averageRating: 0, reviewCount: 0 }
-      });
-    }
-
-    const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-    const averageRating = totalRating / count;
-
-    const summary = {
-      averageRating: parseFloat(averageRating.toFixed(2)),
-      reviewCount: count
-    };
-
-    await cache.set(cacheKey, summary, 3600);
-
-    res.status(200).json({
-      success: true,
-      data: summary
-    });
-
-  } catch (error) {
-    console.error('Error fetching product review summary:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const updateReview = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { reviewId } = req.params;
-    const { rating: ratingStr, title, comment } = req.body;
-    const rating = ratingStr !== undefined ? parseInt(ratingStr, 10) : undefined;
-
-    const existingReview = await prisma.review.findFirst({
-      where: {
-        id: reviewId,
-        userId
+      order: {
+        select: { 
+          id: true, 
+          createdAt: true 
+        }
       },
+      sellerResponse: true,
+      _count: {
+        select: { likes: true }
+      }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  const sanitized = reviews.map(r => sanitizeReview(r, true));
+
+  // Cache for 15 minutes
+  await cache.setex(cacheKey, 900, JSON.stringify(sanitized));
+
+  res.status(200).json({
+    success: true,
+    data: sanitized
+  });
+});
+
+export const updateReview = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { reviewId } = req.params;
+  const { rating, title, comment } = req.body;
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Verify ownership
+    const existingReview = await tx.review.findUnique({
+      where: { id: reviewId },
       include: {
         product: {
           select: {
@@ -457,73 +376,60 @@ export const updateReview = async (req, res) => {
     });
 
     if (!existingReview) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review not found or does not belong to you.'
-      });
+      throw new Error('REVIEW_NOT_FOUND');
     }
 
-    const updateData = {};
-    if (rating !== undefined && !isNaN(rating) && rating >= 1 && rating <= 5) {
-      updateData.rating = rating;
+    if (existingReview.userId !== userId) {
+      throw new Error('UNAUTHORIZED');
     }
+
+    // Build update data
+    const updateData = {};
+    if (rating !== undefined) updateData.rating = rating;
     if (title !== undefined) updateData.title = title;
     if (comment !== undefined) updateData.comment = comment;
 
     if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No valid fields to update provided.'
-      });
+      throw new Error('NO_UPDATES');
     }
 
-    const updatedReview = await prisma.review.update({
+    // Update review
+    const updatedReview = await tx.review.update({
       where: { id: reviewId },
       data: updateData
     });
 
-    const productReviews = await prisma.review.findMany({
-      where: { productId: existingReview.product.id }
-    });
-    const totalRating = productReviews.reduce((sum, r) => sum + r.rating, 0);
-    const newAverageRating = totalRating / productReviews.length;
+    // Update product rating if rating changed
+    if (rating !== undefined) {
+      await updateProductRating(existingReview.product.id, tx);
+    }
 
-    await prisma.product.update({
-      where: { id: existingReview.product.id },
-      data: { rating: newAverageRating }
-    });
+    return { updatedReview, product: existingReview.product };
+  });
 
-    await cache.del(`product:url:${existingReview.product.url}`);
-    await cache.del(`user:${userId}:reviews`);
-    await cache.del(`product:${existingReview.product.id}:reviews`);
-    await cache.del(`store:${existingReview.product.storeId}:reviews`);
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`product:url:${result.product.url}`),
+    cache.del(`user:${userId}:reviews`),
+    cache.del(`product:${result.product.id}:reviews`),
+    cache.del(`product:${result.product.id}:review:summary`),
+    cache.del(`store:${result.product.storeId}:reviews`)
+  ]);
 
-    res.status(200).json({
-      success: true,
-      message: 'Review updated successfully.',
-      data: updatedReview
-    });
+  res.status(200).json({
+    success: true,
+    message: 'Review updated successfully.',
+    data: sanitizeReview(result.updatedReview, true)
+  });
+});
 
-  } catch (error) {
-    console.error('Error updating review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+export const deleteReview = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { reviewId } = req.params;
 
-export const deleteReview = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { reviewId } = req.params;
-
-    const reviewToDelete = await prisma.review.findFirst({
-      where: {
-        id: reviewId,
-        userId
-      },
+  await prisma.$transaction(async (tx) => {
+    const review = await tx.review.findUnique({
+      where: { id: reviewId },
       include: {
         product: { 
           select: { 
@@ -535,58 +441,92 @@ export const deleteReview = async (req, res) => {
       }
     });
 
-    if (!reviewToDelete) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review not found or does not belong to you.'
-      });
+    if (!review) {
+      throw new Error('REVIEW_NOT_FOUND');
     }
 
-    await prisma.review.delete({
+    if (review.userId !== userId) {
+      throw new Error('UNAUTHORIZED');
+    }
+
+    // Delete media from Cloudinary (background)
+    if (review.media && review.media.length > 0) {
+      Promise.all(
+        review.media.map(url => deleteFromCloudinary(url).catch(err => 
+          console.error('Media deletion error:', err)
+        ))
+      );
+    }
+
+    // Delete review
+    await tx.review.delete({
       where: { id: reviewId }
     });
 
-    const productReviews = await prisma.review.findMany({
-      where: { productId: reviewToDelete.product.id }
-    });
-    const totalRating = productReviews.reduce((sum, r) => sum + r.rating, 0);
-    const newAverageRating = productReviews.length > 0 
-      ? totalRating / productReviews.length 
-      : 0;
+    // Update product rating
+    await updateProductRating(review.product.id, tx);
 
-    await prisma.product.update({
-      where: { id: reviewToDelete.product.id },
-      data: { rating: newAverageRating }
-    });
+    // Invalidate caches
+    await Promise.all([
+      cache.del(`product:url:${review.product.url}`),
+      cache.del(`user:${userId}:reviews`),
+      cache.del(`product:${review.product.id}:reviews`),
+      cache.del(`product:${review.product.id}:review:summary`),
+      cache.del(`store:${review.product.storeId}:reviews`)
+    ]);
+  });
 
-    await cache.del(`product:url:${reviewToDelete.product.url}`);
-    await cache.del(`user:${userId}:reviews`);
-    await cache.del(`product:${reviewToDelete.product.id}:reviews`);
-    await cache.del(`store:${reviewToDelete.product.storeId}:reviews`);
+  res.status(200).json({
+    success: true,
+    message: 'Review deleted successfully.'
+  });
+});
 
-    res.status(200).json({
+export const getSellerStoreReviews = asyncHandler(async (req, res) => {
+  const sellerId = req.user.userId;
+  const page = parseInt(req.query.page) || 1;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const offset = (page - 1) * limit;
+  const productId = req.query.productId;
+
+  const cacheKey = `seller:${sellerId}:reviews:${page}:${limit}:${productId || 'all'}`;
+
+  // Check cache
+  const cached = await cache.get(cacheKey);
+  if (cached) {
+    return res.status(200).json({
       success: true,
-      message: 'Review deleted successfully.'
-    });
-
-  } catch (error) {
-    console.error('Error deleting review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
+      data: JSON.parse(cached),
+      cached: true
     });
   }
-};
 
-// Add these controllers to your review.controller.js file
+  // Verify seller has a store
+  const store = await prisma.store.findUnique({
+    where: { userId: sellerId },
+    select: { id: true }
+  });
 
-export const getReviewById = async (req, res) => {
-  try {
-    const { reviewId } = req.params;
+  if (!store) {
+    return res.status(404).json({
+      success: false,
+      message: 'Store not found for this seller.'
+    });
+  }
 
-    const review = await prisma.review.findUnique({
-      where: { id: reviewId },
+  const whereClause = {
+    product: {
+      storeId: store.id
+    }
+  };
+
+  if (productId) {
+    whereClause.productId = productId;
+  }
+
+  const [reviews, total] = await Promise.all([
+    prisma.review.findMany({
+      where: whereClause,
       include: {
         user: {
           select: {
@@ -604,62 +544,142 @@ export const getReviewById = async (req, res) => {
             url: true
           }
         },
-        sellerResponse: true,
-        likes: {
+        order: {
           select: {
-            userId: true
+            id: true,
+            createdAt: true
           }
         },
+        sellerResponse: true,
         _count: {
-          select: {
-            likes: true
-          }
+          select: { likes: true }
         }
-      }
-    });
+      },
+      orderBy: { createdAt: 'desc' },
+      skip: offset,
+      take: limit,
+    }),
+    prisma.review.count({ where: whereClause })
+  ]);
 
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review not found.'
-      });
+  const resultData = {
+    reviews: reviews.map(r => sanitizeReview(r, true)),
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
     }
+  };
 
-    res.status(200).json({
+  // Cache for 15 minutes
+  await cache.setex(cacheKey, 900, JSON.stringify(resultData));
+
+  res.status(200).json({
+    success: true,
+    data: resultData
+  });
+});
+
+export const getProductReviewSummary = asyncHandler(async (req, res) => {
+  const { productId } = req.params;
+  const cacheKey = `product:${productId}:review:summary`;
+
+  // Check cache
+  const cached = await cache.get(cacheKey);
+  if (cached) {
+    return res.status(200).json({
       success: true,
-      data: review
-    });
-
-  } catch (error) {
-    console.error('Error fetching review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
+      data: JSON.parse(cached),
+      cached: true
     });
   }
-};
 
-export const addReviewResponse = async (req, res) => {
-  try {
-    const sellerId = req.user.userId;
-    const { reviewId } = req.params;
-    const { response } = req.body;
+  const [reviews, count] = await Promise.all([
+    prisma.review.findMany({
+      where: { productId },
+      select: { rating: true }
+    }),
+    prisma.review.count({ where: { productId } })
+  ]);
 
-    if (!response || response.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Response text is required.'
-      });
+  const summary = {
+    averageRating: 0,
+    reviewCount: count
+  };
+
+  if (count > 0) {
+    const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
+    summary.averageRating = parseFloat((totalRating / count).toFixed(2));
+  }
+
+  // Cache for 1 hour
+  await cache.setex(cacheKey, 3600, JSON.stringify(summary));
+
+  res.status(200).json({
+    success: true,
+    data: summary
+  });
+});
+
+export const getReviewById = asyncHandler(async (req, res) => {
+  const { reviewId } = req.params;
+
+  const review = await prisma.review.findUnique({
+    where: { id: reviewId },
+    include: {
+      user: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          avatar: true
+        }
+      },
+      product: {
+        select: {
+          id: true,
+          name: true,
+          images: true,
+          url: true
+        }
+      },
+      sellerResponse: true,
+      _count: {
+        select: {
+          likes: true
+        }
+      }
     }
+  });
 
-    const review = await prisma.review.findUnique({
+  if (!review) {
+    return res.status(404).json({
+      success: false,
+      message: 'Review not found.'
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: sanitizeReview(review)
+  });
+});
+
+export const addReviewResponse = asyncHandler(async (req, res) => {
+  const sellerId = req.user.userId;
+  const { reviewId } = req.params;
+  const { response } = req.body;
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Verify review exists
+    const review = await tx.review.findUnique({
       where: { id: reviewId },
       include: {
         product: {
           include: {
             store: {
-              select: { userId: true }
+              select: { userId: true, id: true }
             }
           }
         }
@@ -667,31 +687,27 @@ export const addReviewResponse = async (req, res) => {
     });
 
     if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review not found.'
-      });
+      throw new Error('REVIEW_NOT_FOUND');
     }
 
+    // Verify seller owns the store
     if (review.product.store.userId !== sellerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to respond to this review.'
-      });
+      throw new Error('UNAUTHORIZED');
     }
 
-    const existingResponse = await prisma.reviewResponse.findUnique({
+    // Check if response already exists
+    const existingResponse = await tx.reviewResponse.findUnique({
       where: { reviewId }
     });
 
     if (existingResponse) {
-      return res.status(409).json({
-        success: false,
-        message: 'A response already exists for this review. Use PATCH to update.'
-      });
+      const error = new Error('Response already exists');
+      error.code = 'RESPONSE_EXISTS';
+      throw error;
     }
 
-    const reviewResponse = await prisma.reviewResponse.create({
+    // Create response
+    const reviewResponse = await tx.reviewResponse.create({
       data: {
         reviewId,
         sellerId,
@@ -699,53 +715,44 @@ export const addReviewResponse = async (req, res) => {
       }
     });
 
-    await sendNotification(
-      review.userId,
-      'Seller Responded to Your Review',
-      `The seller has responded to your review for "${review.product.name}".`,
-      'REVIEW_RESPONSE',
-      { reviewId, productId: review.productId }
-    );
+    return { reviewResponse, review };
+  });
 
-    await cache.del(`product:${review.productId}:reviews`);
-    await cache.del(`store:${review.product.storeId}:reviews`);
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`product:${result.review.productId}:reviews`),
+    cache.del(`store:${result.review.product.storeId}:reviews`)
+  ]);
 
-    res.status(201).json({
-      success: true,
-      message: 'Response added successfully.',
-      data: reviewResponse
-    });
+  // Send notification (non-blocking)
+  sendNotification(
+    result.review.userId,
+    'Seller Responded to Your Review',
+    `The seller has responded to your review for "${result.review.product.name}".`,
+    'review',
+    { reviewId, productId: result.review.productId }
+  ).catch(err => console.error('Notification error:', err));
 
-  } catch (error) {
-    console.error('Error adding review response:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+  res.status(201).json({
+    success: true,
+    message: 'Response added successfully.',
+    data: result.reviewResponse
+  });
+});
 
-export const updateReviewResponse = async (req, res) => {
-  try {
-    const sellerId = req.user.userId;
-    const { reviewId } = req.params;
-    const { response } = req.body;
+export const updateReviewResponse = asyncHandler(async (req, res) => {
+  const sellerId = req.user.userId;
+  const { reviewId } = req.params;
+  const { response } = req.body;
 
-    if (!response || response.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Response text is required.'
-      });
-    }
-
-    const reviewResponse = await prisma.reviewResponse.findUnique({
+  const result = await prisma.$transaction(async (tx) => {
+    const reviewResponse = await tx.reviewResponse.findUnique({
       where: { reviewId },
       include: {
         review: {
           include: {
             product: {
-              select: { storeId: true }
+              select: { storeId: true, id: true }
             }
           }
         }
@@ -753,55 +760,46 @@ export const updateReviewResponse = async (req, res) => {
     });
 
     if (!reviewResponse) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review response not found.'
-      });
+      throw new Error('REVIEW_NOT_FOUND');
     }
 
     if (reviewResponse.sellerId !== sellerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to update this response.'
-      });
+      throw new Error('UNAUTHORIZED');
     }
 
-    const updatedResponse = await prisma.reviewResponse.update({
+    const updatedResponse = await tx.reviewResponse.update({
       where: { reviewId },
       data: { response: response.trim() }
     });
 
-    await cache.del(`product:${reviewResponse.review.productId}:reviews`);
-    await cache.del(`store:${reviewResponse.review.product.storeId}:reviews`);
+    return { updatedResponse, reviewResponse };
+  });
 
-    res.status(200).json({
-      success: true,
-      message: 'Response updated successfully.',
-      data: updatedResponse
-    });
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`product:${result.reviewResponse.review.productId}:reviews`),
+    cache.del(`store:${result.reviewResponse.review.product.storeId}:reviews`)
+  ]);
 
-  } catch (error) {
-    console.error('Error updating review response:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+  res.status(200).json({
+    success: true,
+    message: 'Response updated successfully.',
+    data: result.updatedResponse
+  });
+});
 
-export const deleteReviewResponse = async (req, res) => {
-  try {
-    const sellerId = req.user.userId;
-    const { reviewId } = req.params;
+export const deleteReviewResponse = asyncHandler(async (req, res) => {
+  const sellerId = req.user.userId;
+  const { reviewId } = req.params;
 
-    const reviewResponse = await prisma.reviewResponse.findUnique({
+  await prisma.$transaction(async (tx) => {
+    const reviewResponse = await tx.reviewResponse.findUnique({
       where: { reviewId },
       include: {
         review: {
           include: {
             product: {
-              select: { storeId: true }
+              select: { storeId: true, id: true }
             }
           }
         }
@@ -809,300 +807,256 @@ export const deleteReviewResponse = async (req, res) => {
     });
 
     if (!reviewResponse) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review response not found.'
-      });
+      throw new Error('REVIEW_NOT_FOUND');
     }
 
     if (reviewResponse.sellerId !== sellerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to delete this response.'
-      });
+      throw new Error('UNAUTHORIZED');
     }
 
-    await prisma.reviewResponse.delete({
+    await tx.reviewResponse.delete({
       where: { reviewId }
     });
 
-    await cache.del(`product:${reviewResponse.review.productId}:reviews`);
-    await cache.del(`store:${reviewResponse.review.product.storeId}:reviews`);
-
-    res.status(200).json({
-      success: true,
-      message: 'Response deleted successfully.'
-    });
-
-  } catch (error) {
-    console.error('Error deleting review response:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const likeReview = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { reviewId } = req.params;
-
-    const review = await prisma.review.findUnique({
-      where: { id: reviewId }
-    });
-
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review not found.'
-      });
-    }
-
-    const existingLike = await prisma.reviewLike.findUnique({
-      where: {
-        userId_reviewId: {
-          userId,
-          reviewId
-        }
-      }
-    });
-
-    if (existingLike) {
-      return res.status(409).json({
-        success: false,
-        message: 'You have already liked this review.'
-      });
-    }
-
-    await prisma.reviewLike.create({
-      data: {
-        userId,
-        reviewId
-      }
-    });
-
-    const likeCount = await prisma.reviewLike.count({
-      where: { reviewId }
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Review liked successfully.',
-      data: { likeCount }
-    });
-
-  } catch (error) {
-    console.error('Error liking review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const unlikeReview = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { reviewId } = req.params;
-
-    const existingLike = await prisma.reviewLike.findUnique({
-      where: {
-        userId_reviewId: {
-          userId,
-          reviewId
-        }
-      }
-    });
-
-    if (!existingLike) {
-      return res.status(404).json({
-        success: false,
-        message: 'You have not liked this review.'
-      });
-    }
-
-    await prisma.reviewLike.delete({
-      where: {
-        userId_reviewId: {
-          userId,
-          reviewId
-        }
-      }
-    });
-
-    const likeCount = await prisma.reviewLike.count({
-      where: { reviewId }
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Review unliked successfully.',
-      data: { likeCount }
-    });
-
-  } catch (error) {
-    console.error('Error unliking review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const reportReview = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { reviewId } = req.params;
-    const { reason, description } = req.body;
-
-    if (!reason) {
-      return res.status(400).json({
-        success: false,
-        message: 'Reason is required to report a review.'
-      });
-    }
-
-    const review = await prisma.review.findUnique({
-      where: { id: reviewId }
-    });
-
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: 'Review not found.'
-      });
-    }
-
-    const existingReport = await prisma.reviewReport.findFirst({
-      where: {
-        userId,
-        reviewId
-      }
-    });
-
-    if (existingReport) {
-      return res.status(409).json({
-        success: false,
-        message: 'You have already reported this review.'
-      });
-    }
-
-    const report = await prisma.reviewReport.create({
-      data: {
-        userId,
-        reviewId,
-        reason,
-        description: description || null
-      }
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Review reported successfully. Our team will review it.',
-      data: report
-    });
-
-  } catch (error) {
-    console.error('Error reporting review:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const getPublicStoreReviews = async (req, res) => {
-  try {
-    const storeId = req.params.storeId;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const offset = (page - 1) * limit;
-    const productId = req.query.productId;
-
-    const cacheKey = `public:store:${storeId}:reviews:page:${page}:limit:${limit}:product:${productId || 'all'}`;
-
-    const cached = await cache.get(cacheKey);
-    if (cached) {
-      return res.status(200).json({
-        success: true,
-        data: cached,
-        cached: true
-      });
-    }
-
-    // 1. Verify store exists
-    const store = await prisma.store.findUnique({
-      where: { id: storeId },
-      select: { id: true }
-    });
-
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: "Store not found."
-      });
-    }
-
-    // 2. Build query
-    const whereClause = {
-      product: { storeId: storeId }
-    };
-
-    if (productId) {
-      whereClause.productId = productId;
-    }
-
-    // 3. Fetch reviews + count
-    const [reviews, total] = await Promise.all([
-      prisma.review.findMany({
-        where: whereClause,
-        include: {
-          user: {
-            select: { id: true, firstName: true, lastName: true, avatar: true }
-          },
-          product: {
-            select: { id: true, name: true, images: true, url: true }
-          },
-          order: {
-            select: { id: true, createdAt: true }
-          }
-        },
-        orderBy: { createdAt: "desc" },
-        skip: offset,
-        take: limit
-      }),
-      prisma.review.count({ where: whereClause })
+    // Invalidate caches
+    await Promise.all([
+      cache.del(`product:${reviewResponse.review.productId}:reviews`),
+      cache.del(`store:${reviewResponse.review.product.storeId}:reviews`)
     ]);
+  });
 
-    const result = {
-      reviews,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
+  res.status(200).json({
+    success: true,
+    message: 'Response deleted successfully.'
+  });
+});
+
+export const likeReview = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { reviewId } = req.params;
+
+  // Verify review exists
+  const review = await prisma.review.findUnique({
+    where: { id: reviewId },
+    select: { id: true }
+  });
+
+  if (!review) {
+    throw new Error('REVIEW_NOT_FOUND');
+  }
+
+  // Check if already liked
+  const existingLike = await prisma.reviewLike.findUnique({
+    where: {
+      userId_reviewId: {
+        userId,
+        reviewId
       }
-    };
+    }
+  });
 
-    // 4. Cache results (15 mins)
-    await cache.set(cacheKey, result, 900);
+  if (existingLike) {
+    return res.status(409).json({
+      success: false,
+      message: 'You have already liked this review.'
+    });
+  }
 
+  // Create like
+  await prisma.reviewLike.create({
+    data: {
+      userId,
+      reviewId
+    }
+  });
+
+  // Get updated like count
+  const likeCount = await prisma.reviewLike.count({
+    where: { reviewId }
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Review liked successfully.',
+    data: { likeCount }
+  });
+});
+
+export const unlikeReview = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { reviewId } = req.params;
+
+  const existingLike = await prisma.reviewLike.findUnique({
+    where: {
+      userId_reviewId: {
+        userId,
+        reviewId
+      }
+    }
+  });
+
+  if (!existingLike) {
+    return res.status(404).json({
+      success: false,
+      message: 'You have not liked this review.'
+    });
+  }
+
+  await prisma.reviewLike.delete({
+    where: {
+      userId_reviewId: {
+        userId,
+        reviewId
+      }
+    }
+  });
+
+  const likeCount = await prisma.reviewLike.count({
+    where: { reviewId }
+  });
+
+  res.status(200).json({
+    success: true,
+    message: 'Review unliked successfully.',
+    data: { likeCount }
+  });
+});
+
+export const reportReview = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { reviewId } = req.params;
+  const { reason, description } = req.body;
+
+  // Verify review exists
+  const review = await prisma.review.findUnique({
+    where: { id: reviewId },
+    select: { id: true }
+  });
+
+  if (!review) {
+    throw new Error('REVIEW_NOT_FOUND');
+  }
+
+  // Check if already reported
+  const existingReport = await prisma.reviewReport.findFirst({
+    where: {
+      userId,
+      reviewId
+    }
+  });
+
+  if (existingReport) {
+    return res.status(409).json({
+      success: false,
+      message: 'You have already reported this review.'
+    });
+  }
+
+  // Create report
+  const report = await prisma.reviewReport.create({
+    data: {
+      userId,
+      reviewId,
+      reason,
+      description: description || null
+    }
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Review reported successfully. Our team will review it.',
+    data: { reportId: report.id }
+  });
+});
+
+export const getPublicStoreReviews = asyncHandler(async (req, res) => {
+  const { storeId } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const offset = (page - 1) * limit;
+  const productId = req.query.productId;
+
+  const cacheKey = `public:store:${storeId}:reviews:${page}:${limit}:${productId || 'all'}`;
+
+  // Check cache
+  const cached = await cache.get(cacheKey);
+  if (cached) {
     return res.status(200).json({
       success: true,
-      data: result
-    });
-
-  } catch (error) {
-    console.error("Error fetching public store reviews:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: error.message
+      data: JSON.parse(cached),
+      cached: true
     });
   }
-};
+
+  // Verify store exists
+  const store = await prisma.store.findUnique({
+    where: { id: storeId },
+    select: { id: true }
+  });
+
+  if (!store) {
+    return res.status(404).json({
+      success: false,
+      message: 'Store not found.'
+    });
+  }
+
+  // Build query
+  const whereClause = {
+    product: { storeId }
+  };
+
+  if (productId) {
+    whereClause.productId = productId;
+  }
+
+  const [reviews, total] = await Promise.all([
+    prisma.review.findMany({
+      where: whereClause,
+      include: {
+        user: {
+          select: { 
+            id: true, 
+            firstName: true, 
+            lastName: true, 
+            avatar: true 
+          }
+        },
+        product: {
+          select: { 
+            id: true, 
+            name: true, 
+            images: true, 
+            url: true 
+          }
+        },
+        sellerResponse: true,
+        _count: {
+          select: { likes: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      skip: offset,
+      take: limit
+    }),
+    prisma.review.count({ where: whereClause })
+  ]);
+
+  const result = {
+    reviews: reviews.map(r => sanitizeReview(r)),
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  };
+
+  // Cache for 15 minutes
+  await cache.setex(cacheKey, 900, JSON.stringify(result));
+
+  res.status(200).json({
+    success: true,
+    data: result
+  });
+});

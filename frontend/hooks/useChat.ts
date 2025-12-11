@@ -126,6 +126,7 @@ export const useChat = (options: UseChatOptions): UseChatReturn => {
       
       if (response.success) {
         setChatRooms(response.data);
+        console.log('Fetched chat rooms:', response.data);
       }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to fetch chat rooms');

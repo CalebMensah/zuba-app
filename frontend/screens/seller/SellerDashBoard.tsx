@@ -66,16 +66,19 @@ export default function SellerDashboardScreen() {
   };
 
   const handleCopyUrl = async () => {
-    if (store?.slug) {
-      const storeUrl = `https://yourapp.com/store/${store.slug}`;
+    console.log('Copy URL pressed');
+    console.log('Store slug:', store?.url);
+    if (store?.url) {
+      const storeUrl = `https://zuba-web.vercel.app//store/${store.url}`;
       await Clipboard.setStringAsync(storeUrl);
       Alert.alert('Success', 'Store URL copied to clipboard!');
     }
   };
 
   const handleShareUrl = async () => {
-    if (store?.slug) {
-      const storeUrl = `https://yourapp.com/store/${store.slug}`;
+    console.log('Share URL pressed');
+    if (store?.url) {
+      const storeUrl = `https://zuba-web.vercel.app/store/${store.url}`;
       try {
         await Share.share({
           message: `Check out my store: ${store.name}\n${storeUrl}`,

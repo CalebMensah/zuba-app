@@ -16,18 +16,19 @@ export type AuthStackParamList = {
 };
 
 export type BuyerStackParamList = {
-  BuyerHome: undefined;
-  BuyerProfile: undefined;
+  MarketPlace: undefined;
+  Me: undefined;
   Main: undefined;
   SellerPublicStore: {storeId: string};
   SellerPublicProductsScreen: { storeUrl: string, storeName: string};
   SellerPublicProductDetails: { productUrl: string, storeUrl: string }
   LikedProducts: undefined;
+  Cart: undefined;
   CartScreen: undefined;
   OrderDetails: { orderId: string };
   MyFollowedStores: undefined;
   EditAddress: undefined;
-  MainChatScreen: undefined;
+  Chat: undefined;
   Notifications: undefined;
   BuyerOrders: undefined;
   UnpaidOrders: undefined;
@@ -50,8 +51,10 @@ export type BuyerStackParamList = {
     orders: Array<{
       orderId: string;
       storeName: string;
+      amount: number;
       checkoutSession: string;
     }>;
+    totalAmount: number;
     totalOrders: number;
   };
   ManageAddresses: {
@@ -60,7 +63,7 @@ export type BuyerStackParamList = {
   AddAddress: {
     fromCheckout?: boolean;
   };
-  Chat: { chatRoomId: string; otherUserName: string; otherUserAvatar?: string };
+  ChatScreen: { chatRoomId: string; otherUserName?: string; otherUserAvatar?: string; otherUserType?: 'buyer' | 'seller'; storeName?: string; storeLogo?: string };
   Orders: undefined;
   Disputes: { OredrId?: string };
   CreateDispute: { orderId: string; paymentId: string };
@@ -71,6 +74,15 @@ export type BuyerStackParamList = {
   DeliveryDetails: { orderId: string };
   ProductReviews: { productId: string };
   ManageReview: { orderId: string; productId: string; productName: string; productImage: string };
+  PaymentsScreen: undefined;
+  PaymentDetails: { paymentId: string };
+  About: undefined;
+  ContactUs: undefined;
+  Terms: undefined;
+  Policy: undefined;
+  RequestRefund: { orderId: string; productId: string; productName: string };
+  SellerStoreReviews: { storeId: string };
+  ReviewDetails: { reviewId: string };
 
   // Add more buyer-specific screens
 };
@@ -104,6 +116,11 @@ export type SellerStackParamList = {
     MyStoreReviews: undefined;
     SellerOrderDetails: { orderId: string };
     EditProfile: undefined;
+    PaymentsScreen: undefined;
+    PaymentDetails: { paymentId: string };
+    SellerEscrow: undefined;
+    About: undefined;
+    ContactUs: undefined;
   // Add more seller-specific screens
 };
 
@@ -122,6 +139,8 @@ export type AdminStackParamList = {
   VerificationDetails: { verificationId: string };
   SellerPublicProducts: { storeUrl: string, storeName: string};
   AdminEscrow: undefined;
+  PaymentsScreen: undefined;
+  PaymentDetails: { paymentId: string };
   // Add more admin-specific screens
 };
 
@@ -145,4 +164,5 @@ export interface User {
   points?: number;
   isVerified: boolean;
   verificationStatus: string;
+  store?: Store;
 }

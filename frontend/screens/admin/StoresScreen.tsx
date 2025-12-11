@@ -145,7 +145,7 @@ const StoresScreen: React.FC = () => {
 
   // Navigate to store details
   const handleStorePress = (storeId: string) => {
-    navigation.navigate('SellerStoreDetails', { storeId });
+    navigation.navigate('StoreDetails', { storeId });
   };
 
   // Navigate to verification details

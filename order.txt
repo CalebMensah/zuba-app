@@ -1,38 +1,26 @@
-// server.js or app.js
-import express from 'express';
+// Using node-cron
+import cron from 'node-cron';
 
-
-// Import routes
-
-// ... other routes
-
-// Import Socket.IO configuration
-
-
-dotenv.config();
-
-const app = express();
-
-
-// Initialize Socket.IO
-
-
-// Make io accessible in routes if needed
-
-
-// Middleware
-
-
-// Routes
-app.use('/api/chat', chatRoutes);
-// ... other routes
-
-
-
-const PORT = process.env.PORT || 5000;
-
-
-
-// Handle unhandled promise rejections
-
-
+cron.schedule('0 2 * * *', async () => {
+  try {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 30);
+    
+    const result = await prisma.$transaction(async (tx) => {
+      const oldCarts = await tx.cart.findMany({
+        where: { updatedAt: { lt: cutoffDate } },
+        select: { id: true }
+      });
+      
+      await tx.cartItem.deleteMany({
+        where: { cartId: { in: oldCarts.map(c => c.id) } }
+      });
+      
+      return oldCarts.length;
+    });
+    
+    console.log(`Cleaned up ${result} abandoned carts`);
+  } catch (error) {
+    console.error('Cart cleanup failed:', error);
+  }
+});

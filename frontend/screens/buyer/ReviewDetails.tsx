@@ -48,6 +48,8 @@ const ReviewDetails: React.FC = () => {
     try {
       const data = await getReviewById(reviewId);
       setReview(data);
+      console.log('Review Data:', data);
+      console.log('product id:', data.product?.id);
       setLikeCount(data._count?.likes || 0);
       // Check if current user has liked (you might need to implement this based on your auth)
       // setIsLiked(data.likes?.some(like => like.userId === currentUserId));
@@ -159,19 +161,20 @@ const ReviewDetails: React.FC = () => {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+            <Ionicons name="arrow-back" size={24} color={Colors.primary} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Review Details</Text>
           <TouchableOpacity onPress={handleReport} style={styles.reportButton}>
-            <Ionicons name="flag-outline" size={24} color={Colors.textSecondary} />
+            <Ionicons name="flag-outline" size={24} color={Colors.primary} />
           </TouchableOpacity>
         </View>
 
         {/* Product Info */}
         {review.product && (
+          console.log('Rendering product with id:', review.product.url),
           <TouchableOpacity
             style={styles.productCard}
-            onPress={() => navigation.navigate('ProductDetails', { productId: review.productId })}
+            onPress={() => (navigation as any).navigate('SellerPublicProductDetails', { productUrl: review.product?.url, storeUrl: '' })}
           >
             <Image
               source={{ uri: review.product.images[0] }}
@@ -361,6 +364,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+    marginTop: 30,
   },
   loadingContainer: {
     flex: 1,
@@ -388,11 +392,12 @@ const styles = StyleSheet.create({
   },
   backButton: {
     padding: 8,
+    color: Colors.primary,
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
   reportButton: {
     padding: 8,

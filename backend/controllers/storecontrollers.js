@@ -1,90 +1,177 @@
-// controllers/storeController.js (Updated)
 import slugify from 'slugify';
-// Import Cloudinary and Multer functions
 import { uploadToCloudinary, deleteFromCloudinary, uploadPresets } from '../config/cloudinary.js';
-import { upload } from '../config/multer.js';
 import { cache } from '../config/redis.js';
 import prisma from '../config/prisma.js';
 
-
-// Create a new store - Updated to check for existing verification
-export const createStore = async (req, res) => {
-  try {
-    const { name, description, location, category, region } = req.body;
-    const userId = req.user.userId;
-
-    // Check if user already has a store
-        const existingStore = await prisma.store.findUnique({
-          where: { userId}
-        });
-
-        if (existingStore) {
-          // User already has a store
-          return res.status(400).json({
-            success: false,
-            message: 'User already has a store.'
-          });
-        }
-
-    if (existingStore) {
-      // Also check if verification exists and is pending/rejected
-      const existingVerification = await prisma.storeVerification.findUnique({
-        where: { storeId: existingStore.id }
+// Error handler wrapper
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch((error) => {
+    console.error('Store controller error:', error);
+    
+    // Handle specific errors
+    if (error.message === 'STORE_EXISTS') {
+      return res.status(400).json({
+        success: false,
+        message: 'You already have a store.'
       });
-
-      if (existingVerification && existingVerification.status !== 'rejected') {
-          return res.status(400).json({
-            success: false,
-            message: 'A store already exists for this user. Verification status: ' + existingVerification.status
-          });
-      } else if (existingVerification && existingVerification.status === 'rejected') {
-          // Allow creation if previous verification was rejected, but ideally, update the existing one
-          // This logic might need adjustment based on your exact flow
-          // For now, prevent recreation if any store exists
-           return res.status(400).json({
-            success: false,
-            message: 'A store already exists for this user. Please manage the existing one.'
-          });
-      } else {
-         return res.status(400).json({
-            success: false,
-            message: 'User already has a store.'
-          });
-      }
     }
+    
+    if (error.message === 'STORE_NOT_FOUND') {
+      return res.status(404).json({
+        success: false,
+        message: 'Store not found.'
+      });
+    }
+    
+    if (error.message === 'UNAUTHORIZED') {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to perform this action.'
+      });
+    }
+    
+    if (error.message === 'CANNOT_UPDATE_VERIFIED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot update store details while verification is pending or approved. Contact support if changes are needed.'
+      });
+    }
+    
+    if (error.message === 'CANNOT_DELETE_VERIFIED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete store while verification is pending or approved. Contact support.'
+      });
+    }
+    
+    // Generic error
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred while processing your request.',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
+  });
+};
 
-    // Generate URL slug from store name
-    const slug = slugify(name, { lower: true, strict: true });
+// Generate unique slug
+const generateUniqueSlug = async (name, excludeStoreId = null) => {
+  const baseSlug = slugify(name, { 
+    lower: true, 
+    strict: true,
+    remove: /[*+~.()'"!:@]/g // Remove special characters
+  });
 
-    // Check if slug already exists
-    const existingSlug = await prisma.store.findFirst({
-      where: { url: slug }
+  let finalSlug = baseSlug;
+  let attempts = 0;
+  const maxAttempts = 10;
+
+  while (attempts < maxAttempts) {
+    const existing = await prisma.store.findFirst({
+      where: {
+        url: finalSlug,
+        ...(excludeStoreId && { NOT: { id: excludeStoreId } })
+      }
     });
 
-    // If slug exists, append a random number
-    const finalSlug = existingSlug ? `${slug}-${Math.floor(1000 + Math.random() * 9000)}` : slug;
+    if (!existing) {
+      return finalSlug;
+    }
+
+    // Add random suffix
+    finalSlug = `${baseSlug}-${Math.floor(1000 + Math.random() * 9000)}`;
+    attempts++;
+  }
+
+  // Fallback with timestamp if all attempts fail
+  return `${baseSlug}-${Date.now()}`;
+};
+
+// Sanitize store data for response
+const sanitizeStoreData = (store, includeVerification = false) => {
+  const sanitized = {
+    id: store.id,
+    name: store.name,
+    description: store.description,
+    location: store.location,
+    category: store.category,
+    region: store.region,
+    url: store.url,
+    logo: store.logo,
+    isActive: store.isActive,
+    viewCount: store.viewCount || 0,
+    createdAt: store.createdAt,
+    updatedAt: store.updatedAt,
+    user: store.user ? {
+      id: store.user.id,
+      firstName: store.user.firstName,
+      // Don't expose email unless it's the owner viewing
+    } : null
+  };
+
+  if (includeVerification && store.verification) {
+    sanitized.verification = {
+      status: store.verification.status,
+      ...(store.verification.status === 'rejected' && {
+        rejectionReason: store.verification.rejectionReason
+      })
+    };
+  }
+
+  return sanitized;
+};
+
+export const createStore = asyncHandler(async (req, res) => {
+  const { name, description, location, category, region } = req.body;
+  const userId = req.user.userId;
+
+  // Use transaction for atomicity
+  const result = await prisma.$transaction(async (tx) => {
+    // Check if user already has a store
+    const existingStore = await tx.store.findUnique({
+      where: { userId },
+      include: {
+        verification: true
+      }
+    });
+
+    if (existingStore) {
+      throw new Error('STORE_EXISTS');
+    }
+
+    // Generate unique slug
+    const finalSlug = await generateUniqueSlug(name);
 
     let logoUrl = null;
 
     // Upload logo to Cloudinary if provided
     if (req.file) {
-      const uploadResult = await uploadToCloudinary(
-        req.file.buffer,
-        uploadPresets.storeLogo
-      );
-      logoUrl = uploadResult.secure_url;
+      try {
+        const uploadResult = await uploadToCloudinary(
+          req.file.buffer,
+          {
+            ...uploadPresets.storeLogo,
+            type: 'authenticated',
+            access_mode: 'authenticated'
+          }
+        );
+        logoUrl = uploadResult.secure_url;
+      } catch (uploadError) {
+        console.error('Logo upload error:', uploadError);
+        throw new Error('Failed to upload logo. Please try again.');
+      }
     }
 
-    const store = await prisma.store.create({
+    // Create store
+    const store = await tx.store.create({
       data: {
         userId,
         name,
         description: description || null,
         location,
         category,
-        region,
-        url: finalSlug, // Using the generated slug as the URL
-        isActive: false, // Remains false until verification is approved
+        region: region || null,
+        url: finalSlug,
+        isActive: false, // Remains false until verification
         logo: logoUrl
       },
       include: {
@@ -98,216 +185,93 @@ export const createStore = async (req, res) => {
       }
     });
 
-    // Invalidate user store cache (though it might not exist yet)
-    await cache.del(`user:${userId}:store`);
+    return store;
+  });
 
-    res.status(201).json({
-      success: true,
-      message: 'Store created successfully. Please submit verification documents.',
-      data: store
-    });
-  } catch (error) {
-    console.error('Error creating store:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+  // Invalidate cache
+  await cache.del(`user:${userId}:store`);
 
-// Update store - Updated with cache invalidation
-export const updateStore = [
-  upload.single('logo'),
-  async (req, res) => {
-    try {
-      const { storeId } = req.params;
-      const { name, description, location, category } = req.body;
-      const userId = req.user.userId;
+  res.status(201).json({
+    success: true,
+    message: 'Store created successfully. Please submit verification documents.',
+    data: sanitizeStoreData(result, true)
+  });
+});
 
-      // Check if store exists and belongs to user
-      const existingStore = await prisma.store.findFirst({
-        where: {
-          id: storeId,
-          userId
-        }
-      });
+export const updateStore = asyncHandler(async (req, res) => {
+  const { storeId } = req.params;
+  const { name, description, location, category, region } = req.body;
+  const userId = req.user.userId;
 
-      if (!existingStore) {
-        return res.status(404).json({
-          success: false,
-          message: 'Store not found or unauthorized'
-        });
+  const result = await prisma.$transaction(async (tx) => {
+    // Check if store exists and belongs to user
+    const existingStore = await tx.store.findUnique({
+      where: { id: storeId },
+      include: {
+        verification: true
       }
+    });
 
-      // Prevent updates if verification is pending or approved
-      const verification = await prisma.storeVerification.findUnique({
-        where: { storeId: storeId }
-      });
+    if (!existingStore) {
+      throw new Error('STORE_NOT_FOUND');
+    }
 
-      if (verification && (verification.status === 'pending' || verification.status === 'verified')) {
-         return res.status(400).json({
-          success: false,
-          message: 'Cannot update store details while verification is pending or approved. Contact support if changes are needed.'
-        });
-      }
+    // Verify ownership
+    if (existingStore.userId !== userId) {
+      throw new Error('UNAUTHORIZED');
+    }
 
+    // Check verification status
+    const verification = existingStore.verification;
+    if (verification && (verification.status === 'pending' || verification.status === 'verified')) {
+      throw new Error('CANNOT_UPDATE_VERIFIED');
+    }
 
-      let logoUrl = existingStore.logo; // Keep existing logo if no new file is uploaded
+    let logoUrl = existingStore.logo;
 
-      // Upload new logo if provided
-      if (req.file) {
+    // Upload new logo if provided
+    if (req.file) {
+      try {
         // Delete old logo from Cloudinary if it exists
         if (existingStore.logo) {
-          await deleteFromCloudinary(existingStore.logo);
+          await deleteFromCloudinary(existingStore.logo).catch(err => 
+            console.error('Error deleting old logo:', err)
+          );
         }
 
         const uploadResult = await uploadToCloudinary(
           req.file.buffer,
-          uploadPresets.storeLogo
+          {
+            ...uploadPresets.storeLogo,
+            type: 'authenticated',
+            access_mode: 'authenticated'
+          }
         );
         logoUrl = uploadResult.secure_url;
+      } catch (uploadError) {
+        console.error('Logo upload error:', uploadError);
+        throw new Error('Failed to upload logo. Please try again.');
       }
-
-      // Handle slug update if name changes (only if not verified)
-      let updatedUrl = existingStore.url;
-      if (name && name !== existingStore.name) {
-        const newSlug = slugify(name, { lower: true, strict: true });
-
-        // Check if new slug already exists (excluding current store)
-        const existingSlug = await prisma.store.findFirst({
-          where: {
-            url: newSlug,
-            NOT: { id: storeId }
-          }
-        });
-
-        updatedUrl = existingSlug ? `${newSlug}-${Math.floor(1000 + Math.random() * 9000)}` : newSlug;
-      }
-
-      const updatedStore = await prisma.store.update({
-        where: { id: storeId },
-        data: {
-          name: name || existingStore.name,
-          description: description !== undefined ? description : existingStore.description,
-          location: location || existingStore.location,
-          category: category || existingStore.category,
-          url: updatedUrl,
-          logo: logoUrl,
-          updatedAt: new Date()
-        },
-        include: {
-          user: {
-            select: {
-              id: true,
-              email: true,
-              firstName: true
-            }
-          }
-        }
-      });
-
-      // Invalidate cache after update
-      await cache.del(`store:slug:${updatedStore.url}`);
-      await cache.del(`user:${userId}:store`);
-
-      res.status(200).json({
-        success: true,
-        message: 'Store updated successfully',
-        data: updatedStore
-      });
-    } catch (error) {
-      console.error('Error updating store:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  }
-];
-
-// Delete store - Updated with Cloudinary cleanup and cache invalidation
-export const deleteStore = async (req, res) => {
-  try {
-    const { storeId } = req.params;
-    const userId = req.user.userId;
-
-    const store = await prisma.store.findFirst({
-      where: {
-        id: storeId,
-        userId
-      }
-    });
-
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found or unauthorized'
-      });
     }
 
-    // Prevent deletion if verification is pending or approved
-    const verification = await prisma.storeVerification.findUnique({
-      where: { storeId: storeId }
-    });
-
-    if (verification && (verification.status === 'pending' || verification.status === 'verified')) {
-       return res.status(400).json({
-        success: false,
-        message: 'Cannot delete store while verification is pending or approved. Contact support.'
-      });
+    // Handle slug update if name changes
+    let updatedUrl = existingStore.url;
+    if (name && name !== existingStore.name) {
+      updatedUrl = await generateUniqueSlug(name, storeId);
     }
 
-    // Delete logo from Cloudinary if it exists
-    if (store.logo) {
-      await deleteFromCloudinary(store.logo);
-    }
-
-    // Delete the store (this will cascade delete the verification record if it exists)
-    await prisma.store.delete({
-      where: { id: storeId }
-    });
-
-    // Invalidate cache after deletion
-    await cache.del(`store:slug:${store.url}`);
-    await cache.del(`user:${userId}:store`);
-
-    res.status(200).json({
-      success: true,
-      message: 'Store deleted successfully'
-    });
-  } catch (error) {
-    console.error('Error deleting store:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-// Get store by slug - Cache integration remains the same
-export const getStoreBySlug = async (req, res) => {
-  try {
-    const { slug } = req.params;
-    const cacheKey = `store:slug:${slug}`;
-
-    // Try to get from cache first
-    const cachedStore = await cache.get(cacheKey);
-    if (cachedStore) {
-      return res.status(200).json({
-        success: true,
-        data: cachedStore,
-        cached: true
-      });
-    }
-
-    // Query using 'url' field, not 'name'
-    const store = await prisma.store.findFirst({
-      where: {
-        url: slug,
-        isActive: true // Only return active stores
+    // Update store
+    const updatedStore = await tx.store.update({
+      where: { id: storeId },
+      data: {
+        ...(name && { name }),
+        ...(description !== undefined && { description }),
+        ...(location && { location }),
+        ...(category && { category }),
+        ...(region !== undefined && { region }),
+        url: updatedUrl,
+        logo: logoUrl,
+        updatedAt: new Date()
       },
       include: {
         user: {
@@ -316,61 +280,8 @@ export const getStoreBySlug = async (req, res) => {
             email: true,
             firstName: true
           }
-        }
-      }
-    });
-
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found'
-      });
-    }
-
-    // Cache for 1 hour
-    await cache.set(cacheKey, store, 3600);
-
-    res.status(200).json({
-      success: true,
-      data: store
-    });
-  } catch (error) {
-    console.error('Error fetching store:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-// Get user's store - Cache integration remains the same
-export const getUserStore = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const cacheKey = `user:${userId}:store`;
-
-    // Try to get from cache first
-    const cachedStore = await cache.get(cacheKey);
-    if (cachedStore) {
-      return res.status(200).json({
-        success: true,
-        data: cachedStore,
-        cached: true
-      });
-    }
-
-    const store = await prisma.store.findFirst({
-      where: { userId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            firstName: true
-          }
         },
-        verification: { // Include verification status
+        verification: {
           select: {
             status: true,
             rejectionReason: true
@@ -379,161 +290,295 @@ export const getUserStore = async (req, res) => {
       }
     });
 
+    return { updatedStore, oldUrl: existingStore.url };
+  });
+
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`store:slug:${result.oldUrl}`),
+    cache.del(`store:slug:${result.updatedStore.url}`),
+    cache.del(`user:${userId}:store`),
+    cache.del(`store:public:id:${storeId}`)
+  ]);
+
+  res.status(200).json({
+    success: true,
+    message: 'Store updated successfully',
+    data: sanitizeStoreData(result.updatedStore, true)
+  });
+});
+
+export const deleteStore = asyncHandler(async (req, res) => {
+  const { storeId } = req.params;
+  const userId = req.user.userId;
+
+  await prisma.$transaction(async (tx) => {
+    const store = await tx.store.findUnique({
+      where: { id: storeId },
+      include: {
+        verification: true
+      }
+    });
+
     if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found'
-      });
+      throw new Error('STORE_NOT_FOUND');
     }
 
-    // Cache for 30 minutes
-    await cache.set(cacheKey, store, 1800);
+    // Verify ownership
+    if (store.userId !== userId) {
+      throw new Error('UNAUTHORIZED');
+    }
 
-    res.status(200).json({
-      success: true,
-      data: store
-    });
-  } catch (error) {
-    console.error('Error fetching user store:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
+    // Check verification status
+    const verification = store.verification;
+    if (verification && (verification.status === 'pending' || verification.status === 'verified')) {
+      throw new Error('CANNOT_DELETE_VERIFIED');
+    }
 
-// Update store verification status (for admin use) - Updated with cache invalidation
-export const updateStoreVerification = async (req, res) => {
-  try {
-    const { storeId } = req.params;
-    const { isActive } = req.body;
+    // Delete logo from Cloudinary if it exists (background operation)
+    if (store.logo) {
+      deleteFromCloudinary(store.logo).catch(err => 
+        console.error('Error deleting logo:', err)
+      );
+    }
 
-    const store = await prisma.store.findUnique({
+    // Delete the store (cascade deletes verification)
+    await tx.store.delete({
       where: { id: storeId }
     });
 
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found'
-      });
-    }
+    // Invalidate caches
+    await Promise.all([
+      cache.del(`store:slug:${store.url}`),
+      cache.del(`user:${userId}:store`),
+      cache.del(`store:public:id:${storeId}`)
+    ]);
+  });
 
-    // Only allow direct isActive update if no verification record exists,
-    // or force it (not recommended for standard flow).
-    // The preferred flow is through the verification process.
-    // This function might become redundant or need logic adjustment.
-    // Let's assume this is only used in specific admin scenarios.
-    const updatedStore = await prisma.store.update({
-      where: { id: storeId },
-      data: { isActive }
-    });
+  res.status(200).json({
+    success: true,
+    message: 'Store deleted successfully'
+  });
+});
 
-    // Invalidate related caches
-    await cache.del(`store:slug:${updatedStore.url}`);
-    await cache.del(`user:${updatedStore.userId}:store`);
+export const getStoreBySlug = asyncHandler(async (req, res) => {
+  const { url } = req.params;
+  const cacheKey = `store:slug:${url}`;
 
-    res.status(200).json({
+  // Check cache
+  const cachedStore = await cache.get(cacheKey);
+  if (cachedStore) {
+    return res.status(200).json({
       success: true,
-      message: 'Store active status updated directly (admin override). Prefer using verification process.',
-      data: updatedStore
-    });
-  } catch (error) {
-    console.error('Error updating store active status:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
+      data: JSON.parse(cachedStore),
+      cached: true
     });
   }
-};
 
-export const getSellerStoreForPublicUse = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const cacheKey = `store:public:id:${id}`;
-    const currentUserId = req.user?.userId;
+  // Query database
+  const store = await prisma.store.findFirst({
+    where: {
+      url,
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          firstName: true
+        }
+      }
+    }
+  });
 
+  if (!store) {
+    return res.status(404).json({
+      success: false,
+      message: 'Store not found'
+    });
+  }
+
+  const sanitized = sanitizeStoreData(store);
+
+  // Cache for 1 hour
+  await cache.set(cacheKey, 3600, JSON.stringify(sanitized));
+
+  res.status(200).json({
+    success: true,
+    data: sanitized
+  });
+});
+
+export const getUserStore = asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const cacheKey = `user:${userId}:store`;
+
+  // Check cache
+  const cachedStore = await cache.get(cacheKey);
+  if (cachedStore) {
+    return res.status(200).json({
+      success: true,
+      data: JSON.parse(cachedStore),
+      cached: true
+    });
+  }
+
+  const store = await prisma.store.findUnique({
+    where: { userId },
+    include: {
+      user: {
+        select: {
+          id: true,
+          email: true,
+          firstName: true
+        }
+      },
+      verification: {
+        select: {
+          status: true,
+          rejectionReason: true,
+          verifiedAt: true,
+          createdAt: true
+        }
+      }
+    }
+  });
+
+  if (!store) {
+    return res.status(404).json({
+      success: false,
+      message: 'Store not found'
+    });
+  }
+
+  const sanitized = sanitizeStoreData(store, true);
+
+  // Cache for 30 minutes
+  await cache.set(cacheKey, 1800, JSON.stringify(sanitized));
+
+  res.status(200).json({
+    success: true,
+    data: sanitized
+  });
+});
+
+export const getSellerStoreForPublicUse = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const cacheKey = `store:public:id:${id}`;
+  const currentUserId = req.user?.userId;
+
+  // Check cache (only for non-owner views)
+  if (!currentUserId || currentUserId !== id) {
     const cachedStore = await cache.get(cacheKey);
     if (cachedStore) {
       return res.status(200).json({
         success: true,
-        data: cachedStore,
+        data: JSON.parse(cachedStore),
         cached: true
       });
     }
+  }
 
-    const store = await prisma.store.findFirst({
-      where: {
-        id
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true
-          }
+  const store = await prisma.store.findUnique({
+    where: { id },
+    include: {
+      user: {
+        select: {
+          id: true,
+          firstName: true
         }
       }
-    });
-
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found or not active'
-      });
     }
+  });
 
-    const shouldIncrementView = currentUserId && currentUserId !== store.userId;
-    
-    if (shouldIncrementView) {
-      const hasRecentView = await checkRecentView(store.id, currentUserId);
-      
-      if (!hasRecentView) {
-        await incrementStoreView(store.id, currentUserId);
-        await cache.del(cacheKey);
-        
-        const updatedStore = await prisma.store.findFirst({
-          where: {
-            id,
-            isActive: true
-          },
-          include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true
-              }
-            }
-          }
-        });
-
-        return res.status(200).json({
-          success: true,
-          data: updatedStore,
-          cached: false
-        });
-      }
-    }
-
-    await cache.set(cacheKey, store, 3600);
-
-    return res.status(200).json({
-      success: true,
-      data: store,
-      cached: false
-    });
-
-  } catch (error) {
-    console.error('Error fetching public store view:', error);
-    return res.status(500).json({
+  if (!store) {
+    return res.status(404).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Store not found'
     });
   }
-};
 
+  // Increment view count (only for authenticated non-owners)
+  const shouldIncrementView = currentUserId && currentUserId !== store.userId;
+  
+  if (shouldIncrementView) {
+    const hasRecentView = await checkRecentView(store.id, currentUserId);
+    
+    if (!hasRecentView) {
+      await incrementStoreView(store.id, currentUserId);
+      
+      // Get updated store
+      const updatedStore = await prisma.store.findUnique({
+        where: { id },
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true
+            }
+          }
+        }
+      });
+
+      const sanitized = sanitizeStoreData(updatedStore);
+      
+      // Invalidate cache
+      await cache.del(cacheKey);
+      
+      return res.status(200).json({
+        success: true,
+        data: sanitized,
+        cached: false
+      });
+    }
+  }
+
+  const sanitized = sanitizeStoreData(store);
+
+  // Cache for 1 hour (only for public views)
+  if (!currentUserId || currentUserId !== store.userId) {
+    await cache.set(cacheKey, 3600, JSON.stringify(sanitized));
+  }
+
+  res.status(200).json({
+    success: true,
+    data: sanitized,
+    cached: false
+  });
+});
+
+// Admin function - direct active status update
+export const updateStoreVerification = asyncHandler(async (req, res) => {
+  const { storeId } = req.params;
+  const { isActive } = req.body;
+
+  const store = await prisma.store.findUnique({
+    where: { id: storeId }
+  });
+
+  if (!store) {
+    throw new Error('STORE_NOT_FOUND');
+  }
+
+  const updatedStore = await prisma.store.update({
+    where: { id: storeId },
+    data: { isActive }
+  });
+
+  // Invalidate caches
+  await Promise.all([
+    cache.del(`store:slug:${updatedStore.url}`),
+    cache.del(`user:${updatedStore.userId}:store`),
+    cache.del(`store:public:id:${storeId}`)
+  ]);
+
+  res.status(200).json({
+    success: true,
+    message: 'Store active status updated (admin override).',
+    data: sanitizeStoreData(updatedStore)
+  });
+});
+
+// Helper functions
 const checkRecentView = async (storeId, userId) => {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);

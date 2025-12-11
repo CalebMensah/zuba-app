@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useNavigation } from '@react-navigation/native';
@@ -36,6 +37,7 @@ const CartScreen = () => {
   const { cart, loading, updateItemQuantity, removeItem, clearCart } = useCart();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [itemConfigurations, setItemConfigurations] = useState<Map<string, SelectedItem>>(new Map());
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (cart?.items) {
@@ -241,6 +243,18 @@ const CartScreen = () => {
     );
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      // Cart will automatically refetch on component remount or state changes
+      // If your CartContext has a refetch method, call it here
+    } catch (error) {
+      console.error('Error refreshing cart:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const renderCartItem = ({ item }: { item: any }) => {
     const config = itemConfigurations.get(item.id);
     const isSelected = selectedItems.has(item.id);
@@ -384,6 +398,14 @@ const CartScreen = () => {
         renderItem={renderCartItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContainer}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            colors={[Colors.primary]}
+            tintColor={Colors.primary}
+          />
+        }
       />
 
       <View style={styles.footer}>
@@ -445,7 +467,7 @@ const styles = StyleSheet.create({
     marginTop: 40,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: 'bold',
     color: Colors.primary,
   },

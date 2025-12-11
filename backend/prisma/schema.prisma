@@ -6,22 +6,30 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model User {
   id                 String             @id @default(cuid())
   email              String             @unique
-  phone              String             @unique
+  phone              String?             @unique
   firstName          String
   lastName           String
   password           String
   role               UserRole           @default(BUYER)
   avatar             String?
+
+  googleId          String?  
+  photoURL          String? 
+
   isVerified         Boolean            @default(false)
   verificationStatus VerificationStatus @default(PENDING)
   verificationCode   String?
   verificationExpiry DateTime?
+  failedVerificationAttempts Int       @default(0)
+
+  failedLoginAttempts        Int       @default(0)
+  accountLockedUntil         DateTime?
+
   points             Int                @default(0)
   lastLogin          DateTime?
   deletionCode       String?   @db.VarChar(6)
@@ -46,7 +54,11 @@ model User {
   reviewReports      ReviewReport[]
   chatRoomParticipants ChatRoomParticipant[]
   userChatPreferences UserChatPreference[]
+  verificationAudits    VerificationAuditLog[]
   messagesSent       ChatMessage[]      // messages this user sent
+  paystackRecipientCode String?
+  payoutPreference      String? @default("mobile_money")
+  payouts               Payout[]
 
   @@index([email])
   @@index([phone])
@@ -111,6 +123,8 @@ model StoreVerification {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+
+  auditLogs         VerificationAuditLog[]
   store           Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
@@ -221,9 +235,13 @@ model OrderItem {
   id        String   @id @default(cuid())
   orderId   String
   productId String
+  storeId   String?
   quantity  Int
   price     Float
   total     Float    // = quantity * price
+  commission Float?   // 3% of total or (price * quantity * 0.03)
+  sellerPayout Float?
+
   createdAt DateTime @default(now())
 
   order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -367,6 +385,14 @@ model Order {
   // Promo/Discount
   promoCode     String?
   promoDiscount Float?        @default(0)
+
+  commissionTotal Float?
+  commissionRate  Float?
+  paystackFee     Float?  @default(0)
+  sellerPayoutPreference String? @default("mobile_money")
+  transferFee            Float?  @default(0)
+  payout                 Payout?
+
 
   // Escrow & Refund
   escrowRelease DateTime?
@@ -571,6 +597,7 @@ enum EscrowStatus {
   RELEASED
   FAILED
   REFUNDED
+  CANCELLED
 }
 
 enum DisputeType {
@@ -635,6 +662,7 @@ enum PaymentStatus {
   FAILED
   REFUNDED
   PARTIALLY_REFUNDED
+  CANCELLED
 }
 
 model Review {
@@ -790,4 +818,49 @@ model ChatRoomParticipant {
   @@unique([chatRoomId, userId]) // A user can only join a specific room once
   @@index([chatRoomId])
   @@index([userId])
+}
+
+
+model VerificationAuditLog {
+  id              String   @id @default(cuid())
+  verificationId  String
+  verification    StoreVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  
+  action          String   // SUBMITTED, RESUBMITTED, APPROVED, REJECTED, DELETED
+  performedBy     String   // User ID who performed the action
+  performer       User     @relation(fields: [performedBy], references: [id])
+  
+  metadata        Json?    // Additional data like IP, user agent, rejection reason
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([verificationId])
+  @@index([performedBy])
+  @@index([createdAt])
+  @@map("verification_audit_logs")
+}
+
+model Payout {
+  id                 String   @id @default(cuid())
+  orderId            String   @unique
+  order              Order    @relation(fields: [orderId], references: [id])
+  sellerId           String
+  seller             User     @relation(fields: [sellerId], references: [id])
+  amount             Float
+  grossAmount        Float?
+  transferFee        Float?
+  currency           String   @default("GHS")
+  status             String   @default("PENDING")
+  transferReference  String?  @unique
+  transferCode       String?
+  transferStatus     String?
+  method             String?
+  recipientCode      String?
+  failureReason      String?
+  transferredAt      DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([sellerId])
+  @@index([status])
 }

@@ -11,6 +11,7 @@ import {
   Modal,
   Animated,
   Dimensions,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
@@ -22,12 +23,14 @@ import { useNotifications } from '../../hooks/useNotifications';
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
 import { usePoints } from '../../hooks/usePoints';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { Colors } from '../../constants/colors';
 
 const { width } = Dimensions.get('window');
 
 const BuyerProfileScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, logout } = useAuth();
+  console.log('User Data:', user);
   const { getUnpaidOrdersSummary, getBuyerOrders } = useOrders();
 //  const { getProductsYouMayLike, youMayLikeProducts, loading: productsLoading } = useProduct();
   const { getMyLikedProducts } = useProductLike();
@@ -47,6 +50,7 @@ const BuyerProfileScreen: React.FC = () => {
   const [notificationsCount, setNotificationsCount] = useState(0);
   const [pointsBalance, setPointsBalance] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [slideAnim] = useState(new Animated.Value(width));
 
@@ -70,9 +74,13 @@ const BuyerProfileScreen: React.FC = () => {
     }
   }, [settingsVisible]);
 
-  const loadProfileData = async () => {
+  const loadProfileData = async (isRefreshing = false) => {
     try {
-      setLoading(true);
+      if (isRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
       // Load unpaid orders summary
       const unpaidSummary = await getUnpaidOrdersSummary();
@@ -111,8 +119,16 @@ const BuyerProfileScreen: React.FC = () => {
     } catch (error) {
       console.error('Error loading profile data:', error);
     } finally {
-      setLoading(false);
+      if (isRefreshing) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
+  };
+
+  const handleRefresh = () => {
+    loadProfileData(true);
   };
 
   const handleLogout = () => {
@@ -191,7 +207,13 @@ const BuyerProfileScreen: React.FC = () => {
 
   return (
     <View style={styles.wrapper}>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
+      >
         {/* Profile Header */}
         <View style={styles.profileHeader}>
           <View style={styles.avatarContainer}>
@@ -230,11 +252,10 @@ const BuyerProfileScreen: React.FC = () => {
         {/* Quick Actions */}
         <View style={styles.quickActionsContainer}>
           <QuickActionCard
-            icon="bell"
-            label="Notifications"
-            count={notificationsCount}
+            icon="credit-card-check-outline"
+            label="Payments"
             color="#FF9500"
-            onPress={() => (navigation as any).navigate('Notifications')}
+            onPress={() => (navigation as any).navigate('PaymentsScreen')}
           />
           <QuickActionCard
             icon="gift-outline"
@@ -416,12 +437,12 @@ const BuyerProfileScreen: React.FC = () => {
               <SettingsMenuItem
                 icon="document-text-outline"
                 label="Terms and Conditions"
-                onPress={() => handleSettingsItemPress('terms')}
+                onPress={() => handleSettingsItemPress('Terms')}
               />
               <SettingsMenuItem
                 icon="shield-checkmark-outline"
                 label="Privacy and Policy"
-                onPress={() => handleSettingsItemPress('Ploicy')}
+                onPress={() => handleSettingsItemPress('Policy')}
               />
               <SettingsMenuItem
                 icon="information-circle-outline"
@@ -431,7 +452,7 @@ const BuyerProfileScreen: React.FC = () => {
               <SettingsMenuItem
                 icon="mail-outline"
                 label="Contact Support"
-                onPress={() => handleSettingsItemPress('Support')}
+                onPress={() => handleSettingsItemPress('ContactUs')}
               />
             </ScrollView>
           </Animated.View>
@@ -516,7 +537,7 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#000',
+    color: Colors.primary,
     marginBottom: 4,
   },
   email: {
@@ -578,7 +599,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#000',
+    color: Colors.primary,
   },
   viewAllText: {
     fontSize: 14,

@@ -1,75 +1,31 @@
 // hooks/useOrders.ts
 import { useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Order, OrderItem, DeliveryInfo, CreateOrderData } from '../types/order';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 
-// Types
-export interface OrderItem {
-  productId: string;
-  quantity: number;
-  price: number;
-}
-
-export interface DeliveryInfo {
-  recipient: string;
-  phone: string;
-  address: string;
-  city: string;
-  region: string;
-  country?: string;
-  postalCode?: string;
-  deliveryFee?: number;
-  notes?: string;
-}
-
-export interface CreateOrderData {
-  storeId: string;
-  items: OrderItem[];
-  deliveryInfo?: DeliveryInfo;
-  totalAmount: number;
-  subtotal: number;
-  deliveryFee?: number;
-  taxAmount?: number;
-  discount?: number;
-  currency?: string;
-  paymentMethod?: string;
-  paymentProvider?: string;
-  promoCode?: string;
-  buyerEmail?: string;
-  buyerPhone?: string;
-  checkoutSession?: string; // NEW: Checkout session
-  sameAsDelivery?: boolean;
-  billingInfo?: any;
-}
-
-export interface Order {
-  id: string;
-  buyerId: string;
-  storeId: string;
-  status: string;
-  paymentStatus: string;
-  totalAmount: number;
+export interface OrderBreakdown {
   subtotal: number;
   deliveryFee: number;
   taxAmount: number;
   discount: number;
-  currency: string;
-  checkoutSession?: string; // NEW: Checkout session
-  createdAt: string;
-  updatedAt: string;
-  deliveredAt?: string;
-  items: any[];
-  deliveryInfo?: any;
-  billingInfo?: any;
-  buyer?: any;
-  store?: any;
-  statusHistory?: any[];
-  cancelledBy?: String;
+  orderSubtotal: number;
+  paystackCollectionFee: number;
+  buyerTotal: number;
+  commissionTotal: number;
+  transferFee: number;  
+  grossSellerPayout: number;  
+  netSellerPayout: number;
+}
+
+export interface OrderWithBreakdown extends Order {
+  buyerTotalAmount: number;
+  breakdown: OrderBreakdown;
 }
 
 export interface OrdersResponse {
-  orders: Order[];
+  orders: OrderWithBreakdown[];
   pagination: {
     page: number;
     limit: number;
@@ -100,10 +56,10 @@ export interface UnpaidOrdersSummary {
 }
 
 export interface UnpaidOrdersResponse {
-  orders: Order[];
+  orders: OrderWithBreakdown[];
   ordersByStore: {
     store: any;
-    orders: Order[];
+    orders: OrderWithBreakdown[];
     storeTotal: number;
   }[];
   summary: {
@@ -123,7 +79,7 @@ export interface UnpaidOrdersResponse {
   };
 }
 
-export interface UnpaidOrderDetails extends Order {
+export interface UnpaidOrderDetails extends OrderWithBreakdown {
   hasUnavailableItems: boolean;
   unavailableItems: {
     productId: string;
@@ -135,7 +91,7 @@ export interface UnpaidOrderDetails extends Order {
 
 export interface StoreGroup {
   store: any;
-  orders: Order[];
+  orders: OrderWithBreakdown[];
   orderCount: number;
   totalAmount: number;
   totalItems: number;
@@ -150,6 +106,23 @@ export interface UnpaidOrdersByStoreResponse {
     grandTotal: number;
     currency: string;
   };
+}
+
+export interface CreateOrderResponse {
+  orders: OrderWithBreakdown[];
+  sellerPayouts: {
+    sellerId: string;
+    orderId: string;
+    orderSubtotal: number;
+    paystackCollectionFee: number;
+    buyerTotalAmount: number;
+    totalRevenue: number;
+    commissionTotal: number;
+    grossPayoutAmount: number;
+    transferFee: number; 
+    netPayoutAmount: number;  
+    payoutPreference: string; 
+  }[];
 }
 
 export const useOrders = () => {
@@ -208,13 +181,13 @@ export const useOrders = () => {
   };
 
   // Create a new order
-  const createOrder = useCallback(async (orderData: CreateOrderData): Promise<Order | null> => {
+  const createOrder = useCallback(async (orderData: CreateOrderData): Promise<CreateOrderResponse | null> => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await makeRequest<Order>('/orders', 'POST', orderData);
-      
+      const response = await makeRequest<CreateOrderResponse>('/orders', 'POST', orderData);
+
       if (response.success && response.data) {
         return response.data;
       } else {
@@ -300,12 +273,12 @@ export const useOrders = () => {
   }, []);
 
   // Get order by ID
-  const getOrderById = useCallback(async (orderId: string): Promise<Order | null> => {
+  const getOrderById = useCallback(async (orderId: string): Promise<OrderWithBreakdown | null> => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await makeRequest<Order>(`/orders/${orderId}`, 'GET');
+      const response = await makeRequest<OrderWithBreakdown>(`/orders/${orderId}`, 'GET');
       
       if (response.success && response.data) {
         return response.data;
@@ -321,13 +294,13 @@ export const useOrders = () => {
     }
   }, []);
 
-  // NEW: Get order by checkout session
-  const getOrderByCheckoutSession = useCallback(async (sessionId: string): Promise<Order | null> => {
+  // Get order by checkout session
+  const getOrderByCheckoutSession = useCallback(async (sessionId: string): Promise<OrderWithBreakdown | null> => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await makeRequest<Order>(`/orders/checkout/${sessionId}`, 'GET');
+      const response = await makeRequest<OrderWithBreakdown>(`/orders/checkout/${sessionId}`, 'GET');
       
       if (response.success && response.data) {
         return response.data;
@@ -373,7 +346,7 @@ export const useOrders = () => {
     }
   }, []);
 
-  // NEW: Update checkout session (useful for payment webhooks/callbacks)
+  // Update checkout session (useful for payment webhooks/callbacks)
   const updateCheckoutSession = useCallback(async (
     orderId: string,
     checkoutSession: string,
@@ -438,161 +411,217 @@ export const useOrders = () => {
   }, []);
 
   // Get all unpaid orders with filtering and pagination
-const getUnpaidOrders = useCallback(async (
-  page: number = 1,
-  limit: number = 10,
-  sortBy: 'createdAt' | 'totalAmount' | 'updatedAt' = 'createdAt',
-  sortOrder: 'asc' | 'desc' = 'desc',
-  storeId?: string
-): Promise<UnpaidOrdersResponse | null> => {
-  setLoading(true);
-  setError(null);
+  const getUnpaidOrders = useCallback(async (
+    page: number = 1,
+    limit: number = 10,
+    sortBy: 'createdAt' | 'totalAmount' | 'updatedAt' = 'createdAt',
+    sortOrder: 'asc' | 'desc' = 'desc',
+    storeId?: string
+  ): Promise<UnpaidOrdersResponse | null> => {
+    setLoading(true);
+    setError(null);
 
-  try {
-    const queryParams = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-      sortBy,
-      sortOrder,
-      ...(storeId && { storeId }),
-    });
+    try {
+      const queryParams = new URLSearchParams({
+        page: page.toString(),
+        limit: limit.toString(),
+        sortBy,
+        sortOrder,
+        ...(storeId && { storeId }),
+      });
 
-    const response = await makeRequest<UnpaidOrdersResponse>(
-      `/orders/unpaid?${queryParams.toString()}`,
-      'GET'
-    );
-    
-    if (response.success && response.data) {
-      return response.data;
-    } else {
-      throw new Error(response.message || 'Failed to fetch unpaid orders');
+      const response = await makeRequest<UnpaidOrdersResponse>(
+        `/orders/user/unpaid?${queryParams.toString()}`,
+        'GET'
+      );
+      
+      if (response.success && response.data) {
+        return response.data;
+      } else {
+        throw new Error(response.message || 'Failed to fetch unpaid orders');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      console.error('Get unpaid orders error:', err);
+      return null;
+    } finally {
+      setLoading(false);
     }
-  } catch (err: any) {
-    setError(err.message);
-    console.error('Get unpaid orders error:', err);
-    return null;
-  } finally {
-    setLoading(false);
-  }
-}, []);
+  }, []);
 
-// Get summary of all unpaid orders
-const getUnpaidOrdersSummary = useCallback(async (): Promise<UnpaidOrdersSummary | null> => {
-  setLoading(true);
-  setError(null);
+  // Get summary of all unpaid orders
+  const getUnpaidOrdersSummary = useCallback(async (): Promise<UnpaidOrdersSummary | null> => {
+    setLoading(true);
+    setError(null);
 
-  try {
-    const response = await makeRequest<UnpaidOrdersSummary>(
-      '/orders/unpaid/summary',
-      'GET'
-    );
-    
-    if (response.success && response.data) {
-      return response.data;
-    } else {
-      throw new Error(response.message || 'Failed to fetch unpaid orders summary');
+    try {
+      const response = await makeRequest<UnpaidOrdersSummary>(
+        '/orders/unpaid/summary',
+        'GET'
+      );
+      
+      if (response.success && response.data) {
+        return response.data;
+      } else {
+        throw new Error(response.message || 'Failed to fetch unpaid orders summary');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      console.error('Get unpaid orders summary error:', err);
+      return null;
+    } finally {
+      setLoading(false);
     }
-  } catch (err: any) {
-    setError(err.message);
-    console.error('Get unpaid orders summary error:', err);
-    return null;
-  } finally {
-    setLoading(false);
-  }
-}, []);
+  }, []);
 
-// Get unpaid orders grouped by store
-const getUnpaidOrdersByStore = useCallback(async (): Promise<UnpaidOrdersByStoreResponse | null> => {
-  setLoading(true);
-  setError(null);
+  // Get unpaid orders grouped by store
+  const getUnpaidOrdersByStore = useCallback(async (): Promise<UnpaidOrdersByStoreResponse | null> => {
+    setLoading(true);
+    setError(null);
 
-  try {
-    const response = await makeRequest<UnpaidOrdersByStoreResponse>(
-      '/orders/unpaid/by-store',
-      'GET'
-    );
-    
-    if (response.success && response.data) {
-      return response.data;
-    } else {
-      throw new Error(response.message || 'Failed to fetch unpaid orders by store');
+    try {
+      const response = await makeRequest<UnpaidOrdersByStoreResponse>(
+        '/orders/unpaid/by-store',
+        'GET'
+      );
+      
+      if (response.success && response.data) {
+        return response.data;
+      } else {
+        throw new Error(response.message || 'Failed to fetch unpaid orders by store');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      console.error('Get unpaid orders by store error:', err);
+      return null;
+    } finally {
+      setLoading(false);
     }
-  } catch (err: any) {
-    setError(err.message);
-    console.error('Get unpaid orders by store error:', err);
-    return null;
-  } finally {
-    setLoading(false);
-  }
-}, []);
+  }, []);
 
-// Get a specific unpaid order by ID
-const getUnpaidOrderById = useCallback(async (orderId: string): Promise<UnpaidOrderDetails | null> => {
-  setLoading(true);
-  setError(null);
+  // Get a specific unpaid order by ID
+  const getUnpaidOrderById = useCallback(async (orderId: string): Promise<UnpaidOrderDetails | null> => {
+    setLoading(true);
+    setError(null);
 
-  try {
-    const response = await makeRequest<UnpaidOrderDetails>(
-      `/orders/unpaid/${orderId}`,
-      'GET'
-    );
-    
-    if (response.success && response.data) {
-      return response.data;
-    } else {
-      throw new Error(response.message || 'Failed to fetch unpaid order');
+    try {
+      const response = await makeRequest<UnpaidOrderDetails>(
+        `/orders/unpaid/${orderId}`,
+        'GET'
+      );
+      
+      if (response.success && response.data) {
+        return response.data;
+      } else {
+        throw new Error(response.message || 'Failed to fetch unpaid order');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      console.error('Get unpaid order by ID error:', err);
+      return null;
+    } finally {
+      setLoading(false);
     }
-  } catch (err: any) {
-    setError(err.message);
-    console.error('Get unpaid order by ID error:', err);
-    return null;
-  } finally {
-    setLoading(false);
-  }
-}, []);
+  }, []);
 
-// Cancel an unpaid order and restore stock
-const cancelUnpaidOrder = useCallback(async (orderId: string): Promise<boolean> => {
-  setLoading(true);
-  setError(null);
+  // Cancel an unpaid order and restore stock
+  const cancelUnpaidOrder = useCallback(async (orderId: string): Promise<boolean> => {
+    setLoading(true);
+    setError(null);
 
-  try {
-    const response = await makeRequest<void>(
-      `/orders/unpaid/${orderId}`,
-      'DELETE'
-    );
-    
-    if (response.success) {
-      return true;
-    } else {
-      throw new Error(response.message || 'Failed to cancel unpaid order');
+    try {
+      const response = await makeRequest<void>(
+        `/orders/unpaid/${orderId}`,
+        'DELETE'
+      );
+      
+      if (response.success) {
+        return true;
+      } else {
+        throw new Error(response.message || 'Failed to cancel unpaid order');
+      }
+    } catch (err: any) {
+      setError(err.message);
+      console.error('Cancel unpaid order error:', err);
+      return false;
+    } finally {
+      setLoading(false);
     }
-  } catch (err: any) {
-    setError(err.message);
-    console.error('Cancel unpaid order error:', err);
+  }, []);
+
+  // Helper function to format currency
+  const formatCurrency = (amount: number, currency: string = 'GHS'): string => {
+    return new Intl.NumberFormat('en-GH', {
+      style: 'currency',
+      currency: currency,
+      minimumFractionDigits: 2,
+    }).format(amount);
+  };
+
+  // UPDATED: Helper function to calculate order totals from breakdown
+  const calculateOrderTotals = (order: OrderWithBreakdown) => {
+    return {
+      subtotal: order.breakdown.subtotal,
+      fees: order.breakdown.deliveryFee + order.breakdown.taxAmount,
+      discount: order.breakdown.discount,
+      orderSubtotal: order.breakdown.orderSubtotal,
+      paystackCollectionFee: order.breakdown.paystackCollectionFee,
+      buyerTotal: order.breakdown.buyerTotal,
+      // NEW: Seller-specific calculations
+      commissionTotal: order.breakdown.commissionTotal,
+      transferFee: order.breakdown.transferFee,
+      grossSellerPayout: order.breakdown.grossSellerPayout,
+      netSellerPayout: order.breakdown.netSellerPayout,
+      formatted: {
+        subtotal: formatCurrency(order.breakdown.subtotal, order.currency),
+        fees: formatCurrency(order.breakdown.deliveryFee + order.breakdown.taxAmount, order.currency),
+        discount: formatCurrency(order.breakdown.discount, order.currency),
+        orderSubtotal: formatCurrency(order.breakdown.orderSubtotal, order.currency),
+        paystackCollectionFee: formatCurrency(order.breakdown.paystackCollectionFee, order.currency),
+        buyerTotal: formatCurrency(order.breakdown.buyerTotal, order.currency),
+        commissionTotal: formatCurrency(order.breakdown.commissionTotal, order.currency),
+        transferFee: formatCurrency(order.breakdown.transferFee, order.currency),
+        grossSellerPayout: formatCurrency(order.breakdown.grossSellerPayout, order.currency),
+        netSellerPayout: formatCurrency(order.breakdown.netSellerPayout, order.currency),
+      }
+    };
+  };
+
+  // Helper function to check if order can be cancelled
+  const canCancelOrder = (order: Order, userRole: 'buyer' | 'seller'): boolean => {
+    if (userRole === 'buyer') {
+      return order.status === 'PENDING';
+    } else if (userRole === 'seller') {
+      return ['PENDING', 'CONFIRMED'].includes(order.status);
+    }
     return false;
-  } finally {
-    setLoading(false);
-  }
-}, []);
+  };
 
   return {
     loading,
     error,
+    
+    // Order management
     createOrder,
     getBuyerOrders,
     getSellerOrders,
     getOrderById,
-    getOrderByCheckoutSession, // NEW
+    getOrderByCheckoutSession,
     updateOrderStatus,
-    updateCheckoutSession, // NEW
+    updateCheckoutSession,
     cancelOrder,
 
+    // Unpaid orders management
     getUnpaidOrders,
-  getUnpaidOrdersSummary,
-  getUnpaidOrdersByStore,
-  getUnpaidOrderById,
-  cancelUnpaidOrder,
+    getUnpaidOrdersSummary,
+    getUnpaidOrdersByStore,
+    getUnpaidOrderById,
+    cancelUnpaidOrder,
+
+    // Helper utilities
+    formatCurrency,
+    calculateOrderTotals,
+    canCancelOrder,
   };
 };
 

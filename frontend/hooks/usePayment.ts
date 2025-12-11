@@ -12,14 +12,12 @@ interface InitiatePaymentData {
   currency?: string;
 }
 
-// NEW: Multi-store checkout session data
 interface CreateCheckoutSessionData {
   orderIds: string[];
   email: string;
   callbackUrl?: string;
 }
 
-// NEW: Checkout session response
 interface CheckoutSessionResponse {
   success: boolean;
   message: string;
@@ -46,7 +44,7 @@ interface PaymentInitiationResponse {
   success: boolean;
   message: string;
   data: {
-    checkoutSessionId: string; // NEW
+    checkoutSessionId: string;
     authorizationUrl: string;
     reference: string;
     paymentId: string;
@@ -69,7 +67,7 @@ interface PaymentDetails {
     id: string;
     status: string;
     totalAmount: number;
-    checkoutSession?: string; // NEW
+    checkoutSession?: string;
     buyer: {
       id: string;
       firstName: string;
@@ -82,6 +80,16 @@ interface PaymentDetails {
         email: string;
       };
     };
+    items: Array<{
+      id: string;
+      quantity: number;
+      price: number;
+      product: {
+        id: string;
+        name: string;
+        images: string[];
+      };
+    }>;
   };
   escrow?: {
     id: string;
@@ -108,7 +116,7 @@ interface Payment {
     totalAmount: number;
     buyerId: string;
     storeId: string;
-    checkoutSession?: string; // NEW
+    checkoutSession?: string;
     buyer: {
       firstName: string;
       email: string;
@@ -119,7 +127,6 @@ interface Payment {
   };
 }
 
-// NEW: Checkout session payments response
 interface CheckoutSessionPaymentsResponse {
   success: boolean;
   data: {
@@ -172,10 +179,128 @@ interface UserPaymentsResponse {
 interface PaymentVerificationResponse {
   success: boolean;
   data: {
-    payments: PaymentDetails[]; // Changed to array for multi-store support
+    payments: PaymentDetails[];
     gatewayData: any;
-    isMultiStore: boolean; // NEW
+    isMultiStore: boolean;
   };
+}
+
+// NEW: Admin payments interfaces
+interface AdminPaymentData {
+  id: string;
+  orderId: string;
+  amount: number;
+  currency: string;
+  gateway: string;
+  gatewayRef: string;
+  gatewayStatus: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  order: {
+    id: string;
+    status: string;
+    totalAmount: number;
+    checkoutSession: string | null;
+    createdAt: string;
+    buyer: {
+      id: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      profilePicture: string | null;
+    };
+    store: {
+      id: string;
+      name: string;
+      logo: string | null;
+      userId: string;
+    };
+    items: Array<{
+      id: string;
+      quantity: number;
+      price: number;
+      product: {
+        id: string;
+        name: string;
+        images: string[];
+      };
+    }>;
+  };
+  escrow: {
+    id: string;
+    status: string;
+    amountHeld: number;
+    releaseDate: string;
+    releasedAt: string | null;
+  } | null;
+}
+
+interface AdminPaginationData {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasMore: boolean;
+}
+
+interface AdminStatistics {
+  totalAmount: number;
+  averageAmount: number;
+  totalPayments: number;
+  byStatus: Array<{
+    status: string;
+    count: number;
+    totalAmount: number;
+  }>;
+  byGateway: Array<{
+    gateway: string;
+    count: number;
+    totalAmount: number;
+  }>;
+  byCurrency: Array<{
+    currency: string;
+    count: number;
+    totalAmount: number;
+  }>;
+}
+
+interface AdminPaymentsResponse {
+  success: boolean;
+  data: AdminPaymentData[];
+  pagination: AdminPaginationData;
+  statistics: AdminStatistics;
+  filters: {
+    status?: string;
+    gateway?: string;
+    gatewayStatus?: string;
+    currency?: string;
+    storeId?: string;
+    buyerId?: string;
+    startDate?: string;
+    endDate?: string;
+    minAmount?: string;
+    maxAmount?: string;
+    search?: string;
+  };
+}
+
+interface AdminPaymentsFilters {
+  page?: number;
+  limit?: number;
+  status?: string;
+  gateway?: string;
+  gatewayStatus?: string;
+  currency?: string;
+  storeId?: string;
+  buyerId?: string;
+  startDate?: string;
+  endDate?: string;
+  minAmount?: number;
+  maxAmount?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  search?: string;
 }
 
 interface ApiErrorResponse {
@@ -190,7 +315,12 @@ export const usePayment = () => {
   const [paymentDetails, setPaymentDetails] = useState<PaymentDetails | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [pagination, setPagination] = useState<PaginationData | null>(null);
-  const [checkoutSessionData, setCheckoutSessionData] = useState<CheckoutSessionPaymentsResponse['data'] | null>(null); // NEW
+  const [checkoutSessionData, setCheckoutSessionData] = useState<CheckoutSessionPaymentsResponse['data'] | null>(null);
+  
+  // NEW: Admin-specific state
+  const [adminPayments, setAdminPayments] = useState<AdminPaymentData[]>([]);
+  const [adminStatistics, setAdminStatistics] = useState<AdminStatistics | null>(null);
+  const [adminPagination, setAdminPagination] = useState<AdminPaginationData | null>(null);
 
   // Get authentication token from AsyncStorage
   const getAuthToken = async (): Promise<string | null> => {
@@ -213,7 +343,7 @@ export const usePayment = () => {
     };
   };
 
-  // NEW: Create checkout session for multiple orders (multi-store)
+  // Create checkout session for multiple orders (multi-store)
   const createCheckoutSession = async (
     sessionData: CreateCheckoutSessionData
   ): Promise<CheckoutSessionResponse | null> => {
@@ -283,7 +413,7 @@ export const usePayment = () => {
     }
   };
 
-  // NEW: Get payments by checkout session
+  // Get payments by checkout session
   const getPaymentsByCheckoutSession = async (
     sessionId: string
   ): Promise<CheckoutSessionPaymentsResponse['data'] | null> => {
@@ -359,6 +489,53 @@ export const usePayment = () => {
     }
   };
 
+  // NEW: Get all payments (Admin only)
+  const getAllPayments = async (
+    filters?: AdminPaymentsFilters
+  ): Promise<AdminPaymentsResponse | null> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const config = await getConfig();
+      const params: any = {
+        page: filters?.page || 1,
+        limit: filters?.limit || 20,
+        sortBy: filters?.sortBy || 'createdAt',
+        sortOrder: filters?.sortOrder || 'desc'
+      };
+
+      // Add optional filters
+      if (filters?.status) params.status = filters.status;
+      if (filters?.gateway) params.gateway = filters.gateway;
+      if (filters?.gatewayStatus) params.gatewayStatus = filters.gatewayStatus;
+      if (filters?.currency) params.currency = filters.currency;
+      if (filters?.storeId) params.storeId = filters.storeId;
+      if (filters?.buyerId) params.buyerId = filters.buyerId;
+      if (filters?.startDate) params.startDate = filters.startDate;
+      if (filters?.endDate) params.endDate = filters.endDate;
+      if (filters?.minAmount !== undefined) params.minAmount = filters.minAmount;
+      if (filters?.maxAmount !== undefined) params.maxAmount = filters.maxAmount;
+      if (filters?.search) params.search = filters.search;
+
+      const response = await axios.get<AdminPaymentsResponse>(
+        `${API_URL}/payments/admin/all`,
+        { ...config, params }
+      );
+      
+      setAdminPayments(response.data.data);
+      setAdminStatistics(response.data.statistics);
+      setAdminPagination(response.data.pagination);
+      return response.data;
+    } catch (err) {
+      const axiosError = err as AxiosError<ApiErrorResponse>;
+      const errorMessage = axiosError.response?.data?.message || 'Failed to fetch admin payments';
+      setError(errorMessage);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Clear error
   const clearError = () => {
     setError(null);
@@ -375,27 +552,44 @@ export const usePayment = () => {
     setPagination(null);
   };
 
-  // NEW: Clear checkout session data
+  // Clear checkout session data
   const clearCheckoutSession = () => {
     setCheckoutSessionData(null);
   };
 
+  // NEW: Clear admin payments data
+  const clearAdminPayments = () => {
+    setAdminPayments([]);
+    setAdminStatistics(null);
+    setAdminPagination(null);
+  };
+
   return {
+    // State
     loading,
     error,
     paymentDetails,
     payments,
     pagination,
-    checkoutSessionData, // NEW
-    createCheckoutSession, // NEW
+    checkoutSessionData,
+    adminPayments,
+    adminStatistics,
+    adminPagination,
+    
+    // Actions
+    createCheckoutSession,
     initiatePayment,
     getPaymentDetails,
-    getPaymentsByCheckoutSession, // NEW
+    getPaymentsByCheckoutSession,
     getUserPayments,
     verifyPayment,
+    getAllPayments,
+    
+    // Clear functions
     clearError,
     clearPaymentDetails,
     clearPayments,
-    clearCheckoutSession // NEW
+    clearCheckoutSession,
+    clearAdminPayments
   };
 };

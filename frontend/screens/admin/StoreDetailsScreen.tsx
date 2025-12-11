@@ -14,6 +14,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import { useStore } from '../../hooks/useStore';
 import { useProduct } from '../../hooks/useProducts';
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
@@ -21,7 +22,6 @@ import { useReviews } from '../../hooks/useReview';
 import { useAdmin } from '../../hooks/useAdmin';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../../constants/colors';
-import Ionicons from '@expo/vector-icons/Ionicons';
 
 const { width } = Dimensions.get('window');
 const PRODUCT_CARD_WIDTH = (width - 48) / 2;
@@ -157,7 +157,7 @@ export default function SellerPublicStoreScreen({
 
     try {
       await Share.share({
-        message: `Check out ${store.name} on our platform!\n${store.description || ''}`,
+        message: `Check out ${store.name} on Zuba!\n${store.description || ''}`,
         title: store.name,
       });
     } catch (error) {
@@ -278,21 +278,15 @@ export default function SellerPublicStoreScreen({
     for (let i = 0; i < 5; i++) {
       if (i < fullStars) {
         stars.push(
-          <Text key={i} style={[styles.star, { fontSize: size }]}>
-            ★
-          </Text>
+          <Ionicons key={i} name="star" size={size} color={Colors.warning} />
         );
       } else if (i === fullStars && hasHalfStar) {
         stars.push(
-          <Text key={i} style={[styles.star, { fontSize: size }]}>
-            ★
-          </Text>
+          <Ionicons key={i} name="star-half" size={size} color={Colors.warning} />
         );
       } else {
         stars.push(
-          <Text key={i} style={[styles.starEmpty, { fontSize: size }]}>
-            ★
-          </Text>
+          <Ionicons key={i} name="star-outline" size={size} color={Colors.gray300} />
         );
       }
     }
@@ -310,7 +304,7 @@ export default function SellerPublicStoreScreen({
           <Image source={{ uri: item.images[0] }} style={styles.productImage} />
         ) : (
           <View style={styles.productImagePlaceholder}>
-            <Text style={styles.productImagePlaceholderText}>📦</Text>
+            <Ionicons name="cube-outline" size={48} color={Colors.gray400} />
           </View>
         )}
       </View>
@@ -347,7 +341,8 @@ export default function SellerPublicStoreScreen({
             </Text>
             {item.isVerified && (
               <View style={styles.verifiedPurchaseBadge}>
-                <Text style={styles.verifiedPurchaseText}>✓ Verified</Text>
+                <Ionicons name="checkmark-circle" size={12} color={Colors.success} />
+                <Text style={styles.verifiedPurchaseText}>Verified</Text>
               </View>
             )}
           </View>
@@ -371,8 +366,9 @@ export default function SellerPublicStoreScreen({
       
       {item.product && (
         <View style={styles.reviewProductTag}>
+          <Ionicons name="pricetag-outline" size={12} color={Colors.textSecondary} />
           <Text style={styles.reviewProductName} numberOfLines={1}>
-            Product: {item.product.name}
+            {item.product.name}
           </Text>
         </View>
       )}
@@ -386,9 +382,10 @@ export default function SellerPublicStoreScreen({
           })}
         </Text>
         {item._count?.likes > 0 && (
-          <Text style={styles.reviewLikes}>
-            👍 {item._count.likes}
-          </Text>
+          <View style={styles.reviewLikesContainer}>
+            <Ionicons name="thumbs-up" size={12} color={Colors.primary} />
+            <Text style={styles.reviewLikes}>{item._count.likes}</Text>
+          </View>
         )}
       </View>
     </View>
@@ -398,8 +395,11 @@ export default function SellerPublicStoreScreen({
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backButton}>← Back</Text>
+          <TouchableOpacity 
+            style={styles.headerButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         </View>
         <View style={styles.loadingContainer}>
@@ -414,12 +414,15 @@ export default function SellerPublicStoreScreen({
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backButton}>← Back</Text>
+          <TouchableOpacity 
+            style={styles.headerButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorIcon}>⚠️</Text>
+          <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
           <Text style={styles.errorTitle}>Store Not Found</Text>
           <Text style={styles.errorMessage}>
             {error || 'This store could not be found or is no longer available.'}
@@ -439,12 +442,15 @@ export default function SellerPublicStoreScreen({
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backButton}>← Back</Text>
+          <TouchableOpacity 
+            style={styles.headerButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorIcon}>🏪</Text>
+          <Ionicons name="storefront-outline" size={64} color={Colors.gray400} />
           <Text style={styles.errorTitle}>No Store Data</Text>
           <Text style={styles.errorMessage}>
             Unable to load store information.
@@ -457,11 +463,17 @@ export default function SellerPublicStoreScreen({
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}><Ionicons name="arrow-back-outline" size={24} color="#1E3A8A" /></Text>
+        <TouchableOpacity 
+          style={styles.headerButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={handleShare}>
-          <Text style={styles.shareButton}>Share <Ionicons name="share-sharp" size={24} color="#1E3A8A" /></Text>
+        <TouchableOpacity 
+          style={styles.headerButton}
+          onPress={handleShare}
+        >
+          <Ionicons name="share-social-outline" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
       </View>
 
@@ -492,7 +504,7 @@ export default function SellerPublicStoreScreen({
               )}
               {store.verification?.status === 'verified' && (
                 <View style={styles.verifiedBadge}>
-                  <Text style={styles.verifiedBadgeText}>✓</Text>
+                  <Ionicons name="checkmark-circle" size={20} color={Colors.white} />
                 </View>
               )}
             </View>
@@ -522,16 +534,19 @@ export default function SellerPublicStoreScreen({
 
             <View style={styles.statsRow}>
               <View style={styles.statItem}>
+                <Ionicons name="people" size={20} color={Colors.primary} />
                 <Text style={styles.statValue}>{followerCount}</Text>
                 <Text style={styles.statLabel}>Followers</Text>
               </View>
               <View style={styles.statDivider} />
               <View style={styles.statItem}>
+                <Ionicons name="cube" size={20} color={Colors.primary} />
                 <Text style={styles.statValue}>{products.length}+</Text>
                 <Text style={styles.statLabel}>Products</Text>
               </View>
               <View style={styles.statDivider} />
               <View style={styles.statItem}>
+                <Ionicons name="eye" size={20} color={Colors.primary} />
                 <Text style={styles.statValue}>{store.viewCount || 0}</Text>
                 <Text style={styles.statLabel}>Views</Text>
               </View>
@@ -540,19 +555,23 @@ export default function SellerPublicStoreScreen({
             {/* Admin Action Buttons */}
             {isAdmin && (
               <View style={styles.adminActionsContainer}>
-                <Text style={styles.adminActionsTitle}>Admin Actions</Text>
+                <View style={styles.adminActionsHeader}>
+                  <Ionicons name="shield-checkmark" size={16} color={Colors.textSecondary} />
+                  <Text style={styles.adminActionsTitle}>Admin Actions</Text>
+                </View>
                 <View style={styles.adminActionsRow}>
                   {store.isSuspended ? (
                     <TouchableOpacity
                       style={[styles.adminButton, styles.reactivateButton]}
                       onPress={handleReactivateStore}
                       disabled={actionLoading}
+                      activeOpacity={0.8}
                     >
                       {actionLoading ? (
                         <ActivityIndicator size="small" color={Colors.white} />
                       ) : (
                         <>
-                          <Ionicons name="checkmark-circle-outline" size={18} color={Colors.white} />
+                          <Ionicons name="checkmark-circle" size={18} color={Colors.white} />
                           <Text style={styles.adminButtonText}>Reactivate</Text>
                         </>
                       )}
@@ -562,12 +581,13 @@ export default function SellerPublicStoreScreen({
                       style={[styles.adminButton, styles.suspendButton]}
                       onPress={handleSuspendStore}
                       disabled={actionLoading}
+                      activeOpacity={0.8}
                     >
                       {actionLoading ? (
                         <ActivityIndicator size="small" color={Colors.white} />
                       ) : (
                         <>
-                          <Ionicons name="ban-outline" size={18} color={Colors.white} />
+                          <Ionicons name="ban" size={18} color={Colors.white} />
                           <Text style={styles.adminButtonText}>Suspend</Text>
                         </>
                       )}
@@ -578,12 +598,13 @@ export default function SellerPublicStoreScreen({
                     style={[styles.adminButton, styles.deleteButton]}
                     onPress={handleDeleteStore}
                     disabled={actionLoading}
+                    activeOpacity={0.8}
                   >
                     {actionLoading ? (
                       <ActivityIndicator size="small" color={Colors.white} />
                     ) : (
                       <>
-                        <Ionicons name="trash-outline" size={18} color={Colors.white} />
+                        <Ionicons name="trash" size={18} color={Colors.white} />
                         <Text style={styles.adminButtonText}>Delete</Text>
                       </>
                     )}
@@ -600,14 +621,17 @@ export default function SellerPublicStoreScreen({
                 ]}
                 onPress={handleFollowToggle}
                 disabled={followLoading}
+                activeOpacity={0.8}
               >
                 {followLoading ? (
                   <ActivityIndicator size="small" color={isFollowing ? Colors.primary : Colors.white} />
                 ) : (
                   <>
-                    <Text style={[styles.followButtonIcon, isFollowing && styles.followingIcon]}>
-                      {isFollowing ? '✓' : '+'}
-                    </Text>
+                    <Ionicons 
+                      name={isFollowing ? "checkmark" : "add"} 
+                      size={20} 
+                      color={isFollowing ? Colors.primary : Colors.white} 
+                    />
                     <Text
                       style={[
                         styles.followButtonText,
@@ -623,8 +647,9 @@ export default function SellerPublicStoreScreen({
               <TouchableOpacity
                 style={styles.contactButton}
                 onPress={handleContactSeller}
+                activeOpacity={0.8}
               >
-                <Text style={styles.contactButtonIcon}><Ionicons name="chatbubble" size={24} color="#1E3A8A" /></Text>
+                <Ionicons name="chatbubble-ellipses" size={20} color={Colors.primary} />
                 <Text style={styles.contactButtonText}>Message</Text>
               </TouchableOpacity>
             </View>
@@ -634,16 +659,22 @@ export default function SellerPublicStoreScreen({
         {/* About Section */}
         {store.description && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>About</Text>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons name="information-circle" size={20} color={Colors.primary} />
+              <Text style={styles.sectionTitle}>About</Text>
+            </View>
             <Text style={styles.description}>{store.description}</Text>
           </View>
         )}
 
         {/* Location Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Location</Text>
+          <View style={styles.sectionTitleRow}>
+            <Ionicons name="location" size={20} color={Colors.primary} />
+            <Text style={styles.sectionTitle}>Location</Text>
+          </View>
           <View style={styles.locationCard}>
-            <Text style={styles.locationIcon}><Ionicons name="location" size={24} color="#1E3A8A" /></Text>
+            <Ionicons name="navigate-circle" size={24} color={Colors.primary} />
             <View style={styles.locationInfo}>
               <Text style={styles.locationText}>{store.location}</Text>
               {store.region && (
@@ -656,10 +687,16 @@ export default function SellerPublicStoreScreen({
         {/* Products Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Products</Text>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons name="grid" size={20} color={Colors.primary} />
+              <Text style={styles.sectionTitle}>Products</Text>
+            </View>
             {products.length > 0 && (
               <TouchableOpacity onPress={handleViewAllProducts}>
-                <Text style={styles.viewAllLink}>View All →</Text>
+                <View style={styles.viewAllButton}>
+                  <Text style={styles.viewAllLink}>View All</Text>
+                  <Ionicons name="arrow-forward" size={16} color={Colors.primary} />
+                </View>
               </TouchableOpacity>
             )}
           </View>
@@ -680,7 +717,7 @@ export default function SellerPublicStoreScreen({
             />
           ) : (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>📦</Text>
+              <Ionicons name="cube-outline" size={64} color={Colors.gray300} />
               <Text style={styles.emptyStateText}>No products yet</Text>
             </View>
           )}
@@ -689,12 +726,18 @@ export default function SellerPublicStoreScreen({
         {/* Store Reviews Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>
-              Customer Reviews {reviewCount > 0 && `(${reviewCount})`}
-            </Text>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons name="star" size={20} color={Colors.primary} />
+              <Text style={styles.sectionTitle}>
+                Customer Reviews {reviewCount > 0 && `(${reviewCount})`}
+              </Text>
+            </View>
             {storeReviews.length > 0 && (
               <TouchableOpacity onPress={handleViewAllReviews}>
-                <Text style={styles.viewAllLink}>View All →</Text>
+                <View style={styles.viewAllButton}>
+                  <Text style={styles.viewAllLink}>View All</Text>
+                  <Ionicons name="arrow-forward" size={16} color={Colors.primary} />
+                </View>
               </TouchableOpacity>
             )}
           </View>
@@ -713,7 +756,7 @@ export default function SellerPublicStoreScreen({
             />
           ) : (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>⭐</Text>
+              <Ionicons name="star-outline" size={64} color={Colors.gray300} />
               <Text style={styles.emptyStateText}>No reviews yet</Text>
               <Text style={styles.emptyStateSubtext}>
                 Be the first to review products from this store
@@ -724,24 +767,33 @@ export default function SellerPublicStoreScreen({
 
         {/* Store Details Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Store Information</Text>
+          <View style={styles.sectionTitleRow}>
+            <Ionicons name="document-text" size={20} color={Colors.primary} />
+            <Text style={styles.sectionTitle}>Store Information</Text>
+          </View>
           
           <View style={styles.infoGrid}>
             <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Seller</Text>
-              <Text style={styles.infoValue}>
-                {store.user?.firstName || 'Store Owner'}
-              </Text>
+              <Ionicons name="person" size={16} color={Colors.textSecondary} />
+              <View style={styles.infoTextContainer}>
+                <Text style={styles.infoLabel}>Seller</Text>
+                <Text style={styles.infoValue}>
+                  {store.user?.firstName || 'Store Owner'}
+                </Text>
+              </View>
             </View>
             
             <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Member Since</Text>
-              <Text style={styles.infoValue}>
-                {new Date(store.createdAt).toLocaleDateString('en-US', {
-                  month: 'short',
-                  year: 'numeric',
-                })}
-              </Text>
+              <Ionicons name="calendar" size={16} color={Colors.textSecondary} />
+              <View style={styles.infoTextContainer}>
+                <Text style={styles.infoLabel}>Member Since</Text>
+                <Text style={styles.infoValue}>
+                  {new Date(store.createdAt).toLocaleDateString('en-US', {
+                    month: 'short',
+                    year: 'numeric',
+                  })}
+                </Text>
+              </View>
             </View>
           </View>
         </View>
@@ -751,8 +803,10 @@ export default function SellerPublicStoreScreen({
           <TouchableOpacity
             style={styles.reportButton}
             onPress={() => console.log('Report store')}
+            activeOpacity={0.8}
           >
-            <Text style={styles.reportButtonText}>🚩 Report this store</Text>
+            <Ionicons name="flag" size={16} color={Colors.error} />
+            <Text style={styles.reportButtonText}>Report this store</Text>
           </TouchableOpacity>
         )}
 
@@ -777,15 +831,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  backButton: {
-    fontSize: 16,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  shareButton: {
-    fontSize: 16,
-    color: Colors.primary,
-    fontWeight: '600',
+  headerButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.gray100,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   content: {
     flex: 1,
@@ -805,14 +857,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 40,
   },
-  errorIcon: {
-    fontSize: 64,
-    marginBottom: 16,
-  },
   errorTitle: {
     fontSize: 20,
     fontWeight: '700',
     color: Colors.textPrimary,
+    marginTop: 16,
     marginBottom: 8,
   },
   errorMessage: {
@@ -893,11 +942,6 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: Colors.white,
   },
-  verifiedBadgeText: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: '700',
-  },
   storeName: {
     fontSize: 24,
     fontWeight: '700',
@@ -922,17 +966,24 @@ const styles = StyleSheet.create({
   },
   adminActionsContainer: {
     width: '100%',
-    backgroundColor: Colors.backgroundTertiary,
+    backgroundColor: Colors.gray50,
     padding: 16,
     borderRadius: 12,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  adminActionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 12,
+    justifyContent: 'center',
   },
   adminActionsTitle: {
     fontSize: 14,
     fontWeight: '600',
     color: Colors.textSecondary,
-    marginBottom: 12,
-    textAlign: 'center',
   },
   adminActionsRow: {
     flexDirection: 'row',
@@ -961,9 +1012,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.white,
   },
-  // Complete styles continuation from line ~900
   categoryBadge: {
-    backgroundColor: Colors.primaryLight,
+    backgroundColor: Colors.infoLight,
     paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 16,
@@ -983,17 +1033,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginRight: 8,
   },
-  star: {
-    color: Colors.warning,
-    marginRight: 2,
-  },
-  starEmpty: {
-    color: Colors.gray300,
-    marginRight: 2,
-  },
   ratingText: {
     fontSize: 14,
     color: Colors.textSecondary,
+    fontWeight: '500',
   },
   statsRow: {
     flexDirection: 'row',
@@ -1003,24 +1046,26 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 24,
     borderRadius: 12,
+    width: '100%',
   },
   statItem: {
     flex: 1,
     alignItems: 'center',
+    gap: 4,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: 4,
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.textSecondary,
+    fontWeight: '500',
   },
   statDivider: {
     width: 1,
-    height: 32,
+    height: 40,
     backgroundColor: Colors.border,
   },
   actionButtons: {
@@ -1043,14 +1088,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: Colors.primary,
   },
-  followButtonIcon: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.white,
-  },
-  followingIcon: {
-    color: Colors.primary,
-  },
   followButtonText: {
     fontSize: 16,
     fontWeight: '600',
@@ -1071,9 +1108,6 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     gap: 8,
   },
-  contactButtonIcon: {
-    fontSize: 18,
-  },
   contactButtonText: {
     fontSize: 16,
     fontWeight: '600',
@@ -1091,10 +1125,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: Colors.textPrimary,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   viewAllLink: {
     fontSize: 14,
@@ -1113,9 +1158,6 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     gap: 12,
-  },
-  locationIcon: {
-    fontSize: 24,
   },
   locationInfo: {
     flex: 1,
@@ -1161,9 +1203,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: Colors.gray100,
-  },
-  productImagePlaceholderText: {
-    fontSize: 48,
   },
   productInfo: {
     padding: 12,
@@ -1241,6 +1280,9 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   verifiedPurchaseBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: Colors.successLight,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -1253,6 +1295,7 @@ const styles = StyleSheet.create({
   },
   reviewStars: {
     flexDirection: 'row',
+    gap: 2,
   },
   reviewTitle: {
     fontSize: 15,
@@ -1267,6 +1310,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   reviewProductTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: Colors.white,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -1279,6 +1325,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textSecondary,
     fontStyle: 'italic',
+    flex: 1,
   },
   reviewFooter: {
     flexDirection: 'row',
@@ -1289,24 +1336,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textTertiary,
   },
+  reviewLikesContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   reviewLikes: {
     fontSize: 12,
     color: Colors.textSecondary,
     fontWeight: '500',
   },
   infoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 16,
   },
   infoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: Colors.backgroundTertiary,
+    padding: 12,
+    borderRadius: 8,
+  },
+  infoTextContainer: {
     flex: 1,
-    minWidth: '45%',
   },
   infoLabel: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textSecondary,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   infoValue: {
     fontSize: 15,
@@ -1317,15 +1374,11 @@ const styles = StyleSheet.create({
     paddingVertical: 48,
     alignItems: 'center',
   },
-  emptyStateIcon: {
-    fontSize: 64,
-    marginBottom: 16,
-    opacity: 0.5,
-  },
   emptyStateText: {
     fontSize: 16,
     fontWeight: '600',
     color: Colors.textSecondary,
+    marginTop: 16,
     marginBottom: 4,
   },
   emptyStateSubtext: {
@@ -1334,10 +1387,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   reportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     marginHorizontal: 20,
     marginTop: 20,
     paddingVertical: 14,
-    alignItems: 'center',
     backgroundColor: Colors.white,
     borderRadius: 12,
     borderWidth: 1,

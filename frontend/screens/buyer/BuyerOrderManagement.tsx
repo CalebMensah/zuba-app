@@ -10,15 +10,18 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
-  ScrollView,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
-import { useOrders, Order } from '../../hooks/useOrder';
+import { useOrders } from '../../hooks/useOrder';
+import { Order, OrderItem } from '../../types/order';
 import { useEscrow } from '../../hooks/useEscrow';
 import { BuyerStackParamList } from '../../types/navigation';
+
+const { width } = Dimensions.get('window');
 
 type OrderStatus = 'PENDING' | 'CONFIRMED' | 'SHIPPED' | 'DELIVERED' | 'COMPLETED' | 'CANCELLED';
 
@@ -28,6 +31,8 @@ interface StatusTab {
   count: number;
   icon: string;
   iconFamily: 'Ionicons' | 'MaterialIcons' | 'FontAwesome5';
+  color: string;
+  bgColor: string;
 }
 
 const BuyerOrderManagement = () => {
@@ -49,12 +54,60 @@ const BuyerOrderManagement = () => {
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
 
   const statusTabs: StatusTab[] = [
-    { status: 'PENDING', label: 'Pending', count: statusCounts.PENDING, icon: 'time-outline', iconFamily: 'Ionicons' },
-    { status: 'CONFIRMED', label: 'Confirmed', count: statusCounts.CONFIRMED, icon: 'checkmark-circle-outline', iconFamily: 'Ionicons' },
-    { status: 'SHIPPED', label: 'Shipped', count: statusCounts.SHIPPED, icon: 'local-shipping', iconFamily: 'MaterialIcons' },
-    { status: 'DELIVERED', label: 'Delivered', count: statusCounts.DELIVERED, icon: 'box', iconFamily: 'FontAwesome5' },
-    { status: 'COMPLETED', label: 'Completed', count: statusCounts.COMPLETED, icon: 'checkmark-done-circle-outline', iconFamily: 'Ionicons' },
-    { status: 'CANCELLED', label: 'Cancelled', count: statusCounts.CANCELLED, icon: 'close-circle-outline', iconFamily: 'Ionicons' },
+    { 
+      status: 'PENDING', 
+      label: 'Pending', 
+      count: statusCounts.PENDING, 
+      icon: 'hourglass-outline', 
+      iconFamily: 'Ionicons',
+      color: '#F59E0B',
+      bgColor: '#FEF3C7'
+    },
+    { 
+      status: 'CONFIRMED', 
+      label: 'Confirmed', 
+      count: statusCounts.CONFIRMED, 
+      icon: 'checkmark-done', 
+      iconFamily: 'Ionicons',
+      color: '#3B82F6',
+      bgColor: '#DBEAFE'
+    },
+    { 
+      status: 'SHIPPED', 
+      label: 'Shipped', 
+      count: statusCounts.SHIPPED, 
+      icon: 'airplane', 
+      iconFamily: 'Ionicons',
+      color: '#8B5CF6',
+      bgColor: '#EDE9FE'
+    },
+    { 
+      status: 'DELIVERED', 
+      label: 'Delivered', 
+      count: statusCounts.DELIVERED, 
+      icon: 'cube', 
+      iconFamily: 'Ionicons',
+      color: '#10B981',
+      bgColor: '#D1FAE5'
+    },
+    { 
+      status: 'COMPLETED', 
+      label: 'Completed', 
+      count: statusCounts.COMPLETED, 
+      icon: 'checkmark-circle', 
+      iconFamily: 'Ionicons',
+      color: '#059669',
+      bgColor: '#A7F3D0'
+    },
+    { 
+      status: 'CANCELLED', 
+      label: 'Cancelled', 
+      count: statusCounts.CANCELLED, 
+      icon: 'close-circle', 
+      iconFamily: 'Ionicons',
+      color: '#EF4444',
+      bgColor: '#FEE2E2'
+    },
   ];
 
   // Fetch orders for active tab
@@ -190,36 +243,20 @@ const BuyerOrderManagement = () => {
         {
           text: 'Request Refund',
           onPress: () => {
-            // TODO: Implement refund request logic
-            Alert.alert(
-              'Refund Request',
-              'Refund request feature coming soon. Please contact customer support for assistance.',
-              [{ text: 'OK' }]
-            );
+            (navigation as any).navigate('RequestRefund', {
+              orderId,
+              productId,
+              productName,
+            });
           },
         },
       ]
     );
   };
 
-  // Get status badge color
-  const getStatusColor = (status: OrderStatus) => {
-    switch (status) {
-      case 'PENDING':
-        return Colors.warning;
-      case 'CONFIRMED':
-        return Colors.info;
-      case 'SHIPPED':
-        return Colors.primaryLight;
-      case 'DELIVERED':
-        return Colors.success;
-      case 'COMPLETED':
-        return Colors.successDark;
-      case 'CANCELLED':
-        return Colors.error;
-      default:
-        return Colors.gray400;
-    }
+  // Get status configuration
+  const getStatusConfig = (status: OrderStatus) => {
+    return statusTabs.find(tab => tab.status === status) || statusTabs[0];
   };
 
   // Assert OrderStatus helper to validate status strings
@@ -229,39 +266,45 @@ const BuyerOrderManagement = () => {
   };
 
   // Render icon based on family
-  const renderStatusIcon = (tab: StatusTab, isActive: boolean) => {
-    const iconColor = isActive ? Colors.white : Colors.textSecondary;
-    const iconSize = 16;
-
+  const renderStatusIcon = (tab: StatusTab, size: number = 20) => {
     switch (tab.iconFamily) {
       case 'Ionicons':
-        return <Ionicons name={tab.icon as any} size={iconSize} color={iconColor} />;
+        return <Ionicons name={tab.icon as any} size={size} color={tab.color} />;
       case 'MaterialIcons':
-        return <MaterialIcons name={tab.icon as any} size={iconSize} color={iconColor} />;
+        return <MaterialIcons name={tab.icon as any} size={size} color={tab.color} />;
       case 'FontAwesome5':
-        return <FontAwesome5 name={tab.icon as any} size={iconSize} color={iconColor} />;
+        return <FontAwesome5 name={tab.icon as any} size={size} color={tab.color} />;
       default:
         return null;
     }
   };
 
+  // Render status badge for order card
+  const renderOrderStatusBadge = (status: OrderStatus) => {
+    const config = getStatusConfig(status);
+    return (
+      <View style={[styles.orderStatusBadge, { backgroundColor: config.bgColor }]}>
+        {renderStatusIcon(config, 16)}
+        <Text style={[styles.orderStatusText, { color: config.color }]}>
+          {status}
+        </Text>
+      </View>
+    );
+  };
+
   // Render completed order with individual products
   const renderCompletedOrder = ({ item }: { item: Order }) => {
     return (
-      <View style={styles.completedOrderContainer}>
+      <View style={styles.orderCard}>
         {/* Order Header */}
-        <View style={styles.completedOrderHeader}>
-          <View style={styles.orderHeaderLeft}>
-            <Text style={styles.orderNumber}>Order #{item.id.slice(-8).toUpperCase()}</Text>
-            <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor('COMPLETED')}20` }]}>
-              <Text style={[styles.statusText, { color: getStatusColor('COMPLETED') }]}>
-                COMPLETED
-              </Text>
-            </View>
+        <View style={styles.orderCardHeader}>
+          <View style={styles.orderHeaderTop}>
+            <Text style={styles.orderNumber}>#{item.id.slice(-8).toUpperCase()}</Text>
+            {renderOrderStatusBadge('COMPLETED')}
           </View>
           <Text style={styles.orderDate}>
             {new Date(item.createdAt).toLocaleDateString('en-US', {
-              month: 'short',
+              month: 'long',
               day: 'numeric',
               year: 'numeric',
             })}
@@ -269,61 +312,75 @@ const BuyerOrderManagement = () => {
         </View>
 
         {/* Store Info */}
-        <Text style={styles.completedStoreName}>{item.store?.name || 'Store'}</Text>
+        <View style={styles.storeInfoRow}>
+          <Ionicons name="storefront-outline" size={16} color={Colors.textSecondary} />
+          <Text style={styles.storeName}>{item.store?.name || 'Store'}</Text>
+        </View>
+
+        {/* Divider */}
+        <View style={styles.divider} />
 
         {/* Individual Products */}
-        {item.items.map((orderItem, index) => {
+        {item.items.map((orderItem: OrderItem, index: number) => {
           const productImage = orderItem.product?.images?.[0] || 'https://via.placeholder.com/100';
           const productName = orderItem.product?.name || 'Product';
 
           return (
-            <View key={index} style={styles.completedProductCard}>
-              <Image source={{ uri: productImage }} style={styles.completedProductImage} />
-              
-              <View style={styles.completedProductDetails}>
-                <Text style={styles.completedProductName} numberOfLines={2}>
-                  {productName}
-                </Text>
-                <Text style={styles.completedProductPrice}>
-                  {item.currency} {orderItem.price.toFixed(2)} × {orderItem.quantity}
-                </Text>
-
-                {/* Action Buttons */}
-                <View style={styles.completedProductActions}>
-                  <TouchableOpacity
-                    style={styles.reviewButton}
-                    onPress={() => handleAddReview(
-                      orderItem.product?.id || '',
-                      productName,
-                      item.id,
-                      orderItem.product?.images?.[0] || 'https://via.placeholder.com/100'
-                    )}
-                  >
-                    <Ionicons name="star" size={14} color={Colors.white} />
-                    <Text style={styles.reviewButtonText}>Add Review</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.refundButton}
-                    onPress={() => handleRequestRefund(
-                      orderItem.product?.id || '',
-                      productName,
-                      item.id
-                    )}
-                  >
-                    <MaterialIcons name="money-off" size={14} color={Colors.error} />
-                    <Text style={styles.refundButtonText}>Refund</Text>
-                  </TouchableOpacity>
+            <View key={index}>
+              <View style={styles.productRow}>
+                <Image source={{ uri: productImage }} style={styles.productThumbnail} />
+                
+                <View style={styles.productInfo}>
+                  <Text style={styles.productName} numberOfLines={2}>
+                    {productName}
+                  </Text>
+                  <Text style={styles.productQuantity}>
+                    Qty: {orderItem.quantity} × {item.currency} {orderItem.price.toFixed(2)}
+                  </Text>
                 </View>
+
+                <Text style={styles.productTotal}>
+                  {item.currency} {(orderItem.price * orderItem.quantity).toFixed(2)}
+                </Text>
               </View>
+
+              {/* Action Buttons */}
+              <View style={styles.productActions}>
+                <TouchableOpacity
+                  style={styles.actionButton}
+                  onPress={() => handleAddReview(
+                    orderItem.product?.id || '',
+                    productName,
+                    item.id,
+                    orderItem.product?.images?.[0] || 'https://via.placeholder.com/100'
+                  )}
+                >
+                  <Ionicons name="star" size={16} color="#F59E0B" />
+                  <Text style={styles.actionButtonText}>Add Review</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.refundActionButton]}
+                  onPress={() => handleRequestRefund(
+                    orderItem.product?.id || '',
+                    productName,
+                    item.id
+                  )}
+                >
+                  <MaterialIcons name="replay" size={16} color="#EF4444" />
+                  <Text style={[styles.actionButtonText, { color: '#EF4444' }]}>Refund</Text>
+                </TouchableOpacity>
+              </View>
+
+              {index < item.items.length - 1 && <View style={styles.productDivider} />}
             </View>
           );
         })}
 
-        {/* Total Amount */}
-        <View style={styles.completedTotalRow}>
-          <Text style={styles.completedTotalLabel}>Order Total:</Text>
-          <Text style={styles.completedTotalAmount}>
+        {/* Total */}
+        <View style={styles.orderTotal}>
+          <Text style={styles.totalLabel}>Order Total</Text>
+          <Text style={styles.totalAmount}>
             {item.currency} {item.totalAmount.toFixed(2)}
           </Text>
         </View>
@@ -348,66 +405,72 @@ const BuyerOrderManagement = () => {
 
     return (
       <View style={styles.orderCard}>
-        <View style={styles.orderHeader}>
-          <View style={styles.orderHeaderLeft}>
-            <Text style={styles.orderNumber}>Order #{item.id.slice(-8).toUpperCase()}</Text>
-            <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(assertOrderStatus(item.status))}20` }]}>
-              <Text style={[styles.statusText, { color: getStatusColor(assertOrderStatus(item.status)) }]}>
-                {item.status}
-              </Text>
-            </View>
+        {/* Order Header */}
+        <View style={styles.orderCardHeader}>
+          <View style={styles.orderHeaderTop}>
+            <Text style={styles.orderNumber}>#{item.id.slice(-8).toUpperCase()}</Text>
+            {renderOrderStatusBadge(assertOrderStatus(item.status))}
           </View>
           <Text style={styles.orderDate}>
             {new Date(item.createdAt).toLocaleDateString('en-US', {
-              month: 'short',
+              month: 'long',
               day: 'numeric',
               year: 'numeric',
             })}
           </Text>
         </View>
 
-        <View style={styles.orderContent}>
-          <Image source={{ uri: firstImage }} style={styles.productImage} />
+        {/* Store Info */}
+        <View style={styles.storeInfoRow}>
+          <Ionicons name="storefront-outline" size={16} color={Colors.textSecondary} />
+          <Text style={styles.storeName}>{item.store?.name || 'Store'}</Text>
+        </View>
+
+        {/* Divider */}
+        <View style={styles.divider} />
+
+        {/* Product Preview */}
+        <View style={styles.productRow}>
+          <Image source={{ uri: firstImage }} style={styles.productThumbnail} />
           
-          <View style={styles.orderDetails}>
+          <View style={styles.productInfo}>
             <Text style={styles.productName} numberOfLines={2}>
               {productName}
             </Text>
             {item.items.length > 1 && (
-              <Text style={styles.itemCount}>+{item.items.length - 1} more item(s)</Text>
-            )}
-            <Text style={styles.storeName}>{item.store?.name || 'Store'}</Text>
-            
-            <View style={styles.priceRow}>
-              <Text style={styles.priceLabel}>Total:</Text>
-              <Text style={styles.price}>
-                {item.currency} {item.totalAmount.toFixed(2)}
+              <Text style={styles.moreItems}>
+                +{item.items.length - 1} more item{item.items.length > 2 ? 's' : ''}
               </Text>
-            </View>
+            )}
           </View>
+
+          <Text style={styles.productTotal}>
+            {item.currency} {item.totalAmount.toFixed(2)}
+          </Text>
         </View>
 
-        <View style={styles.orderFooter}>
+        {/* Action Buttons */}
+        <View style={styles.orderActions}>
           <TouchableOpacity 
-            style={styles.viewDetailsButton} 
+            style={styles.secondaryActionButton} 
             onPress={() => navigation.navigate('OrderDetails', { orderId: item.id })}
           >
-            <Text style={styles.viewDetailsText}>View Details</Text>
+            <Text style={styles.secondaryActionText}>View Details</Text>
           </TouchableOpacity>
 
           {isShipped && (
             <TouchableOpacity
-              style={styles.deliveryButton}
+              style={styles.primaryActionButton}
               onPress={() => handleViewDeliveryDetails(item)}
             >
-              <MaterialIcons name="local-shipping" size={16} color={Colors.white} />
-              <Text style={styles.deliveryButtonText}>Delivery</Text>
+              <MaterialIcons name="local-shipping" size={18} color={Colors.white} />
+              <Text style={styles.primaryActionText}>Track</Text>
             </TouchableOpacity>
           )}
 
           {isDelivered && (
             <TouchableOpacity
-              style={[styles.confirmButton, isProcessing && styles.confirmButtonDisabled]}
+              style={[styles.primaryActionButton, isProcessing && styles.disabledButton]}
               onPress={() => handleConfirmReceived(item.id, item.id.slice(-8).toUpperCase())}
               disabled={isProcessing}
             >
@@ -415,8 +478,8 @@ const BuyerOrderManagement = () => {
                 <ActivityIndicator size="small" color={Colors.white} />
               ) : (
                 <>
-                  <Ionicons name="checkmark-circle" size={16} color={Colors.white} />
-                  <Text style={styles.confirmButtonText}>Confirm</Text>
+                  <Ionicons name="checkmark-circle" size={18} color={Colors.white} />
+                  <Text style={styles.primaryActionText}>Confirm Receipt</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -424,14 +487,14 @@ const BuyerOrderManagement = () => {
 
           {canCancel && (
             <TouchableOpacity
-              style={[styles.cancelButton, isProcessing && styles.cancelButtonDisabled]}
+              style={[styles.dangerActionButton, isProcessing && styles.disabledButton]}
               onPress={() => handleCancelOrder(item.id, item.id.slice(-8).toUpperCase())}
               disabled={isProcessing}
             >
               {isProcessing ? (
                 <ActivityIndicator size="small" color={Colors.white} />
               ) : (
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={styles.dangerActionText}>Cancel Order</Text>
               )}
             </TouchableOpacity>
           )}
@@ -443,7 +506,9 @@ const BuyerOrderManagement = () => {
   // Empty state
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Text style={styles.emptyStateIcon}>📦</Text>
+      <View style={styles.emptyIconContainer}>
+        <Ionicons name="receipt-outline" size={64} color={Colors.gray400} />
+      </View>
       <Text style={styles.emptyStateTitle}>No {activeTab.toLowerCase()} orders</Text>
       <Text style={styles.emptyStateText}>
         {activeTab === 'PENDING'
@@ -461,33 +526,35 @@ const BuyerOrderManagement = () => {
         <Text style={styles.headerSubtitle}>Track and manage your purchases</Text>
       </View>
 
-      {/* Status Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tabsContainer}
-        style={styles.tabsScrollView}
-      >
+      {/* Status Filter Grid */}
+      <View style={styles.statusGrid}>
         {statusTabs.map((tab) => (
           <TouchableOpacity
             key={tab.status}
-            style={[styles.tab, activeTab === tab.status && styles.activeTab]}
+            style={[
+              styles.statusCard,
+              activeTab === tab.status && styles.activeStatusCard,
+              { borderColor: tab.color }
+            ]}
             onPress={() => handleTabPress(tab.status)}
           >
-            {renderStatusIcon(tab, activeTab === tab.status)}
-            <Text style={[styles.tabLabel, activeTab === tab.status && styles.activeTabLabel]}>
+            <View style={[styles.statusIconContainer, { backgroundColor: tab.bgColor }]}>
+              {renderStatusIcon(tab, 24)}
+            </View>
+            <Text style={[
+              styles.statusLabel,
+              activeTab === tab.status && styles.activeStatusLabel
+            ]}>
               {tab.label}
             </Text>
-            {tab.count > 0 && (
-              <View style={[styles.countBadge, activeTab === tab.status && styles.activeCountBadge]}>
-                <Text style={[styles.countText, activeTab === tab.status && styles.activeCountText]}>
-                  {tab.count}
-                </Text>
-              </View>
-            )}
+            <View style={[styles.statusCount, { backgroundColor: tab.bgColor }]}>
+              <Text style={[styles.statusCountText, { color: tab.color }]}>
+                {tab.count}
+              </Text>
+            </View>
           </TouchableOpacity>
         ))}
-      </ScrollView>
+      </View>
 
       {/* Orders List */}
       {loading && !refreshing ? (
@@ -520,74 +587,76 @@ const BuyerOrderManagement = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.backgroundSecondary,
+    backgroundColor: '#F9FAFB',
   },
   header: {
     backgroundColor: Colors.white,
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    paddingTop: 20,
+    paddingBottom: 16,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginBottom: 4,
+    alignSelf: 'center',
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 15,
     color: Colors.textSecondary,
+    alignSelf: 'center',
   },
-  tabsScrollView: {
+  statusGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 12,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: '#E5E7EB',
+    gap: 8,
   },
-  tabsContainer: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 6,
-  },
-  tab: {
-    flexDirection: 'row',
+  statusCard: {
+    width: (width - 40) / 3,
+    backgroundColor: Colors.white,
+    borderRadius: 12,
+    padding: 12,
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: Colors.gray100,
-    borderRadius: 16,
-    marginRight: 6,
-    gap: 4,
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
   },
-  activeTab: {
-    backgroundColor: Colors.primary,
+  activeStatusCard: {
+    borderWidth: 2,
+    backgroundColor: '#FAFAFA',
   },
-  tabLabel: {
-    fontSize: 13,
+  statusIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  statusLabel: {
+    fontSize: 12,
     fontWeight: '600',
     color: Colors.textSecondary,
+    marginBottom: 4,
   },
-  activeTabLabel: {
-    color: Colors.white,
+  activeStatusLabel: {
+    color: Colors.textPrimary,
+    fontWeight: '700',
   },
-  countBadge: {
-    backgroundColor: Colors.white,
-    borderRadius: 8,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    minWidth: 18,
+  statusCount: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    minWidth: 24,
     alignItems: 'center',
   },
-  activeCountBadge: {
-    backgroundColor: Colors.primaryDark,
-  },
-  countText: {
-    fontSize: 10,
+  statusCountText: {
+    fontSize: 12,
     fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  activeCountText: {
-    color: Colors.white,
   },
   listContent: {
     padding: 16,
@@ -598,152 +667,191 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
   },
-  orderHeader: {
+  orderCardHeader: {
+    marginBottom: 12,
+  },
+  orderHeaderTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
-  },
-  orderHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    marginBottom: 4,
   },
   orderNumber: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
     color: Colors.textPrimary,
   },
-  statusBadge: {
+  orderStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 4,
   },
-  statusText: {
+  orderStatusText: {
     fontSize: 11,
     fontWeight: '700',
     textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   orderDate: {
     fontSize: 13,
     color: Colors.textSecondary,
   },
-  orderContent: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    gap: 12,
-  },
-  productImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 12,
-    backgroundColor: Colors.gray100,
-  },
-  orderDetails: {
-    flex: 1,
-    justifyContent: 'space-between',
-  },
-  productName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 4,
-  },
-  itemCount: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginBottom: 4,
-  },
-  storeName: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginBottom: 8,
-  },
-  priceRow: {
+  storeInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    marginBottom: 12,
   },
-  priceLabel: {
+  storeName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginBottom: 12,
+  },
+  productRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  productThumbnail: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+  },
+  productInfo: {
+    flex: 1,
+  },
+  productName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    marginBottom: 4,
+  },
+  productQuantity: {
     fontSize: 13,
     color: Colors.textSecondary,
   },
-  price: {
-    fontSize: 18,
+  moreItems: {
+    fontSize: 12,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  productTotal: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  productActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 4,
+  },
+  refundActionButton: {
+    backgroundColor: '#FEE2E2',
+  },
+  actionButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#F59E0B',
+  },
+  productDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginVertical: 12,
+  },
+  orderTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  totalLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  totalAmount: {
+    fontSize: 20,
     fontWeight: '700',
     color: Colors.primary,
   },
-  orderFooter: {
+  orderActions: {
     flexDirection: 'row',
     gap: 8,
   },
-  viewDetailsButton: {
+  secondaryActionButton: {
     flex: 1,
-    backgroundColor: Colors.gray100,
-    paddingVertical: 10,
-    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  viewDetailsText: {
-    fontSize: 13,
+  secondaryActionText: {
+    fontSize: 14,
     fontWeight: '600',
     color: Colors.textPrimary,
   },
-  cancelButton: {
+  primaryActionButton: {
     flex: 1,
-    backgroundColor: Colors.error,
-    paddingVertical: 10,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelButtonDisabled: {
-    backgroundColor: Colors.disabled,
-  },
-  cancelButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.white,
-  },
-  deliveryButton: {
-    flex: 1,
-    backgroundColor: Colors.primaryLight,
-    paddingVertical: 10,
-    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    gap: 4,
+    gap: 6,
   },
-  deliveryButtonText: {
-    fontSize: 13,
+  primaryActionText: {
+    fontSize: 14,
     fontWeight: '600',
     color: Colors.white,
   },
-  confirmButton: {
+  dangerActionButton: {
     flex: 1,
-    backgroundColor: Colors.success,
-    paddingVertical: 10,
-    borderRadius: 12,
+    backgroundColor: '#EF4444',
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 4,
   },
-  confirmButtonDisabled: {
-    backgroundColor: Colors.disabled,
-  },
-  confirmButtonText: {
-    fontSize: 13,
+  dangerActionText: {
+    fontSize: 14,
     fontWeight: '600',
     color: Colors.white,
+  },
+  disabledButton: {
+    backgroundColor: Colors.disabled,
   },
   loadingContainer: {
     flex: 1,
@@ -762,9 +870,14 @@ const styles = StyleSheet.create({
     paddingVertical: 80,
     paddingHorizontal: 40,
   },
-  emptyStateIcon: {
-    fontSize: 64,
-    marginBottom: 16,
+  emptyIconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
   },
   emptyStateTitle: {
     fontSize: 20,
@@ -778,114 +891,6 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 20,
-  },
-  // Completed Order Styles
-  completedOrderContainer: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  completedOrderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  completedStoreName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: 12,
-  },
-  completedProductCard: {
-    flexDirection: 'row',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.gray100,
-    gap: 12,
-  },
-  completedProductImage: {
-    width: 70,
-    height: 70,
-    borderRadius: 10,
-    backgroundColor: Colors.gray100,
-  },
-  completedProductDetails: {
-    flex: 1,
-  },
-  completedProductName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 4,
-  },
-  completedProductPrice: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginBottom: 8,
-  },
-  completedProductActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  reviewButton: {
-    flex: 1,
-    backgroundColor: Colors.primary,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  reviewButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.white,
-  },
-  refundButton: {
-    flex: 1,
-    backgroundColor: Colors.white,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.error,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  refundButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.error,
-  },
-  completedTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.gray100,
-  },
-  completedTotalLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-  completedTotalAmount: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.primary,
   },
 });
 

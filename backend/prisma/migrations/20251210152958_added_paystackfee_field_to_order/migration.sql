@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Order" ADD COLUMN     "commissionRate" DOUBLE PRECISION,
+ADD COLUMN     "paystackFee" DOUBLE PRECISION DEFAULT 0;

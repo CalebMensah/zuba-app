@@ -11,6 +11,7 @@ import {
   Modal,
   Animated,
   Dimensions,
+  RefreshControl,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +26,7 @@ const { width } = Dimensions.get('window');
 const SellerProfileScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, logout } = useAuth();
+  console.log('SellerProfileScreen user:', user);
   const {
     summary,
     fetchSummary,
@@ -35,7 +37,7 @@ const SellerProfileScreen: React.FC = () => {
     loading: disputesLoading,
   } = useDisputes();
   const {
-    getStoreFollowerCount,
+    getMyStoreFollowerCount,
   } = useStoreFollowing();
   const {
     getSellerStoreReviews,
@@ -45,6 +47,7 @@ const SellerProfileScreen: React.FC = () => {
   const [followersCount, setFollowersCount] = useState(0);
   const [reviewsCount, setReviewsCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [slideAnim] = useState(new Animated.Value(width));
 
@@ -68,9 +71,13 @@ const SellerProfileScreen: React.FC = () => {
     }
   }, [settingsVisible]);
 
-  const loadProfileData = async () => {
+  const loadProfileData = async (isRefreshing = false) => {
     try {
-      setLoading(true);
+      if (isRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
       // Fetch seller dashboard summary
       await fetchSummary();
@@ -80,8 +87,8 @@ const SellerProfileScreen: React.FC = () => {
       setDisputesCount(disputesData?.pagination.total || 0);
 
       // Fetch followers count
-      if ((user as any)?.storeUrl) {
-        const followerCount = await getStoreFollowerCount((user as any).storeUrl);
+      if (user?.store?.url) {
+        const followerCount = await getMyStoreFollowerCount();
         setFollowersCount(followerCount);
       }
 
@@ -91,8 +98,16 @@ const SellerProfileScreen: React.FC = () => {
     } catch (error) {
       console.error('Error loading seller profile data:', error);
     } finally {
-      setLoading(false);
+      if (isRefreshing) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
+  };
+
+  const handleRefresh = () => {
+    loadProfileData(true);
   };
 
   const handleLogout = () => {
@@ -157,7 +172,13 @@ const SellerProfileScreen: React.FC = () => {
 
   return (
     <>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
+      >
         {/* Profile Header */}
         <View style={styles.profileHeader}>
           <View style={styles.avatarContainer}>
@@ -195,11 +216,10 @@ const SellerProfileScreen: React.FC = () => {
         {/* Quick Actions */}
         <View style={styles.quickActionsContainer}>
           <QuickActionCard
-            icon="notifications-outline"
-            label="Notifications"
-            count={0 /* Could add notifications count here */}
+            icon="card-outline"
+            label="Payments"
             color="#FF9500"
-            onPress={() => (navigation as any).navigate('Notifications')}
+            onPress={() => (navigation as any).navigate('PaymentsScreen')}
           />
           <QuickActionCard
             icon="star-outline"

@@ -65,11 +65,7 @@ class RedisCache {
     }
   }
 
-  /**
-   * Get value from cache
-   * @param {string} key - Cache key
-   * @returns {Promise<any>} - Parsed value or null
-   */
+  
   async get(key) {
     try {
       if (!this.isConnected) {
@@ -85,13 +81,7 @@ class RedisCache {
     }
   }
 
-  /**
-   * Set value in cache
-   * @param {string} key - Cache key
-   * @param {any} value - Value to cache (will be JSON stringified)
-   * @param {number} ttl - Time to live in seconds (default: 3600 = 1 hour)
-   * @returns {Promise<boolean>}
-   */
+
   async set(key, value, ttl = 3600) {
     try {
       if (!this.isConnected) {
@@ -107,11 +97,6 @@ class RedisCache {
     }
   }
 
-  /**
-   * Delete key from cache
-   * @param {string} key - Cache key or array of keys
-   * @returns {Promise<boolean>}
-   */
   async del(key) {
     try {
       if (!this.isConnected) {
@@ -130,11 +115,7 @@ class RedisCache {
     }
   }
 
-  /**
-   * Delete multiple keys matching pattern
-   * @param {string} pattern - Pattern to match (e.g., 'user:*', 'products:*')
-   * @returns {Promise<number>} - Number of keys deleted
-   */
+
   async delPattern(pattern) {
     try {
       if (!this.isConnected) {
@@ -154,11 +135,6 @@ class RedisCache {
     }
   }
 
-  /**
-   * Check if key exists in cache
-   * @param {string} key - Cache key
-   * @returns {Promise<boolean>}
-   */
   async exists(key) {
     try {
       if (!this.isConnected) {
@@ -173,11 +149,6 @@ class RedisCache {
     }
   }
 
-  /**
-   * Get remaining TTL for a key
-   * @param {string} key - Cache key
-   * @returns {Promise<number>} - TTL in seconds, -1 if no expiry, -2 if key doesn't exist
-   */
   async ttl(key) {
     try {
       if (!this.isConnected) {
@@ -191,12 +162,6 @@ class RedisCache {
     }
   }
 
-  /**
-   * Set expiration time for a key
-   * @param {string} key - Cache key
-   * @param {number} seconds - Expiration time in seconds
-   * @returns {Promise<boolean>}
-   */
   async expire(key, seconds) {
     try {
       if (!this.isConnected) {
@@ -211,12 +176,7 @@ class RedisCache {
     }
   }
 
-  /**
-   * Increment numeric value
-   * @param {string} key - Cache key
-   * @param {number} amount - Amount to increment (default: 1)
-   * @returns {Promise<number>} - New value after increment
-   */
+
   async incr(key, amount = 1) {
     try {
       if (!this.isConnected) {
@@ -234,12 +194,7 @@ class RedisCache {
     }
   }
 
-  /**
-   * Decrement numeric value
-   * @param {string} key - Cache key
-   * @param {number} amount - Amount to decrement (default: 1)
-   * @returns {Promise<number>} - New value after decrement
-   */
+
   async decr(key, amount = 1) {
     try {
       if (!this.isConnected) {

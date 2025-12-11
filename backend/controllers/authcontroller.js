@@ -2,57 +2,55 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { validationResult } from 'express-validator';
 import prisma from '../config/prisma.js';
+
+// Validate JWT_SECRET exists
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be set and at least 32 characters long');
+}
 
 // Configure email transporter
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_APP_PASSWORD, // Use app password for Gmail
+    pass: process.env.EMAIL_APP_PASSWORD,
   },
 });
 
+// Helper function to generate secure random code
+const generateSecureCode = () => {
+  return crypto.randomInt(100000, 999999).toString();
+};
+
+// Helper function to handle validation errors
+const handleValidationErrors = (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array().map(err => ({
+        field: err.path,
+        message: err.msg,
+      })),
+    });
+  }
+  return null;
+};
+
+// Dummy hash for timing attack prevention
+const DUMMY_HASH = '$2a$10$YourDummyHashHereToPreventTimingAttacks1234567890';
+
 export const signup = async (req, res) => {
+  // Check validation errors
+  const validationError = handleValidationErrors(req, res);
+  if (validationError) return;
+
   const { email, phone, firstName, lastName, password, role = 'BUYER' } = req.body;
 
   try {
-    // Validate required fields
-    if (!email || !phone || !firstName || !lastName || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'All fields are required',
-      });
-    }
-
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid email format',
-      });
-    }
-
-    // Validate phone number (adjust regex as needed for your region)
-    const phoneRegex = /^\+?[\d\s\-\(\)]{10,}$/;
-    if (!phoneRegex.test(phone)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid phone number format',
-      });
-    }
-
-    // Validate role
-    const validRoles = ['BUYER', 'SELLER', 'ADMIN'];
-    if (!validRoles.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid role. Must be BUYER, SELLER, or ADMIN',
-      });
-    }
-
     // Check if user already exists
     const existingUser = await prisma.user.findFirst({
       where: {
@@ -64,18 +62,22 @@ export const signup = async (req, res) => {
     });
 
     if (existingUser) {
-      return res.status(409).json({
+      // Generic message to prevent email enumeration
+      return res.status(400).json({
         success: false,
-        message: 'User with this email or phone already exists',
+        message: 'Unable to create account. Please check your information.',
       });
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Hash the password with higher cost factor
+    const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Generate verification code
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const verificationExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+    // Generate secure verification code
+    const verificationCode = generateSecureCode();
+    const verificationExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+    // Hash the verification code before storing
+    const hashedVerificationCode = await bcrypt.hash(verificationCode, 10);
 
     // Create user with PENDING verification status
     const user = await prisma.user.create({
@@ -87,9 +89,10 @@ export const signup = async (req, res) => {
         role,
         password: hashedPassword,
         verificationStatus: 'PENDING',
-        verificationCode,
+        verificationCode: hashedVerificationCode,
         verificationExpiry,
-        points: role === 'BUYER' ? 50 : 0, // Award 50 points to buyers
+        points: role === 'BUYER' ? 50 : 0,
+        failedLoginAttempts: 0,
       },
     });
 
@@ -124,58 +127,79 @@ export const signup = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'User created successfully. Please check your email for verification code.',
-      user: userWithoutSensitiveData,
+      user: {
+        id: userWithoutSensitiveData.id,
+        email: userWithoutSensitiveData.email,
+        firstName: userWithoutSensitiveData.firstName,
+        lastName: userWithoutSensitiveData.lastName,
+        role: userWithoutSensitiveData.role,
+      },
     });
 
   } catch (error) {
     console.error('Signup error:', error);
     
     if (error.code === 'P2002') {
-      // Unique constraint violation
-      return res.status(409).json({
+      return res.status(400).json({
         success: false,
-        message: 'User with this email or phone already exists',
+        message: 'Unable to create account. Please check your information.',
       });
     }
 
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
 export const verifyEmail = async (req, res) => {
+  const validationError = handleValidationErrors(req, res);
+  if (validationError) return;
+
   const { email, code } = req.body;
 
   try {
-    if (!email || !code) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and verification code are required',
-      });
-    }
-
     // Find user with pending verification
     const user = await prisma.user.findFirst({
       where: {
         email: email.toLowerCase(),
         verificationStatus: 'PENDING',
         verificationExpiry: {
-          gte: new Date(), // Not expired
+          gte: new Date(),
         },
       },
     });
 
-    if (!user) {
-      return res.status(404).json({
+    if (!user || !user.verificationCode) {
+      return res.status(400).json({
         success: false,
         message: 'Invalid or expired verification code',
       });
     }
 
-    if (user.verificationCode !== code) {
+    // Check if user has too many failed verification attempts
+    if (user.failedVerificationAttempts >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many failed attempts. Please request a new verification code.',
+      });
+    }
+
+    // Compare hashed verification code
+    const isCodeValid = await bcrypt.compare(code, user.verificationCode);
+
+    if (!isCodeValid) {
+      // Increment failed attempts
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedVerificationAttempts: {
+            increment: 1,
+          },
+        },
+      });
+
       return res.status(400).json({
         success: false,
         message: 'Invalid verification code',
@@ -190,6 +214,7 @@ export const verifyEmail = async (req, res) => {
         isVerified: true,
         verificationCode: null,
         verificationExpiry: null,
+        failedVerificationAttempts: 0,
       },
     });
 
@@ -203,22 +228,17 @@ export const verifyEmail = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
 export const resendVerificationCode = async (req, res) => {
+  const validationError = handleValidationErrors(req, res);
+  if (validationError) return;
+
   const { email } = req.body;
 
   try {
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required',
-      });
-    }
-
     const user = await prisma.user.findFirst({
       where: {
         email: email.toLowerCase(),
@@ -227,22 +247,33 @@ export const resendVerificationCode = async (req, res) => {
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found or already verified',
+      // Generic message to prevent email enumeration
+      return res.status(200).json({
+        success: true,
+        message: 'If an account exists with this email, a new verification code has been sent.',
       });
     }
 
-    // Generate new verification code
-    const newVerificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const newVerificationExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+    // Check if user is rate limited (e.g., requested too recently)
+    if (user.verificationExpiry && user.verificationExpiry > new Date(Date.now() + 8 * 60 * 1000)) {
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait before requesting another code.',
+      });
+    }
 
-    // Update user with new verification code
+    // Generate new secure verification code
+    const newVerificationCode = generateSecureCode();
+    const newVerificationExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    const hashedVerificationCode = await bcrypt.hash(newVerificationCode, 10);
+
+    // Update user with new verification code and reset failed attempts
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        verificationCode: newVerificationCode,
+        verificationCode: hashedVerificationCode,
         verificationExpiry: newVerificationExpiry,
+        failedVerificationAttempts: 0,
       },
     });
 
@@ -262,7 +293,7 @@ export const resendVerificationCode = async (req, res) => {
             </span>
           </div>
           <p>This code will expire in 10 minutes.</p>
-          <p>If you didn't request this, please ignore this email.</p>
+          <p>If you didn't request this, please secure your account immediately.</p>
           <hr style="margin: 20px 0;">
           <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
         </div>
@@ -273,7 +304,7 @@ export const resendVerificationCode = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'New verification code sent successfully',
+      message: 'If an account exists with this email, a new verification code has been sent.',
     });
 
   } catch (error) {
@@ -281,32 +312,17 @@ export const resendVerificationCode = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
 export const login = async (req, res) => {
+  const validationError = handleValidationErrors(req, res);
+  if (validationError) return;
+
   const { email, password } = req.body;
 
   try {
-    // Validate required fields
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and password are required',
-      });
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid email format',
-      });
-    }
-
     // Find user by email
     const user = await prisma.user.findUnique({
       where: {
@@ -314,7 +330,40 @@ export const login = async (req, res) => {
       },
     });
 
-    if (!user) {
+    // Check if account is locked
+    if (user && user.accountLockedUntil && user.accountLockedUntil > new Date()) {
+      const remainingMinutes = Math.ceil((user.accountLockedUntil - new Date()) / 60000);
+      return res.status(429).json({
+        success: false,
+        message: `Account temporarily locked. Please try again in ${remainingMinutes} minutes.`,
+      });
+    }
+
+    // Perform password comparison even if user doesn't exist (timing attack prevention)
+    const isPasswordValid = user 
+      ? await bcrypt.compare(password, user.password)
+      : await bcrypt.compare(password, DUMMY_HASH);
+
+    if (!user || !isPasswordValid) {
+      // Increment failed attempts if user exists
+      if (user) {
+        const newFailedAttempts = (user.failedLoginAttempts || 0) + 1;
+        const updateData = {
+          failedLoginAttempts: newFailedAttempts,
+        };
+
+        // Lock account after 5 failed attempts
+        if (newFailedAttempts >= 5) {
+          updateData.accountLockedUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+          updateData.failedLoginAttempts = 0; // Reset counter
+        }
+
+        await prisma.user.update({
+          where: { id: user.id },
+          data: updateData,
+        });
+      }
+
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
@@ -330,16 +379,6 @@ export const login = async (req, res) => {
       });
     }
 
-    // Compare password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password',
-      });
-    }
-
     // Generate JWT token
     const token = jwt.sign(
       {
@@ -349,15 +388,17 @@ export const login = async (req, res) => {
       },
       process.env.JWT_SECRET,
       {
-        expiresIn: '7d', // Token expires in 7 days
+        expiresIn: '24h', // Shorter expiry for better security
       }
     );
 
-    // Update last login timestamp (optional)
+    // Update last login and reset failed attempts
     await prisma.user.update({
       where: { id: user.id },
       data: {
         lastLogin: new Date(),
+        failedLoginAttempts: 0,
+        accountLockedUntil: null,
       },
     });
 
@@ -368,7 +409,15 @@ export const login = async (req, res) => {
       success: true,
       message: 'Login successful',
       token,
-      user: userWithoutSensitiveData,
+      user: {
+        id: userWithoutSensitiveData.id,
+        email: userWithoutSensitiveData.email,
+        firstName: userWithoutSensitiveData.firstName,
+        lastName: userWithoutSensitiveData.lastName,
+        role: userWithoutSensitiveData.role,
+        points: userWithoutSensitiveData.points,
+        isVerified: userWithoutSensitiveData.isVerified,
+      },
     });
 
   } catch (error) {
@@ -376,18 +425,15 @@ export const login = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
-// Optional: Logout endpoint (for token blacklisting if needed)
 export const logout = async (req, res) => {
   try {
-    // If you're using token blacklisting, add the token to blacklist here
-    // For now, we'll just send a success response
-    // Client should remove the token from storage
-
+    // If implementing token blacklisting, add token to blacklist here
+    // For JWT-based auth, logout is typically handled client-side
+    
     res.status(200).json({
       success: true,
       message: 'Logout successful',
@@ -397,19 +443,26 @@ export const logout = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
-// Optional: Get current user profile
 export const getCurrentUser = async (req, res) => {
   try {
-    // Assuming you have authentication middleware that adds user to req
     const userId = req.user.userId;
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
+      include: {
+        store: {
+          select: {
+            id: true,
+            name: true,
+            url: true,
+            viewCount: true
+          },
+        }
+      }
     });
 
     if (!user) {
@@ -420,7 +473,16 @@ export const getCurrentUser = async (req, res) => {
     }
 
     // Remove sensitive data
-    const { password: _, verificationCode: __, verificationExpiry: ___, ...userWithoutSensitiveData } = user;
+    const { 
+      password: _, 
+      verificationCode: __, 
+      verificationExpiry: ___, 
+      deletionCode: ____, 
+      deletionExpiry: _____,
+      failedLoginAttempts: ______,
+      accountLockedUntil: _______,
+      ...userWithoutSensitiveData 
+    } = user;
 
     res.status(200).json({
       success: true,
@@ -432,26 +494,18 @@ export const getCurrentUser = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
-// Request account deletion (with password confirmation)
 export const requestAccountDeletion = async (req, res) => {
+  const validationError = handleValidationErrors(req, res);
+  if (validationError) return;
+
   const { password } = req.body;
-  const userId = req.user.userId; // From authentication middleware
+  const userId = req.user.userId;
 
   try {
-    // Validate password is provided
-    if (!password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password is required to delete account',
-      });
-    }
-
-    // Get user from database
     const user = await prisma.user.findUnique({
       where: { id: userId },
     });
@@ -473,15 +527,16 @@ export const requestAccountDeletion = async (req, res) => {
       });
     }
 
-    // Generate deletion confirmation code
-    const deletionCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const deletionExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    // Generate secure deletion confirmation code
+    const deletionCode = generateSecureCode();
+    const deletionExpiry = new Date(Date.now() + 15 * 60 * 1000);
+    const hashedDeletionCode = await bcrypt.hash(deletionCode, 10);
 
     // Update user with deletion code
     await prisma.user.update({
       where: { id: userId },
       data: {
-        deletionCode,
+        deletionCode: hashedDeletionCode,
         deletionExpiry,
       },
     });
@@ -503,7 +558,7 @@ export const requestAccountDeletion = async (req, res) => {
           </div>
           <p><strong>Warning:</strong> This action is permanent and cannot be undone. All your data will be deleted.</p>
           <p>This code will expire in 15 minutes.</p>
-          <p>If you didn't request this, please secure your account immediately and ignore this email.</p>
+          <p>If you didn't request this, please secure your account immediately.</p>
           <hr style="margin: 20px 0;">
           <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
         </div>
@@ -522,48 +577,51 @@ export const requestAccountDeletion = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
-// Confirm and delete account
 export const confirmAccountDeletion = async (req, res) => {
+  const validationError = handleValidationErrors(req, res);
+  if (validationError) return;
+
   const { code } = req.body;
   const userId = req.user.userId;
 
   try {
-    if (!code) {
-      return res.status(400).json({
-        success: false,
-        message: 'Confirmation code is required',
-      });
-    }
-
     // Find user with valid deletion code
     const user = await prisma.user.findFirst({
       where: {
         id: userId,
-        deletionCode: code,
         deletionExpiry: {
-          gte: new Date(), // Not expired
+          gte: new Date(),
         },
       },
     });
 
-    if (!user) {
+    if (!user || !user.deletionCode) {
       return res.status(400).json({
         success: false,
         message: 'Invalid or expired confirmation code',
       });
     }
 
-    // Delete user and all related data (cascade delete based on your Prisma schema)
+    // Compare hashed deletion code
+    const isCodeValid = await bcrypt.compare(code, user.deletionCode);
+
+    if (!isCodeValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid confirmation code',
+      });
+    }
+
+    // Delete user and all related data
     await prisma.user.delete({
       where: { id: userId },
     });
 
-    // Send goodbye email (optional)
+    // Send goodbye email
     try {
       const mailOptions = {
         from: process.env.EMAIL_USER,
@@ -586,7 +644,6 @@ export const confirmAccountDeletion = async (req, res) => {
       await transporter.sendMail(mailOptions);
     } catch (emailError) {
       console.error('Failed to send goodbye email:', emailError);
-      // Don't fail the deletion if email fails
     }
 
     res.status(200).json({
@@ -599,12 +656,10 @@ export const confirmAccountDeletion = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
-// Cancel account deletion request
 export const cancelAccountDeletion = async (req, res) => {
   const userId = req.user.userId;
 
@@ -639,7 +694,6 @@ export const cancelAccountDeletion = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };

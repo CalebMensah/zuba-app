@@ -619,6 +619,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 20,
   },
   loadingContainer: {
     flex: 1,

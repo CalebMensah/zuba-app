@@ -99,7 +99,7 @@ const RedeemPointsScreen = () => {
         <View style={styles.pointsRow}>
           <Text style={styles.pointsLabel}>Available Points</Text>
           <Text style={styles.pointsValue}>
-            {balance?.points.toLocaleString() || '0'}
+            {(balance?.points ?? 0).toLocaleString()}
           </Text>
         </View>
 
@@ -108,14 +108,14 @@ const RedeemPointsScreen = () => {
         <View style={styles.pointsRow}>
           <Text style={styles.pointsLabel}>Cash Equivalent</Text>
           <Text style={styles.cedisValue}>
-            GHS {balance?.cedisEquivalent.toFixed(2) || '0.00'}
+            GHS {(balance?.cedisEquivalent ?? 0).toFixed(2)}
           </Text>
         </View>
 
         <View style={styles.conversionNote}>
           <Ionicons name="information-circle" size={16} color={Colors.info} />
           <Text style={styles.conversionText}>
-            1 Point = GHS {balance?.conversionRate.toFixed(2) || '1.00'}
+            1 Point = GHS {(balance?.conversionRate ?? 1).toFixed(2)}
           </Text>
         </View>
       </View>
@@ -173,7 +173,7 @@ const RedeemPointsScreen = () => {
               </Text>
             </View>
             <Text style={styles.cedisPrice}>
-              GHS {item.price.toFixed(2)}
+              GHS {(item.price ?? 0).toFixed(2)}
             </Text>
           </View>
 

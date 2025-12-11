@@ -687,7 +687,7 @@ export const getPendingDisputes = async (req, res) => {
               email: true
             }
           },
-          sellerId: {
+          seller: {
             select: {
               id: true,
               firstName: true,
@@ -852,4 +852,128 @@ export const getCategoryPerformance = async (req, res) => {
   }
 };
 
+export const getCommissionStats = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const periods = {
+      last30Days: new Date(now.setDate(now.getDate() - 30)),
+      last90Days: new Date(now.setDate(now.getDate() - 90)),
+      last6Months: new Date(now.setMonth(now.getMonth() - 6)),
+      last1Year: new Date(now.setFullYear(now.getFullYear() - 1)),
+    };
+
+    // Helper function to sum commission for a date range
+    const sumCommission = async (fromDate) => {
+      const total = await prisma.order.aggregate({
+        _sum: { commissionTotal: true },
+        where: { createdAt: { gte: fromDate } },
+      });
+
+      return total._sum.commission || 0;
+    };
+
+    const result = {
+      last30Days: await sumCommission(periods.last30Days),
+      last90Days: await sumCommission(periods.last90Days),
+      last6Months: await sumCommission(periods.last6Months),
+      last1Year: await sumCommission(periods.last1Year),
+
+      // all-time commission
+      allTime: await sumCommission(new Date(0)),
+    };
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const getCommissionTrend = async (req, res) => {
+  try {
+    const { range = "30", category } = req.query;
+
+    let days = parseInt(range);
+
+    const now = new Date();
+
+    let startDate;
+
+    if (days === 365) {
+      startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+    } else {
+      startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    }
+
+    // BASE WHERE CLAUSE
+    const whereClause = {
+      createdAt: {
+        gte: startDate,
+      },
+    };
+
+    // APPLY CATEGORY FILTER IF PROVIDED
+    if (category) {
+      whereClause.items = {
+        some: {
+          product: {
+            category: category,
+          },
+        },
+      };
+    }
+
+    let data;
+
+    // CASE 1: 1 YEAR → GROUP BY MONTH
+
+    if (days === 365) {
+      data = await prisma.order.groupBy({
+        by: ["createdAt"],
+        _sum: { commissionTotal: true },
+        where: whereClause,
+        orderBy: { createdAt: "asc" },
+      });
+
+      // Format into MONTH buckets
+      const monthlyMap = {};
+
+      data.forEach((item) => {
+        const d = item.createdAt;
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+        if (!monthlyMap[key]) monthlyMap[key] = 0;
+        monthlyMap[key] += item._sum.commissionTotal || 0;
+      });
+
+      const formatted = Object.entries(monthlyMap).map(([month, total]) => ({
+        date: month, // YYYY-MM
+        totalCommission: total,
+      }));
+
+      return res.json({ success: true, data: formatted });
+    }
+
+    // CASE 2: 7, 30, 90 DAYS → GROUP BY DAY
+ 
+    data = await prisma.order.groupBy({
+      by: ["createdAt"],
+      _sum: { commissionTotal: true },
+      where: whereClause,
+      orderBy: { createdAt: "asc" },
+    });
+
+    const formatted = data.map((item) => ({
+      date: item.createdAt.toISOString().split("T")[0], // YYYY-MM-DD
+      totalCommission: item._sum.commissionTotal || 0,
+    }));
+
+    res.json({ success: true, data: formatted });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 

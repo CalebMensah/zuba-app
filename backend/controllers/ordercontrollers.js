@@ -3,264 +3,332 @@ import { cache } from '../config/redis.js';
 import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
 
+// Constants - Updated Paystack fees
+const PAYSTACK_COLLECTION_PERCENT = 1.95;  // 1.95% for collecting payments FROM buyers
+const PAYSTACK_TRANSFER_MOBILE_MONEY = 1.00;  // GHS 1 for transferring TO seller via mobile money
+const PAYSTACK_TRANSFER_BANK = 8.00;  
+
+// Utility: Calculate Paystack fee based on payment method
+function calculatePaystackCollectionFee(amount) {
+  const percentFee = amount * (PAYSTACK_COLLECTION_PERCENT / 100);
+  return parseFloat(percentFee.toFixed(2));
+}
+
+function getTransferFee(payoutMethod = 'mobile_money') {
+  return payoutMethod === 'bank' ? PAYSTACK_TRANSFER_BANK : PAYSTACK_TRANSFER_MOBILE_MONEY;
+}
+
+
 export const createOrder = async (req, res) => {
   try {
     const buyerId = req.user.userId;
     const { 
-      storeId, 
       items, 
       deliveryInfo,
       billingInfo,
-      totalAmount,
-      subtotal,
       deliveryFee = 0,
       taxAmount = 0,
       discount = 0,
       currency = "GHS",
-      paymentMethod,
       paymentProvider,
       promoCode,
       buyerEmail,
       buyerPhone,
       sameAsDelivery = true,
-      checkoutSession // NEW: Checkout session identifier
+      checkoutSession
     } = req.body;
 
-    if (!storeId || !Array.isArray(items) || items.length === 0 || !totalAmount || totalAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'storeId, items (non-empty array), and totalAmount are required.'
-      });
+    // --- VALIDATION ---
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'Items (non-empty array) are required.' });
     }
-
-    if (!subtotal || subtotal <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'subtotal is required and must be greater than 0.'
-      });
+    if (!deliveryInfo || !deliveryInfo.recipient || !deliveryInfo.phone || !deliveryInfo.address || !deliveryInfo.city || !deliveryInfo.region) {
+      return res.status(400).json({ success: false, message: 'Delivery info must include recipient, phone, address, city, and region.' });
     }
-
-    for (const item of items) {
-      if (!item.productId || !item.quantity || item.quantity <= 0 || !item.price || item.price < 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Each item must have productId, quantity (positive), and price (non-negative).'
-        });
-      }
-    }
-
-    if (!deliveryInfo || !deliveryInfo.recipient || !deliveryInfo.phone || 
-        !deliveryInfo.address || !deliveryInfo.city || !deliveryInfo.region) {
-      return res.status(400).json({
-        success: false,
-        message: 'Delivery info must include recipient, phone, address, city, and region.'
-      });
-    }
-
     if (!sameAsDelivery && billingInfo) {
-      if (!billingInfo.fullName || !billingInfo.email || !billingInfo.phone || 
-          !billingInfo.address || !billingInfo.city || !billingInfo.region) {
-        return res.status(400).json({
-          success: false,
-          message: 'Billing info must include fullName, email, phone, address, city, and region.'
-        });
+      if (!billingInfo.fullName || !billingInfo.email || !billingInfo.phone || !billingInfo.address || !billingInfo.city || !billingInfo.region) {
+        return res.status(400).json({ success: false, message: 'Billing info must include fullName, email, phone, address, city, and region.' });
       }
     }
 
-    const productDetails = [];
-    for (const item of items) {
-      const product = await prisma.product.findUnique({
-        where: { id: item.productId }
-      });
-
-      if (!product) {
-        return res.status(400).json({
-          success: false,
-          message: `Product with ID ${item.productId} not found.`
-        });
+    // --- FETCH PRODUCTS & GROUP BY SELLER ---
+    const products = await prisma.product.findMany({
+      where: { id: { in: items.map(i => i.productId) } },
+      include: { 
+        store: { 
+          select: { 
+            id: true, 
+            userId: true,
+            user: {
+              select: {
+                payoutPreference: true  // Get seller's payout preference
+              }
+            }
+          } 
+        } 
       }
-
-      if (product.stock < item.quantity) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient stock for product "${product.name}". Requested: ${item.quantity}, Available: ${product.stock}`
-        });
-      }
-
-      productDetails.push({ product, quantity: item.quantity });
-    }
-
-    const store = await prisma.store.findUnique({
-      where: { id: storeId },
-      include: { user: { select: { id: true, email: true, firstName: true } } }
     });
 
-    if (!store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found.'
+    const sellerItemsMap = {};
+    const commissionRate = 0.03; // 3% commission
+
+    for (const item of items) {
+      const product = products.find(p => p.id === item.productId);
+      if (!product) return res.status(400).json({ success: false, message: `Product with ID ${item.productId} not found.` });
+      if (product.stock < item.quantity) return res.status(400).json({ success: false, message: `Insufficient stock for product "${product.name}".` });
+
+      const sellerId = product.store.userId;
+      if (!sellerItemsMap[sellerId]) {
+        sellerItemsMap[sellerId] = {
+          items: [],
+          payoutPreference: product.store.user?.payoutPreference || 'mobile_money'
+        };
+      }
+      
+      const total = item.quantity * item.price;
+      const commission = parseFloat((total * commissionRate).toFixed(2));
+      const sellerPayout = parseFloat((total - commission).toFixed(2));
+
+      sellerItemsMap[sellerId].items.push({
+        productId: item.productId,
+        quantity: item.quantity,
+        price: item.price,
+        total,
+        commission,
+        sellerPayout,
+        storeId: product.store.id
       });
     }
 
-    const order = await prisma.$transaction(async (tx) => {
-      const newOrder = await tx.order.create({
-        data: {
-          buyerId,
-          storeId,
-          totalAmount,
-          subtotal,
-          deliveryFee,
-          taxAmount,
-          discount,
-          currency,
-          paymentMethod: paymentMethod || null,
-          paymentProvider: paymentProvider || null,
-          promoCode: promoCode || null,
-          buyerEmail: buyerEmail || null,
-          buyerPhone: buyerPhone || null,
-          checkoutSession: checkoutSession || null, // NEW: Store checkout session
-          items: {
-            create: items.map(item => ({
-              productId: item.productId,
-              quantity: item.quantity,
-              price: item.price,
-              total: item.quantity * item.price
-            }))
-          },
-          deliveryInfo: {
-            create: {
-              recipient: deliveryInfo.recipient,
-              phone: deliveryInfo.phone,
-              email: deliveryInfo.email || null,
-              address: deliveryInfo.address,
-              city: deliveryInfo.city,
-              region: deliveryInfo.region,
-              country: deliveryInfo.country || "Ghana",
-              postalCode: deliveryInfo.postalCode || null,
-              deliveryType: deliveryInfo.deliveryType || "STANDARD",
-              deliveryFee: deliveryFee,
-              deliveryInstructions: deliveryInfo.deliveryInstructions || null,
-              preferredDeliveryDate: deliveryInfo.preferredDeliveryDate 
-                ? new Date(deliveryInfo.preferredDeliveryDate) 
-                : null,
-              preferredDeliveryTime: deliveryInfo.preferredDeliveryTime || null,
-              notes: deliveryInfo.notes || null
-            }
-          },
-          billingInfo: !sameAsDelivery && billingInfo ? {
-            create: {
-              fullName: billingInfo.fullName,
-              email: billingInfo.email,
-              phone: billingInfo.phone,
-              address: billingInfo.address,
-              city: billingInfo.city,
-              region: billingInfo.region,
-              country: billingInfo.country || "Ghana",
-              postalCode: billingInfo.postalCode || null
-            }
-          } : undefined,
-          statusHistory: {
-            create: {
-              oldStatus: null,
-              newStatus: 'PENDING',
-              changedBy: buyerId,
-              reason: 'Order created'
-            }
-          }
-        },
-        include: {
-          items: {
-            include: {
-              product: true
-            }
-          },
-          deliveryInfo: true,
-          billingInfo: true,
-          buyer: {
-            select: {
-              id: true,
-              firstName: true,
-              email: true
-            }
-          },
-          store: {
-            select: {
-              id: true,
-              name: true,
-              url: true
-            }
-          }
-        }
-      });
+    const orders = [];
+    const sellerPayouts = [];
 
-      for (const { product, quantity } of productDetails) {
-        await tx.product.update({
-          where: { id: product.id },
+    await prisma.$transaction(async (tx) => {
+      for (const [sellerId, sellerData] of Object.entries(sellerItemsMap)) {
+        const sellerItems = sellerData.items;
+        const payoutPreference = sellerData.payoutPreference;
+        
+        const commissionTotal = sellerItems.reduce((sum, i) => sum + i.commission, 0);
+        const sellerSubtotal = sellerItems.reduce((sum, i) => sum + i.total, 0);
+        const payoutAmount = sellerItems.reduce((sum, i) => sum + i.sellerPayout, 0);
+        const storeId = sellerItems[0].storeId;
+
+        // --- Compute order subtotal (items + delivery + tax - discount) ---
+        const orderSubtotal = sellerSubtotal + deliveryFee + taxAmount - discount;
+        
+        // --- Compute Paystack COLLECTION fee (buyer pays this when paying) ---
+        const paystackCollectionFee = calculatePaystackCollectionFee(orderSubtotal);
+        
+        // --- Buyer total = order subtotal + Paystack collection fee ---
+        const buyerTotalAmount = parseFloat((orderSubtotal + paystackCollectionFee).toFixed(2));
+
+        // --- Get transfer fee (platform pays this when paying seller later) ---
+        const transferFee = getTransferFee(payoutPreference);
+        
+        // --- Net seller payout (what seller actually receives after transfer fee) ---
+        const netSellerPayout = parseFloat((payoutAmount - transferFee).toFixed(2));
+
+        // --- CREATE ORDER ---
+        const order = await tx.order.create({
           data: {
-            stock: {
-              decrement: quantity
+            buyerId,
+            storeId,
+            totalAmount: orderSubtotal,       // Order subtotal (before collection fee)
+            subtotal: sellerSubtotal,         // Items subtotal only
+            deliveryFee,
+            taxAmount,
+            discount,
+            currency,
+            paymentProvider: paymentProvider || null,
+            promoCode: promoCode || null,
+            buyerEmail: buyerEmail || null,
+            buyerPhone: buyerPhone || null,
+            checkoutSession: checkoutSession || null,
+            commissionTotal,
+            paystackFee: paystackCollectionFee,  // Collection fee (buyer pays)
+            commissionRate,
+            sellerPayoutPreference: payoutPreference,  // Store seller's payout preference
+            transferFee,                       // Transfer fee (platform pays later)
+            items: { 
+              create: sellerItems.map(item => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                price: item.price,
+                sellerPayout: item.sellerPayout  // Gross payout (before transfer fee)
+              }))
             },
-            quantityBought: {
-              increment: quantity
+            deliveryInfo: {
+              create: {
+                recipient: deliveryInfo.recipient,
+                phone: deliveryInfo.phone,
+                email: deliveryInfo.email || null,
+                address: deliveryInfo.address,
+                city: deliveryInfo.city,
+                region: deliveryInfo.region,
+                country: deliveryInfo.country || "Ghana",
+                postalCode: deliveryInfo.postalCode || null,
+                deliveryType: deliveryInfo.deliveryType || "STANDARD",
+                deliveryFee,
+                deliveryInstructions: deliveryInfo.deliveryInstructions || null,
+                preferredDeliveryDate: deliveryInfo.preferredDeliveryDate ? new Date(deliveryInfo.preferredDeliveryDate) : null,
+                preferredDeliveryTime: deliveryInfo.preferredDeliveryTime || null,
+                notes: deliveryInfo.notes || null
+              }
+            },
+            billingInfo: !sameAsDelivery && billingInfo ? {
+              create: {
+                fullName: billingInfo.fullName,
+                email: billingInfo.email,
+                phone: billingInfo.phone,
+                address: billingInfo.address,
+                city: billingInfo.city,
+                region: billingInfo.region,
+                country: billingInfo.country || "Ghana",
+                postalCode: billingInfo.postalCode || null
+              }
+            } : undefined,
+            statusHistory: {
+              create: {
+                oldStatus: null,
+                newStatus: 'PENDING',
+                changedBy: buyerId,
+                reason: 'Order created'
+              }
+            }
+          },
+          include: { items: true, store: true }
+        });
+
+        orders.push(order);
+
+        // --- CREATE PAYMENT ---
+        const payment = await tx.payment.create({
+          data: {
+            orderId: order.id,
+            amount: buyerTotalAmount,        // Total buyer pays (subtotal + collection fee)
+            currency: order.currency,
+            gateway: paymentProvider || 'manual',
+            gatewayRef: checkoutSession || null,
+            gatewayStatus: 'PENDING',
+            status: 'PENDING',
+            metadata: {
+              orderSubtotal,
+              commissionTotal,
+              grossSellerPayout: payoutAmount,  // Before transfer fee
+              netSellerPayout,                  // After transfer fee
+              paystackCollectionFee,
+              transferFee,
+              payoutPreference
             }
           }
         });
-      }
 
-      return newOrder;
+        // --- CREATE ESCROW ---
+        const releaseDate = new Date();
+        releaseDate.setDate(releaseDate.getDate() + 4);
+
+        await tx.escrow.create({
+          data: {
+            orderId: order.id,
+            paymentId: payment.id,
+            amountHeld: netSellerPayout,     // Net seller payout (after transfer fee)
+            currency: order.currency,
+            releaseDate,
+            releaseStatus: 'PENDING'
+          }
+        });
+
+        sellerPayouts.push({
+          sellerId,
+          orderId: order.id,
+          orderSubtotal,
+          paystackCollectionFee,
+          buyerTotalAmount,
+          totalRevenue: sellerSubtotal,
+          commissionTotal,
+          grossPayoutAmount: payoutAmount,
+          transferFee,
+          netPayoutAmount: netSellerPayout,
+          payoutPreference
+        });
+
+        // --- UPDATE STOCK ---
+        for (const item of sellerItems) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              stock: { decrement: item.quantity },
+              quantityBought: { increment: item.quantity }
+            }
+          });
+        }
+      }
     });
 
-    try {
-      const sellerId = store.user.id;
-      const sellerName = store.user.firstName;
-      const buyerName = order.buyer.firstName;
-      const storeName = order.store.name;
-      const orderId = order.id;
+    // --- NOTIFICATIONS & CACHE CLEAR ---
+    for (const order of orders) {
+      try {
+        const storeUser = await prisma.user.findUnique({ where: { id: order.store.userId } });
+        await sendNotification(
+          storeUser.id,
+          'New Order Received',
+          `You have a new order (#${order.id}) from ${req.user.firstName}.`,
+          'order_created',
+          { orderId: order.id, buyerId, buyerName: req.user.firstName }
+        );
 
-      await sendNotification(
-        sellerId,
-        'New Order Received',
-        `You have a new order (#${orderId}) from ${buyerName} for ${storeName}.`,
-        'ORDER_CREATED',
-        { orderId, buyerId, buyerName }
-      );
+        await sendEmailNotification({
+          to: storeUser.email,
+          toName: storeUser.firstName,
+          subject: `New Order (#${order.id}) Received`,
+          template: 'generic',
+          templateData: {
+            title: 'New Order Alert!',
+            message: `You have a new order (#${order.id}) from ${req.user.firstName}. Please check your dashboard to process it.`,
+            ctaText: 'View Order',
+            ctaUrl: `${process.env.FRONTEND_URL}/seller/orders/${order.id}`
+          }
+        });
+      } catch (err) {
+        console.error('Notification error:', err);
+      }
+    }
 
-      await sendEmailNotification({
-        to: store.user.email,
-        toName: sellerName,
-        subject: `New Order Received (#${orderId}) from ${buyerName}`,
-        template: 'generic',
-        templateData: {
-          title: 'New Order Alert!',
-          message: `You have a new order (#${orderId}) from ${buyerName}. Please check your dashboard to review and process it.`,
-          ctaText: 'View Order',
-          ctaUrl: `${process.env.FRONTEND_URL}/seller/orders/${orderId}` 
-        }
-      });
-    } catch (notificationError) {
-      console.error('Error sending notification/email for new order:', notificationError);
+    // --- CLEAR CACHE ---
+    await cache.del(`user:${buyerId}:orders`);
+    for (const sellerData of Object.values(sellerItemsMap)) {
+      for (const item of sellerData.items) await cache.del(`product:url:${item.productId}`);
+      await cache.del(`store:slug:${sellerData.items[0].storeId}`);
     }
-  
-    await cache.del(`user:${buyerId}:orders`); 
-    await cache.del(`store:${storeId}:orders`);
-    
-    for (const item of items) {
-      await cache.del(`product:url:${item.productId}`);
-    }
-    await cache.del(`store:slug:${order.store.url}`);
 
     res.status(201).json({
       success: true,
-      message: 'Order created successfully.',
-      data: order
+      message: 'Orders, payments, and escrow created successfully.',
+      data: {
+        orders: orders.map(order => ({
+          ...order,
+          buyerTotalAmount: order.totalAmount + order.paystackFee,
+          breakdown: {
+            subtotal: order.subtotal,
+            deliveryFee: order.deliveryFee,
+            taxAmount: order.taxAmount,
+            discount: order.discount,
+            orderSubtotal: order.totalAmount,
+            paystackCollectionFee: order.paystackFee,
+            buyerTotal: order.totalAmount + order.paystackFee,
+            commissionTotal: order.commissionTotal,
+            transferFee: order.transferFee,
+            grossSellerPayout: order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0),
+            netSellerPayout: order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0) - order.transferFee
+          }
+        })),
+        sellerPayouts
+      }
     });
+
   } catch (error) {
-    console.error('Error creating order:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
+    console.error('Error creating multi-seller order with escrow:', error);
+    res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
   }
 };
 
@@ -308,7 +376,9 @@ export const getOrderById = async (req, res) => {
             url: true,
             userId: true
           }
-        }
+        },
+        payment: true,
+        escrow: true
       }
     });
 
@@ -326,11 +396,33 @@ export const getOrderById = async (req, res) => {
       });
     }
 
-    await cache.set(cacheKey, order, 300);
+    const grossSellerPayout = order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0);
+    const netSellerPayout = grossSellerPayout - (order.transferFee || 0);
+
+    // Add payment breakdown
+    const orderWithBreakdown = {
+      ...order,
+      buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
+      breakdown: {
+        subtotal: order.subtotal,
+        deliveryFee: order.deliveryFee || 0,
+        taxAmount: order.taxAmount || 0,
+        discount: order.discount || 0,
+        orderSubtotal: order.totalAmount,
+        paystackCollectionFee: order.paystackFee || 0,
+        buyerTotal: order.totalAmount + (order.paystackFee || 0),
+        commissionTotal: order.commissionTotal || 0,
+        transferFee: order.transferFee || 0,
+        grossSellerPayout,
+        netSellerPayout
+      }
+    };
+
+    await cache.set(cacheKey, orderWithBreakdown, 300);
 
     res.status(200).json({
       success: true,
-      data: order
+      data: orderWithBreakdown
     });
 
   } catch (error) {
@@ -345,19 +437,16 @@ export const getOrderById = async (req, res) => {
 
 export const getBuyerOrders = async (req, res) => {
   try {
-    const buyerId = req.user.userId; 
+    const buyerId = req.user.userId;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
     const statusFilter = req.query.status;
 
     const whereClause = { buyerId };
-    if (statusFilter) {
-      whereClause.status = statusFilter;
-    }
+    if (statusFilter) whereClause.status = statusFilter;
 
     const cacheKey = `user:${buyerId}:orders:page:${page}:limit:${limit}:status:${statusFilter || 'all'}`;
-
     const cachedOrders = await cache.get(cacheKey);
     if (cachedOrders) {
       return res.status(200).json({
@@ -375,29 +464,44 @@ export const getBuyerOrders = async (req, res) => {
       include: {
         items: {
           include: {
-            product: {
-              select: { id: true, name: true, images: true }
-            }
+            product: { select: { id: true, name: true, images: true, price: true } }
           }
         },
-        deliveryInfo: {
-          select: { status: true, trackingNumber: true, deliveryType: true }
-        },
-        store: {
-          select: {
-            id: true,
-            name: true,
-            url: true,
-            logo: true
-          }
-        }
+        deliveryInfo: { select: { status: true, trackingNumber: true, deliveryType: true } },
+        store: { select: { id: true, name: true, url: true, logo: true } },
+        payment: true,
+        escrow: true
       }
+    });
+
+    // Include payment breakdown for each order
+    const ordersWithBreakdown = orders.map(order => {
+      const grossSellerPayout = order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0);
+      const netSellerPayout = grossSellerPayout - (order.transferFee || 0);
+      
+      return {
+        ...order,
+        buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
+        breakdown: {
+          subtotal: order.subtotal,
+          deliveryFee: order.deliveryFee || 0,
+          taxAmount: order.taxAmount || 0,
+          discount: order.discount || 0,
+          orderSubtotal: order.totalAmount,
+          paystackCollectionFee: order.paystackFee || 0,
+          buyerTotal: order.totalAmount + (order.paystackFee || 0),
+          commissionTotal: order.commissionTotal || 0,
+          transferFee: order.transferFee || 0,
+          grossSellerPayout,
+          netSellerPayout
+        }
+      };
     });
 
     const total = await prisma.order.count({ where: whereClause });
 
     const resultData = {
-      orders,
+      orders: ordersWithBreakdown,
       pagination: {
         page,
         limit,
@@ -446,12 +550,9 @@ export const getSellerOrders = async (req, res) => {
     const storeId = sellerStore.id;
 
     const whereClause = { storeId };
-    if (statusFilter) {
-      whereClause.status = statusFilter;
-    }
+    if (statusFilter) whereClause.status = statusFilter;
 
     const cacheKey = `store:${storeId}:orders:page:${page}:limit:${limit}:status:${statusFilter || 'all'}`;
-
     const cachedOrders = await cache.get(cacheKey);
     if (cachedOrders) {
       return res.status(200).json({
@@ -469,28 +570,44 @@ export const getSellerOrders = async (req, res) => {
       include: {
         items: {
           include: {
-            product: {
-              select: { id: true, name: true, images: true }
-            }
+            product: { select: { id: true, name: true, images: true, price: true } }
           }
         },
-        deliveryInfo: {
-          select: { status: true, trackingNumber: true, deliveryType: true }
-        },
-        buyer: {
-          select: {
-            id: true,
-            firstName: true,
-            email: true
-          }
-        }
+        deliveryInfo: { select: { status: true, trackingNumber: true, deliveryType: true } },
+        buyer: { select: { id: true, firstName: true, email: true } },
+        payment: true,
+        escrow: true
       }
+    });
+
+    // Add breakdown including seller-specific info
+    const ordersWithBreakdown = orders.map(order => {
+      const grossSellerPayout = order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0);
+      const netSellerPayout = grossSellerPayout - (order.transferFee || 0);
+      
+      return {
+        ...order,
+        buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
+        breakdown: {
+          subtotal: order.subtotal,
+          deliveryFee: order.deliveryFee || 0,
+          taxAmount: order.taxAmount || 0,
+          discount: order.discount || 0,
+          orderSubtotal: order.totalAmount,
+          paystackCollectionFee: order.paystackFee || 0,
+          buyerTotal: order.totalAmount + (order.paystackFee || 0),
+          commissionTotal: order.commissionTotal || 0,
+          transferFee: order.transferFee || 0,
+          grossSellerPayout,
+          netSellerPayout
+        }
+      };
     });
 
     const total = await prisma.order.count({ where: whereClause });
 
     const resultData = {
-      orders,
+      orders: ordersWithBreakdown,
       pagination: {
         page,
         limit,
@@ -516,7 +633,6 @@ export const getSellerOrders = async (req, res) => {
   }
 };
 
-// NEW: Get order by checkout session
 export const getOrderByCheckoutSession = async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -543,7 +659,7 @@ export const getOrderByCheckoutSession = async (req, res) => {
     const order = await prisma.order.findFirst({
       where: { 
         checkoutSession: sessionId,
-        buyerId: userId // Ensure user can only access their own orders
+        buyerId: userId
       },
       include: {
         items: {
@@ -573,7 +689,9 @@ export const getOrderByCheckoutSession = async (req, res) => {
             url: true,
             logo: true
           }
-        }
+        },
+        payment: true,
+        escrow: true
       }
     });
 
@@ -584,11 +702,29 @@ export const getOrderByCheckoutSession = async (req, res) => {
       });
     }
 
-    await cache.set(cacheKey, order, 600);
+    const orderWithBreakdown = {
+      ...order,
+      buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
+        breakdown: {
+          subtotal: order.subtotal,
+          deliveryFee: order.deliveryFee || 0,
+          taxAmount: order.taxAmount || 0,
+          discount: order.discount || 0,
+          orderSubtotal: order.totalAmount,
+          paystackCollectionFee: order.paystackFee || 0,
+          buyerTotal: order.totalAmount + (order.paystackFee || 0),
+          commissionTotal: order.commissionTotal || 0,
+          transferFee: order.transferFee || 0,
+          grossSellerPayout,
+          netSellerPayout
+        }
+    };
+
+    await cache.set(cacheKey, orderWithBreakdown, 600);
 
     res.status(200).json({
       success: true,
-      data: order
+      data: orderWithBreakdown
     });
 
   } catch (error) {
@@ -601,7 +737,6 @@ export const getOrderByCheckoutSession = async (req, res) => {
   }
 };
 
-// NEW: Update order with checkout session (useful for payment webhooks)
 export const updateCheckoutSession = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -643,7 +778,6 @@ export const updateCheckoutSession = async (req, res) => {
       data: updateData
     });
 
-    // Invalidate relevant caches
     await cache.del(`order:${orderId}:user:${order.buyerId}`);
     await cache.del(`order:${orderId}:user:${order.store.userId}`);
     await cache.del(`user:${order.buyerId}:orders`);
@@ -698,7 +832,10 @@ export const updateOrderStatus = async (req, res) => {
         },
         deliveryInfo: {
           select: { trackingNumber: true, trackingUrl: true, estimatedDelivery: true }
-        }
+        },
+        payment: true,
+        escrow: true,
+        items: true
       }
     });
 
@@ -709,7 +846,6 @@ export const updateOrderStatus = async (req, res) => {
       });
     }
   
-
     if (order.store.userId !== userId) {
       return res.status(403).json({
         success: false,
@@ -741,7 +877,8 @@ export const updateOrderStatus = async (req, res) => {
         data: {
           status,
           ...(status === 'DELIVERED' && { deliveredAt: new Date() })
-        }
+        },
+        include: { items: true }
       });
 
       await tx.statusChange.create({
@@ -755,10 +892,7 @@ export const updateOrderStatus = async (req, res) => {
       });
 
       if (status === 'CANCELLED' && order.status !== 'CANCELLED') {
-        const orderItems = await tx.orderItem.findMany({
-          where: { orderId }
-        });
-        for (const item of orderItems) {
+        for (const item of order.items) {
           await tx.product.update({
             where: { id: item.productId },
             data: {
@@ -767,6 +901,39 @@ export const updateOrderStatus = async (req, res) => {
             }
           });
         }
+      }
+
+      if (status === 'DELIVERED' && !order.escrow) {
+        const sellerPayout = order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0);
+        await tx.escrow.create({
+          data: {
+            orderId,
+            paymentId: order.payment?.id,
+            amountHeld: sellerPayout,
+            releaseDate: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000),
+            releaseStatus: 'PENDING'
+          }
+        });
+      }
+
+      if (status === 'COMPLETED' && order.escrow) {
+        await tx.escrow.update({
+          where: { id: order.escrow.id },
+          data: { releasedAt: new Date(), releasedTo: order.store.userId, releaseStatus: 'COMPLETED' }
+        });
+
+        const sellerPayout = order.items.reduce((sum, item) => sum + (item.sellerPayout || 0), 0);
+        await tx.payment.update({
+          where: { id: order.payment.id },
+          data: { 
+            status: 'COMPLETED', 
+            metadata: { 
+              ...order.payment.metadata, 
+              sellerPayout, 
+              commissionAmount: order.commissionTotal 
+            }
+          }
+        });
       }
 
       return updated;
@@ -924,10 +1091,7 @@ export const updateOrderStatus = async (req, res) => {
     await cache.del(`store:${order.storeId}:orders`);
 
     if (status === 'CANCELLED') {
-      const orderItems = await prisma.orderItem.findMany({
-        where: { orderId }
-      });
-      for (const item of orderItems) {
+      for (const item of order.items) {
         await cache.del(`product:url:${item.productId}`);
       }
     }
@@ -1024,7 +1188,7 @@ export const cancelOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
     const userId = req.user.userId;
-    const { reason } = req.body;
+    const { reason } = req.body || {};
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -1038,17 +1202,15 @@ export const cancelOrder = async (req, res) => {
           }
         },
         buyer: {
-          select: { email: true, firstName: true }
-        }
+          select: { id: true, firstName: true, email: true }
+        },
+        payment: true,
+        escrow: true,
+        items: true
       }
     });
 
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found.'
-      });
-    }
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
 
     let canCancel = false;
     let cancelledBy = null;
@@ -1057,24 +1219,20 @@ export const cancelOrder = async (req, res) => {
     let cancelledForName = '';
     let cancelledForEmail = '';
 
-    if (order.buyerId === userId) {
-      if (order.status === 'PENDING') {
-        canCancel = true;
-        cancelledBy = 'buyer';
-        cancelledByName = order.buyer.firstName;
-        cancelledForId = order.store.userId;
-        cancelledForName = order.store.user.firstName;
-        cancelledForEmail = order.store.user.email;
-      }
-    } else if (order.store.userId === userId) {
-      if (['PENDING', 'CONFIRMED'].includes(order.status)) {
-        canCancel = true;
-        cancelledBy = 'seller';
-        cancelledByName = order.store.user.firstName;
-        cancelledForId = order.buyerId;
-        cancelledForName = order.buyer.firstName;
-        cancelledForEmail = order.buyer.email;
-      }
+    if (order.buyerId === userId && order.status === 'PENDING') {
+      canCancel = true;
+      cancelledBy = 'buyer';
+      cancelledByName = order.buyer.firstName;
+      cancelledForId = order.store.userId;
+      cancelledForName = order.store.user.firstName;
+      cancelledForEmail = order.store.user.email;
+    } else if (order.store.userId === userId && ['PENDING', 'CONFIRMED'].includes(order.status)) {
+      canCancel = true;
+      cancelledBy = 'seller';
+      cancelledByName = order.store.user.firstName;
+      cancelledForId = order.buyerId;
+      cancelledForName = order.buyer.firstName;
+      cancelledForEmail = order.buyer.email;
     }
 
     if (!canCancel) {
@@ -1090,7 +1248,7 @@ export const cancelOrder = async (req, res) => {
         data: {
           status: 'CANCELLED',
           cancelledAt: new Date(),
-          cancelledBy: cancelledBy
+          cancelledBy
         }
       });
 
@@ -1104,17 +1262,25 @@ export const cancelOrder = async (req, res) => {
         }
       });
 
-      const orderItems = await tx.orderItem.findMany({
-        where: { orderId }
-      });
-
-      for (const item of orderItems) {
+      for (const item of order.items) {
         await tx.product.update({
           where: { id: item.productId },
           data: {
             stock: { increment: item.quantity },
             quantityBought: { decrement: item.quantity }
           }
+        });
+      }
+
+      if (order.escrow && order.escrow.releaseStatus === 'PENDING') {
+        await tx.escrow.update({
+          where: { id: order.escrow.id },
+          data: { releaseStatus: 'CANCELLED', releaseReason: 'Order cancelled' }
+        });
+
+        await tx.payment.update({
+          where: { id: order.payment.id },
+          data: { status: 'CANCELLED' }
         });
       }
 
@@ -1146,22 +1312,17 @@ export const cancelOrder = async (req, res) => {
       console.error('Error sending notification/email for order cancellation:', notificationError);
     }
 
-    // Invalidate caches
     await cache.del(`order:${orderId}:user:${order.buyerId}`);
     await cache.del(`order:${orderId}:user:${order.store.userId}`);
     await cache.del(`user:${order.buyerId}:orders`);
     await cache.del(`store:${order.storeId}:orders`);
     await cache.del(`store:slug:${order.store.url}`);
 
-    // NEW: Invalidate checkout session cache if exists
     if (order.checkoutSession) {
       await cache.del(`checkout:${order.checkoutSession}:user:${order.buyerId}`);
     }
 
-    const orderItems = await prisma.orderItem.findMany({
-      where: { orderId }
-    });
-    for (const item of orderItems) {
+    for (const item of order.items) {
       await cache.del(`product:url:${item.productId}`);
     }
 
@@ -1188,17 +1349,15 @@ export const getUnpaidOrders = async (req, res) => {
       limit = 10, 
       sortBy = 'createdAt', 
       sortOrder = 'desc',
-      storeId // Optional: filter by specific store
+      storeId
     } = req.query;
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Construct cache key
     const cacheKey = `user:${userId}:unpaid-orders:page:${pageNum}:limit:${limitNum}:store:${storeId || 'all'}:sort:${sortBy}:${sortOrder}`;
 
-    // Try to get from cache
     const cachedResult = await cache.get(cacheKey);
     if (cachedResult) {
       return res.status(200).json({
@@ -1208,24 +1367,20 @@ export const getUnpaidOrders = async (req, res) => {
       });
     }
 
-    // Build where clause
     const whereClause = {
       buyerId: userId,
       status: 'PENDING',
       paymentStatus: 'PENDING'
     };
 
-    // Filter by store if provided
     if (storeId) {
       whereClause.storeId = storeId;
     }
 
-    // Validate sort field
     const validSortFields = ['createdAt', 'totalAmount', 'updatedAt'];
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
     const order = sortOrder === 'asc' ? 'asc' : 'desc';
 
-    // Fetch unpaid orders
     const [orders, total] = await Promise.all([
       prisma.order.findMany({
         where: whereClause,
@@ -1269,13 +1424,29 @@ export const getUnpaidOrders = async (req, res) => {
       prisma.order.count({ where: whereClause })
     ]);
 
-    // Calculate summary statistics
-    const totalAmount = orders.reduce((sum, order) => sum + order.totalAmount, 0);
+    const ordersWithBreakdown = orders.map(order => ({
+      ...order,
+      buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
+        breakdown: {
+          subtotal: order.subtotal,
+          deliveryFee: order.deliveryFee || 0,
+          taxAmount: order.taxAmount || 0,
+          discount: order.discount || 0,
+          orderSubtotal: order.totalAmount,
+          paystackCollectionFee: order.paystackFee || 0,
+          buyerTotal: order.totalAmount + (order.paystackFee || 0),
+          commissionTotal: order.commissionTotal || 0,
+          transferFee: order.transferFee || 0,
+          grossSellerPayout,
+          netSellerPayout
+        }
+    }));
+
+    const totalAmount = ordersWithBreakdown.reduce((sum, order) => sum + order.buyerTotalAmount, 0);
     const totalItems = orders.reduce((sum, order) => sum + order.items.length, 0);
     const uniqueStores = [...new Set(orders.map(order => order.storeId))].length;
 
-    // Group orders by store for easier multi-store checkout
-    const ordersByStore = orders.reduce((acc, order) => {
+    const ordersByStore = ordersWithBreakdown.reduce((acc, order) => {
       if (!acc[order.storeId]) {
         acc[order.storeId] = {
           store: order.store,
@@ -1284,12 +1455,12 @@ export const getUnpaidOrders = async (req, res) => {
         };
       }
       acc[order.storeId].orders.push(order);
-      acc[order.storeId].storeTotal += order.totalAmount;
+      acc[order.storeId].storeTotal += order.buyerTotalAmount;
       return acc;
     }, {});
 
     const resultData = {
-      orders,
+      orders: ordersWithBreakdown,
       ordersByStore: Object.values(ordersByStore),
       summary: {
         totalUnpaidOrders: total,
@@ -1308,7 +1479,6 @@ export const getUnpaidOrders = async (req, res) => {
       }
     };
 
-    // Cache for 5 minutes (shorter cache since payment status can change)
     await cache.set(cacheKey, resultData, 300);
 
     res.status(200).json({
@@ -1331,10 +1501,8 @@ export const getUnpaidOrderById = async (req, res) => {
     const { orderId } = req.params;
     const userId = req.user.userId;
 
-    // Construct cache key
     const cacheKey = `order:${orderId}:unpaid:user:${userId}`;
 
-    // Try to get from cache
     const cachedOrder = await cache.get(cacheKey);
     if (cachedOrder) {
       return res.status(200).json({
@@ -1392,7 +1560,7 @@ export const getUnpaidOrderById = async (req, res) => {
             createdAt: true
           }
         },
-        shippingAddress: true
+        deliveryInfo: true
       }
     });
 
@@ -1403,13 +1571,26 @@ export const getUnpaidOrderById = async (req, res) => {
       });
     }
 
-    // Check if products are still available
     const unavailableItems = order.items.filter(item => 
       !item.product || item.product.stock < item.quantity
     );
 
     const orderData = {
       ...order,
+      buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
+        breakdown: {
+          subtotal: order.subtotal,
+          deliveryFee: order.deliveryFee || 0,
+          taxAmount: order.taxAmount || 0,
+          discount: order.discount || 0,
+          orderSubtotal: order.totalAmount,
+          paystackCollectionFee: order.paystackFee || 0,
+          buyerTotal: order.totalAmount + (order.paystackFee || 0),
+          commissionTotal: order.commissionTotal || 0,
+          transferFee: order.transferFee || 0,
+          grossSellerPayout,
+          netSellerPayout
+        },
       hasUnavailableItems: unavailableItems.length > 0,
       unavailableItems: unavailableItems.map(item => ({
         productId: item.productId,
@@ -1419,7 +1600,6 @@ export const getUnpaidOrderById = async (req, res) => {
       }))
     };
 
-    // Cache for 5 minutes
     await cache.set(cacheKey, orderData, 300);
 
     res.status(200).json({
@@ -1441,10 +1621,8 @@ export const getUnpaidOrdersSummary = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Construct cache key
     const cacheKey = `user:${userId}:unpaid-orders:summary`;
 
-    // Try to get from cache
     const cachedSummary = await cache.get(cacheKey);
     if (cachedSummary) {
       return res.status(200).json({
@@ -1454,7 +1632,6 @@ export const getUnpaidOrdersSummary = async (req, res) => {
       });
     }
 
-    // Get all unpaid orders
     const unpaidOrders = await prisma.order.findMany({
       where: {
         buyerId: userId,
@@ -1464,6 +1641,7 @@ export const getUnpaidOrdersSummary = async (req, res) => {
       select: {
         id: true,
         totalAmount: true,
+        paystackFee: true,
         currency: true,
         storeId: true,
         items: {
@@ -1475,13 +1653,14 @@ export const getUnpaidOrdersSummary = async (req, res) => {
       }
     });
 
-    const totalAmount = unpaidOrders.reduce((sum, order) => sum + order.totalAmount, 0);
+    const totalAmount = unpaidOrders.reduce((sum, order) => 
+      sum + order.totalAmount + (order.paystackFee || 0), 0
+    );
     const totalItems = unpaidOrders.reduce((sum, order) => 
       sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0
     );
     const uniqueStores = [...new Set(unpaidOrders.map(order => order.storeId))].length;
 
-    // Get oldest unpaid order
     const oldestOrder = unpaidOrders.length > 0 
       ? unpaidOrders.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0]
       : null;
@@ -1495,12 +1674,11 @@ export const getUnpaidOrdersSummary = async (req, res) => {
       oldestUnpaidOrder: oldestOrder ? {
         id: oldestOrder.id,
         createdAt: oldestOrder.createdAt,
-        amount: oldestOrder.totalAmount
+        amount: oldestOrder.totalAmount + (oldestOrder.paystackFee || 0)
       } : null,
       hasUnpaidOrders: unpaidOrders.length > 0
     };
 
-    // Cache for 3 minutes
     await cache.set(cacheKey, summaryData, 180);
 
     res.status(200).json({
@@ -1522,10 +1700,8 @@ export const getUnpaidOrdersByStore = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Construct cache key
     const cacheKey = `user:${userId}:unpaid-orders:by-store`;
 
-    // Try to get from cache
     const cachedResult = await cache.get(cacheKey);
     if (cachedResult) {
       return res.status(200).json({
@@ -1568,9 +1744,9 @@ export const getUnpaidOrdersByStore = async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    // Group orders by store
     const storeGroups = unpaidOrders.reduce((acc, order) => {
       const storeId = order.storeId;
+      const buyerTotal = order.totalAmount + (order.paystackFee || 0);
       
       if (!acc[storeId]) {
         acc[storeId] = {
@@ -1583,9 +1759,19 @@ export const getUnpaidOrdersByStore = async (req, res) => {
         };
       }
 
-      acc[storeId].orders.push(order);
+      acc[storeId].orders.push({
+        ...order,
+        buyerTotalAmount: buyerTotal,
+        breakdown: {
+          subtotal: order.subtotal,
+          deliveryFee: order.deliveryFee || 0,
+          orderSubtotal: order.totalAmount,
+          paystackFee: order.paystackFee || 0,
+          buyerTotal
+        }
+      });
       acc[storeId].orderCount++;
-      acc[storeId].totalAmount += order.totalAmount;
+      acc[storeId].totalAmount += buyerTotal;
       acc[storeId].totalItems += order.items.length;
 
       return acc;
@@ -1596,12 +1782,13 @@ export const getUnpaidOrdersByStore = async (req, res) => {
       summary: {
         totalStores: Object.keys(storeGroups).length,
         totalOrders: unpaidOrders.length,
-        grandTotal: unpaidOrders.reduce((sum, order) => sum + order.totalAmount, 0),
+        grandTotal: unpaidOrders.reduce((sum, order) => 
+          sum + order.totalAmount + (order.paystackFee || 0), 0
+        ),
         currency: unpaidOrders.length > 0 ? unpaidOrders[0].currency : 'GHS'
       }
     };
 
-    // Cache for 5 minutes
     await cache.set(cacheKey, resultData, 300);
 
     res.status(200).json({
@@ -1624,7 +1811,6 @@ export const cancelUnpaidOrder = async (req, res) => {
     const { orderId } = req.params;
     const userId = req.user.userId;
 
-    // Find the order
     const order = await prisma.order.findFirst({
       where: {
         id: orderId,
@@ -1645,7 +1831,6 @@ export const cancelUnpaidOrder = async (req, res) => {
       });
     }
 
-    // Restore product stock
     for (const item of order.items) {
       await prisma.product.update({
         where: { id: item.productId },
@@ -1657,24 +1842,20 @@ export const cancelUnpaidOrder = async (req, res) => {
       });
     }
 
-    // Delete payment record if exists
     if (order.payment) {
       await prisma.payment.delete({
         where: { id: order.payment.id }
       });
     }
 
-    // Delete order items
     await prisma.orderItem.deleteMany({
       where: { orderId }
     });
 
-    // Delete the order
     await prisma.order.delete({
       where: { id: orderId }
     });
 
-    // Invalidate caches
     await cache.del(`user:${userId}:unpaid-orders:*`);
     await cache.del(`order:${orderId}:unpaid:user:${userId}`);
     await cache.del(`user:${userId}:orders`);

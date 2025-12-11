@@ -389,7 +389,7 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
         )}
 
         <View style={styles.orderFooter}>
-          <TouchableOpacity style={styles.viewDetailsButton} onPress={() => handleOrderDetalsPress}>
+          <TouchableOpacity style={styles.viewDetailsButton} onPress={() => handleOrderDetalsPress(item)}>
             <Text style={styles.viewDetailsText}>View Details</Text>
           </TouchableOpacity>
 
@@ -599,7 +599,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginBottom: 4,
   },
   headerSubtitle: {

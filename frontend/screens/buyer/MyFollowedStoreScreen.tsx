@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
 import { Colors } from '../../constants/colors';
+import { Ionicons } from '@expo/vector-icons';
 
 interface Store {
   id: string;
@@ -82,7 +83,9 @@ export default function MyFollowedStoresScreen({
       </View>
 
       <View style={styles.arrowContainer}>
-        <Text style={styles.arrow}>→</Text>
+        <Text style={styles.arrow}>
+          <Ionicons name="chevron-forward" size={18} color={Colors.primary} />
+        </Text>
       </View>
     </TouchableOpacity>
   );
@@ -125,7 +128,9 @@ export default function MyFollowedStoresScreen({
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
-            <Text style={styles.backButtonText}>←</Text>
+            <Text style={styles.backButtonText}>
+              <Ionicons name="arrow-back" size={24} color={Colors.primary} />
+            </Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Following</Text>
           <View style={styles.headerPlaceholder} />
@@ -146,7 +151,9 @@ export default function MyFollowedStoresScreen({
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
-            <Text style={styles.backButtonText}>←</Text>
+            <Text style={styles.backButtonText}>
+              <Ionicons name="arrow-back" size={24} color={Colors.primary} />
+            </Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Following</Text>
           <View style={styles.headerPlaceholder} />
@@ -163,7 +170,9 @@ export default function MyFollowedStoresScreen({
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Text style={styles.backButtonText}>←</Text>
+          <Text style={styles.backButtonText}>
+            <Ionicons name="arrow-back" size={24} color={Colors.primary} />
+          </Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Following</Text>
         <View style={styles.headerPlaceholder} />
@@ -228,9 +237,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 25,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
   headerPlaceholder: {
     width: 40,

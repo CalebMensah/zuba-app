@@ -35,6 +35,15 @@ import DeliveryDetailsScreen from '../screens/buyer/DeliveryDetails';
 import ProductReviewsScreen from '../screens/buyer/ProductReviewScreen';
 import UnpaidOrdersScreen from '../screens/buyer/UnPaidOrders';
 import ManageReviewScreen from '../screens/buyer/ManageReview';
+import PaymentDetailsScreen from '../screens/shared/PaymentDetailsScreen';
+import PaymentsScreen from '../screens/shared/UserPaymentScreen';
+import AboutScreen from '../screens/shared/Aboutscreen';
+import ContactUsScreen from '../screens/shared/ContactUs';
+import RequestRefundScreen from '../screens/buyer/RequestRefundScreen';
+import TermsScreen from '../screens/auth/TermsConditionsScreen';
+import PolicyScreen from '../screens/auth/PrivacyPolicyScreen';
+import SellerStoreReviews from '../screens/buyer/StoreReviews';
+import ReviewDetails from '../screens/buyer/ReviewDetails';
 
 
 const Tab = createBottomTabNavigator<BuyerStackParamList>();
@@ -47,13 +56,13 @@ const BuyerTabNavigator: React.FC = () => {
         tabBarIcon: ({ focused, color, size }) => {
           let iconName: keyof typeof Ionicons.glyphMap = 'home';
 
-          if (route.name === 'BuyerHome') {
+          if (route.name === 'MarketPlace') {
             iconName = focused ? 'home' : 'home-outline';
-          } else if (route.name === 'CartScreen') {
+          } else if (route.name === 'Cart') {
             iconName = focused ? 'cart' : 'cart-outline';
-          } else if (route.name === 'MainChatScreen') {
+          } else if (route.name === 'Chat') {
             iconName = focused ? 'chatbubbles' : 'chatbubbles-outline';
-          } else if (route.name === 'BuyerProfile') {
+          } else if (route.name === 'Me') {
             iconName = focused ? 'person' : 'person-outline';
           }
 
@@ -65,22 +74,22 @@ const BuyerTabNavigator: React.FC = () => {
       })}
     >
       <Tab.Screen
-        name="BuyerHome"
+        name="MarketPlace"
         component={BuyerHomeScreen}
         options={{ headerShown: false }}
       />
       <Tab.Screen
-        name="CartScreen"
+        name="Cart"
         component={CartScreen}
         options={{ headerShown: false }}
       />
       <Tab.Screen
-        name="MainChatScreen"
+        name="Chat"
         component={ChatScreen}
         options={{ headerShown: false }}
       />
       <Tab.Screen
-        name="BuyerProfile"
+        name="Me"
         component={BuyerProfileScreen}
         options={{ headerShown: false }}
       />
@@ -104,7 +113,7 @@ const BuyerNavigator: React.FC = () => {
       <Stack.Screen name="Payment" component={PaymentScreen} />
       <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} />
-      <Stack.Screen name="BuyerHome" component={MarketplaceScreen} />
+      <Stack.Screen name="MarketPlace" component={MarketplaceScreen} />
       <Stack.Screen name="BuyerOrders" component={BuyerOrderManagement} />
       <Stack.Screen name="Disputes" component={DisputesScreen} />
       <Stack.Screen name="CreateDispute" component={CreateDisputeScreen} />
@@ -118,7 +127,15 @@ const BuyerNavigator: React.FC = () => {
       <Stack.Screen name="ProductReviews" component={ProductReviewsScreen} />
       <Stack.Screen name="UnpaidOrders" component={UnpaidOrdersScreen} />
       <Stack.Screen name="ManageReview" component={ManageReviewScreen} />
-
+      <Stack.Screen name="PaymentsScreen" component={PaymentsScreen} />
+      <Stack.Screen name="PaymentDetails" component={PaymentDetailsScreen} />
+      <Stack.Screen name="About" component={AboutScreen} />
+      <Stack.Screen name="ContactUs" component={ContactUsScreen} />
+      <Stack.Screen name="RequestRefund" component={RequestRefundScreen} />
+      <Stack.Screen name="Terms" component={TermsScreen} />
+      <Stack.Screen name="Policy" component={PolicyScreen} />
+      <Stack.Screen name="SellerStoreReviews" component={SellerStoreReviews} />
+      <Stack.Screen name="ReviewDetails" component={ReviewDetails} />
     </Stack.Navigator>
   );
 };

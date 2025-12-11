@@ -30,7 +30,7 @@ router.patch('/:orderId/status', authenticateToken, authorizeRoles("SELLER"),upd
 router.put('/:orderId/checkout', authenticateToken,updateCheckoutSession)
 
 
-router.get('/unpaid', authenticateToken, getUnpaidOrders);
+router.get('/user/unpaid', authenticateToken, getUnpaidOrders);
 router.get('/unpaid/summary', authenticateToken, getUnpaidOrdersSummary);
 router.get('/unpaid/by-store', authenticateToken, getUnpaidOrdersByStore);
 router.get('/unpaid/:orderId', authenticateToken, getUnpaidOrderById);
