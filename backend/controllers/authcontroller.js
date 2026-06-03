@@ -379,7 +379,7 @@ export const login = async (req, res) => {
       });
     }
 
-    // Generate JWT token
+    // Generate JWT tokens
     const token = jwt.sign(
       {
         userId: user.id,
@@ -388,17 +388,37 @@ export const login = async (req, res) => {
       },
       process.env.JWT_SECRET,
       {
-        expiresIn: '24h', // Shorter expiry for better security
+        expiresIn: '10d', // Shorter access token expiry for better security
       }
     );
 
-    // Update last login and reset failed attempts
+    // Generate refresh token
+    const refreshToken = jwt.sign(
+      {
+        userId: user.id,
+        tokenType: 'refresh',
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: '7d', // Longer refresh token expiry
+      }
+    );
+
+    // Hash the refresh token before storing
+    const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+
+    // Update user with refresh token and last login
     await prisma.user.update({
       where: { id: user.id },
       data: {
         lastLogin: new Date(),
         failedLoginAttempts: 0,
         accountLockedUntil: null,
+        refreshToken: hashedRefreshToken,
+        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        refreshTokenCreatedAt: new Date(),
+        refreshTokenUsed: false,
+        lastTokenRefreshAttempt: null,
       },
     });
 
@@ -408,7 +428,8 @@ export const login = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Login successful',
-      token,
+      accessToken: token,
+      refreshToken,
       user: {
         id: userWithoutSensitiveData.id,
         email: userWithoutSensitiveData.email,
@@ -691,6 +712,146 @@ export const cancelAccountDeletion = async (req, res) => {
 
   } catch (error) {
     console.error('Cancel account deletion error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
+  }
+};
+
+export const refreshToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Refresh token is required',
+      });
+    }
+
+    // Verify the refresh token
+    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+
+    if (decoded.tokenType !== 'refresh') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token type',
+      });
+    }
+
+    // Find user and verify stored refresh token
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    // Check if refresh token exists and hasn't expired
+    if (!user.refreshToken || !user.refreshTokenExpiresAt || user.refreshTokenExpiresAt < new Date()) {
+      return res.status(401).json({
+        success: false,
+        message: 'Refresh token has expired',
+      });
+    }
+
+    // Verify the stored refresh token
+    const isRefreshTokenValid = await bcrypt.compare(refreshToken, user.refreshToken);
+
+    if (!isRefreshTokenValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token',
+      });
+    }
+
+    // Check if token was already used (token rotation security)
+    if (user.refreshTokenUsed) {
+      // Security: invalidate all tokens and force re-login
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          refreshToken: null,
+          refreshTokenExpiresAt: null,
+          refreshTokenCreatedAt: null,
+          refreshTokenUsed: false,
+          lastTokenRefreshAttempt: null,
+        },
+      });
+
+      return res.status(401).json({
+        success: false,
+        message: 'Token has already been used. Please log in again.',
+      });
+    }
+
+    // Generate new tokens
+    const newAccessToken = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: '15m', // 15 minutes
+      }
+    );
+
+    const newRefreshToken = jwt.sign(
+      {
+        userId: user.id,
+        tokenType: 'refresh',
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: '7d', // 7 days
+      }
+    );
+
+    // Hash the new refresh token
+    const hashedNewRefreshToken = await bcrypt.hash(newRefreshToken, 10);
+
+    // Update user with new refresh token and mark old one as used
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        refreshToken: hashedNewRefreshToken,
+        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        refreshTokenCreatedAt: new Date(),
+        refreshTokenUsed: false,
+        lastTokenRefreshAttempt: new Date(),
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    });
+
+  } catch (error) {
+    console.error('Refresh token error:', error);
+
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token',
+      });
+    }
+
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Refresh token has expired',
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Internal server error',

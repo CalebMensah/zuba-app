@@ -25,8 +25,8 @@ const createPaystackRecipient = async ({ accountType, bankName, accountNumber, a
       payload = {
         type: "mobile_money",
         name: accountName || "Mobile Money User",
-        account_number: mobileNumber,   // REQUIRED
-        bank_code: provider,            // MTN, VOD, TGO
+        account_number: mobileNumber,
+        bank_code: provider,            
         currency: "GHS",
       };
     }
@@ -114,7 +114,7 @@ export const upsertPaymentAccount = async (req, res) => {
       });
     }
 
-    //  Save to DB (never expose recipient code)
+    // Save to DB
     const data = {
       accountType,
       bankName: bankName || null,
@@ -134,11 +134,19 @@ export const upsertPaymentAccount = async (req, res) => {
       update: data,
     });
 
+    // If this is the first payment account, set user's payout preference automatically
+    if (!existing) {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { payoutPreference: accountType }
+      });
+    }
+
     // Clear caches
     await cache.del(`user:${userId}:store`);
     await cache.del(`store:slug:${store.url}`);
 
-    // Return SAFE data (no recipient code!)
+    // Return SAFE data
     const safeResponse = {
       id: paymentAccount.id,
       accountType: paymentAccount.accountType,
@@ -146,12 +154,16 @@ export const upsertPaymentAccount = async (req, res) => {
       accountNumber: paymentAccount.accountNumber,
       accountName: paymentAccount.accountName,
       provider: paymentAccount.provider,
-      // mobileNumber: paymentAccount.mobileNumber, //
       isPrimary: paymentAccount.isPrimary,
       isActive: paymentAccount.isActive,
     };
 
-    res.json({ success: true, message: "Payment account saved.", paymentAccount: safeResponse });
+    res.json({ 
+      success: true, 
+      message: "Payment account saved.", 
+      paymentAccount: safeResponse,
+      payoutPreferenceSet: !existing
+    });
   } catch (error) {
     console.error("PAYOUT ERROR:", error);
     res.status(500).json({ success: false, message: "Could not save payment details." });
@@ -239,3 +251,61 @@ export const deletePaymentAccount = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+export const updatePayoutPreference = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { payoutPreference } = req.body;
+
+    // Validate
+    if (!['mobile_money', 'bank'].includes(payoutPreference)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid payout preference. Must be 'mobile_money' or 'bank'." 
+      });
+    }
+
+    // Verify user has a store (sellers only)
+    const store = await prisma.store.findUnique({
+      where: { userId },
+      select: { id: true, url: true }
+    });
+
+    if (!store) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Only sellers can set payout preferences." 
+      });
+    }
+
+    // Update preference
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { payoutPreference },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        payoutPreference: true
+      }
+    });
+    
+    await cache.del(`user:${userId}:store`);
+    await cache.del(`store:slug:${store.url}`);
+
+    res.json({ 
+      success: true, 
+      message: "Payout preference updated successfully.",
+      data: updatedUser
+    });
+
+  } catch (error) {
+    console.error("Error updating payout preference:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to update payout preference." 
+    });
+  }
+};
+

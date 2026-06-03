@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -13,14 +13,21 @@ import {
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders, Order } from '../../hooks/useOrder';
-import { useDelivery } from '../../hooks/useDeliveryInfo';
+import {
+  useOrder,
+  useCancelOrder,
+  useAcceptOrder,
+  useRejectOrder,
+  formatCurrency,
+} from '../../hooks/useOrder';
 import { Colors } from '../../constants/colors';
+import { OrderStatus } from '../../types/order';
 
-// Navigation types
+// ── Navigation types ──────────────────────────────────────────────────────────
+
 type RootStackParamList = {
   SellerOrderDetails: { orderId: string };
-  AddDeliveryCourierInfo: { orderId: string };
+  ShipOrderScreen: { orderId: string; isEdit: boolean };
 };
 
 type SellerOrderDetailsRouteProp = RouteProp<RootStackParamList, 'SellerOrderDetails'>;
@@ -31,92 +38,59 @@ const SellerOrderDetails: React.FC = () => {
   const navigation = useNavigation<SellerOrderDetailsNavigationProp>();
   const { orderId } = route.params;
 
-  const { getOrderById, updateOrderStatus, cancelOrder, loading, error } = useOrders();
-  const { setDeliveryStatus, getDeliveryInfo, loading: deliveryLoading } = useDelivery();
+  const { data: order, isLoading, error, refetch } = useOrder(orderId);
+  const cancelOrder = useCancelOrder();
+  const acceptOrder = useAcceptOrder();
+  const rejectOrder = useRejectOrder();
 
-  const [order, setOrder] = useState<Order | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [showStatusModal, setShowStatusModal] = useState(false);
+  // ── Handlers ────────────────────────────────────────────────────────────────
 
-  // Fetch order details
-  const fetchOrderDetails = useCallback(async () => {
-    try {
-      const orderData = await getOrderById(orderId);
-      if (orderData) {
-        setOrder(orderData);
-      }
-    } catch (err) {
-      console.error('Error fetching order:', err);
-    }
-  }, [orderId, getOrderById]);
-
-  useEffect(() => {
-    fetchOrderDetails();
-  }, [fetchOrderDetails]);
-
-  // Refresh handler
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await fetchOrderDetails();
-    setRefreshing(false);
-  }, [fetchOrderDetails]);
-
-  // Confirm order
-  const handleConfirmOrder = async () => {
+  const handleAcceptOrder = () => {
     Alert.alert(
       'Confirm Order',
-      'Are you sure you want to confirm this order? The buyer will be notified.',
+      'Are you sure you want to accept this order? The buyer will be notified.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Confirm',
-          onPress: async () => {
-            setActionLoading(true);
-            const result = await updateOrderStatus(orderId, 'CONFIRMED', 'Order confirmed by seller');
-            setActionLoading(false);
-            
-            if (result) {
-              Alert.alert('Success', 'Order confirmed successfully');
-              fetchOrderDetails();
-            } else {
-              Alert.alert('Error', error || 'Failed to confirm order');
-            }
+          onPress: () => {
+            acceptOrder.mutate(orderId, {
+              onSuccess: () => Alert.alert('Success', 'Order accepted successfully.'),
+            });
           },
         },
       ]
     );
   };
 
-  // Cancel order
-  const handleCancelOrder = async () => {
+  const handleRejectOrder = () => {
     Alert.alert(
-      'Cancel Order',
-      'Are you sure you want to cancel this order? This action cannot be undone.',
+      'Reject Order',
+      'Are you sure you want to reject this order?',
       [
-        { text: 'No', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Yes, Cancel',
+          text: 'Reject',
           style: 'destructive',
-          onPress: async () => {
+          onPress: () => {
             Alert.prompt(
-              'Cancellation Reason',
-              'Please provide a reason for cancellation (optional)',
+              'Rejection Reason',
+              'Please provide a reason for rejection (required)',
               async (reason) => {
-                setActionLoading(true);
-                const result = await cancelOrder(orderId, reason || 'Cancelled by seller');
-                setActionLoading(false);
-                
-                if (result) {
-                  Alert.alert('Success', 'Order cancelled successfully', [
-                    {
-                      text: 'OK',
-                      onPress: () => navigation.goBack(),
-                    },
-                  ]);
-                } else {
-                  Alert.alert('Error', error || 'Failed to cancel order');
+                if (!reason || reason.trim().length === 0) {
+                  Alert.alert('Error', 'Rejection reason is required');
+                  return;
                 }
+                rejectOrder.mutate(
+                  { orderId, reason: reason.trim() },
+                  {
+                    onSuccess: () => {
+                      Alert.alert('Success', 'Order rejected successfully.', [
+                        { text: 'OK', onPress: () => navigation.goBack() },
+                      ]);
+                    },
+                  }
+                );
               }
             );
           },
@@ -125,213 +99,196 @@ const SellerOrderDetails: React.FC = () => {
     );
   };
 
-  // Navigate to add delivery info
-  const handleMarkAsDelivered = () => {
-    navigation.navigate('AddDeliveryCourierInfo', { orderId });
-  };
-
-  // Update delivery status
-  const handleUpdateDeliveryStatus = () => {
-    setShowStatusModal(true);
-  };
-
-  // Handle delivery status change
-  const handleDeliveryStatusChange = async (newStatus: string) => {
-    setShowStatusModal(false);
-    
+  const handleCancelOrder = () => {
     Alert.alert(
-      'Update Delivery Status',
-      `Change delivery status to ${newStatus}?`,
+      'Cancel Order',
+      'Are you sure you want to cancel this order? This action cannot be undone.',
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'No', style: 'cancel' },
         {
-          text: 'Update',
-          onPress: async () => {
-            setActionLoading(true);
-            const result = await setDeliveryStatus({ orderId, status: newStatus as any });
-            
-            if (result) {
-              Alert.alert('Success', 'Delivery status updated successfully');
-              fetchOrderDetails();
-            } else {
-              Alert.alert('Error', 'Failed to update delivery status');
-            }
-            setActionLoading(false);
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: () => {
+            Alert.prompt(
+              'Cancellation Reason',
+              'Please provide a reason (optional)',
+              async (reason) => {
+                cancelOrder.mutate(
+                  { orderId, reason: reason || 'Cancelled by seller' },
+                  {
+                    onSuccess: () => {
+                      Alert.alert('Success', 'Order cancelled successfully.', [
+                        { text: 'OK', onPress: () => navigation.goBack() },
+                      ]);
+                    },
+                  }
+                );
+              }
+            );
           },
         },
       ]
     );
   };
 
-  // Render status badge
-  const renderStatusBadge = (status: string) => {
-    const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
-      PENDING: { bg: Colors.warningLight, text: Colors.warning, label: 'Pending' },
-      CONFIRMED: { bg: Colors.infoLight, text: Colors.info, label: 'Confirmed' },
-      PROCESSING: { bg: Colors.primaryLight + '20', text: Colors.primary, label: 'Processing' },
-      SHIPPED: { bg: Colors.successLight + '20', text: Colors.success, label: 'Shipped' },
-      OUT_FOR_DELIVERY: { bg: Colors.successLight + '20', text: Colors.success, label: 'Out for Delivery' },
-      DELIVERED: { bg: Colors.successLight, text: Colors.successDark, label: 'Delivered' },
-      COMPLETED: { bg: Colors.success, text: Colors.white, label: 'Completed' },
-      CANCELLED: { bg: Colors.errorLight, text: Colors.error, label: 'Cancelled' },
+  const handleShipOrder = () => {
+    navigation.navigate('ShipOrderScreen', { orderId, isEdit: false });
+  };
+
+  // ── Status Badges ────────────────────────────────────────────────────────────
+
+  const renderStatusBadge = (status: OrderStatus) => {
+    const config: Record<OrderStatus, { bg: string; text: string; label: string }> = {
+      PENDING_PAYMENT: { bg: Colors.errorLight,   text: Colors.error,       label: 'Pending Payment' },
+      PAID:            { bg: Colors.infoLight,    text: Colors.info,        label: 'Paid' },
+      PROCESSING:      { bg: Colors.primaryLight + '20', text: Colors.primary, label: 'Processing' },
+      SHIPPED:         { bg: Colors.successLight + '20', text: Colors.success, label: 'Shipped' },
+      COMPLETED:       { bg: Colors.success,      text: Colors.white,       label: 'Completed' },
+      DISPUTED:        { bg: '#FFE8D6',            text: '#F97316',          label: 'Disputed' },
+      CANCELLED:       { bg: Colors.errorLight,   text: Colors.error,       label: 'Cancelled' },
+      REFUNDED:        { bg: Colors.gray200,       text: Colors.gray700,     label: 'Refunded' },
     };
 
-    const config = statusConfig[status] || statusConfig.PENDING;
-
+    const c = config[status] ?? config.PAID;
     return (
-      <View style={[styles.statusBadge, { backgroundColor: config.bg }]}>
-        <Text style={[styles.statusText, { color: config.text }]}>{config.label}</Text>
+      <View style={[styles.statusBadge, { backgroundColor: c.bg }]}>
+        <Text style={[styles.statusText, { color: c.text }]}>{c.label}</Text>
       </View>
     );
   };
 
-  // Render payment status
-  const renderPaymentStatus = (paymentStatus: string) => {
-    const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
-      PENDING: { bg: Colors.warningLight, text: Colors.warning, label: 'Payment Pending' },
-      PROCESSING: { bg: Colors.infoLight, text: Colors.info, label: 'Processing Payment' },
-      SUCCESS: { bg: Colors.successLight, text: Colors.successDark, label: 'Paid' },
-      FAILED: { bg: Colors.errorLight, text: Colors.error, label: 'Payment Failed' },
-      REFUNDED: { bg: Colors.gray200, text: Colors.gray700, label: 'Refunded' },
+  const renderPaymentStatus = (paymentStatus?: string) => {
+    if (!paymentStatus) return null;
+
+    const config: Record<string, { bg: string; text: string; label: string }> = {
+      PENDING:    { bg: Colors.warningLight,  text: Colors.warning,     label: 'Payment Pending' },
+      PROCESSING: { bg: Colors.infoLight,     text: Colors.info,        label: 'Processing Payment' },
+      SUCCESS:    { bg: Colors.successLight,  text: Colors.successDark, label: 'Paid' },
+      FAILED:     { bg: Colors.errorLight,    text: Colors.error,       label: 'Payment Failed' },
+      REFUNDED:   { bg: Colors.gray200,       text: Colors.gray700,     label: 'Refunded' },
     };
 
-    const config = statusConfig[paymentStatus] || statusConfig.PENDING;
-
+    const c = config[paymentStatus] ?? config.PENDING;
     return (
-      <View style={[styles.paymentBadge, { backgroundColor: config.bg }]}>
-        <Text style={[styles.paymentText, { color: config.text }]}>{config.label}</Text>
+      <View style={[styles.paymentBadge, { backgroundColor: c.bg }]}>
+        <Text style={[styles.paymentText, { color: c.text }]}>{c.label}</Text>
       </View>
     );
   };
 
-  // Render action buttons based on order status
+  // ── Action Buttons ───────────────────────────────────────────────────────────
+
   const renderActionButtons = () => {
     if (!order) return null;
 
     const { status } = order;
+    const isProcessing =
+      acceptOrder.isPending || rejectOrder.isPending || cancelOrder.isPending;
 
     switch (status) {
-      case 'PENDING':
+      // ── PAId: accept or reject ──────────────────────────────────────────
+      case 'PAID':
         return (
           <View style={styles.actionContainer}>
             <TouchableOpacity
               style={[styles.actionButton, styles.confirmButton]}
-              onPress={handleConfirmOrder}
-              disabled={actionLoading}
+              onPress={handleAcceptOrder}
+              disabled={isProcessing}
             >
-              {actionLoading ? (
-                <ActivityIndicator color={Colors.white} />
+              {acceptOrder.isPending ? (
+                <ActivityIndicator color={Colors.white} size="small" />
               ) : (
                 <>
                   <Ionicons name="checkmark-circle-outline" size={20} color={Colors.white} />
-                  <Text style={styles.actionButtonText}>Confirm Order</Text>
+                  <Text style={styles.actionButtonText}>Accept Order</Text>
                 </>
               )}
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.actionButton, styles.cancelButton]}
-              onPress={handleCancelOrder}
-              disabled={actionLoading}
+              style={[styles.actionButton, styles.rejectButton]}
+              onPress={handleRejectOrder}
+              disabled={isProcessing}
             >
-              <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
-              <Text style={[styles.actionButtonText, { color: Colors.error }]}>Cancel</Text>
+              {rejectOrder.isPending ? (
+                <ActivityIndicator color={Colors.error} size="small" />
+              ) : (
+                <>
+                  <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
+                  <Text style={[styles.actionButtonText, { color: Colors.error }]}>
+                    Reject Order
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
         );
 
-      case 'CONFIRMED':
+      // ── PROCESSING: ship or cancel ──────────────────────────────────────
       case 'PROCESSING':
         return (
           <View style={styles.actionContainer}>
             <TouchableOpacity
               style={[styles.actionButton, styles.deliveryButton]}
-              onPress={handleMarkAsDelivered}
+              onPress={handleShipOrder}
+              disabled={isProcessing}
             >
-              <Ionicons name="car-outline" size={20} color={Colors.white} />
-              <Text style={styles.actionButtonText}>Mark as Shipped</Text>
+              <Ionicons name="send-outline" size={20} color={Colors.white} />
+              <Text style={styles.actionButtonText}>Ship Order</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionButton, styles.cancelButton]}
               onPress={handleCancelOrder}
-              disabled={actionLoading}
+              disabled={isProcessing}
             >
-              <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
-              <Text style={[styles.actionButtonText, { color: Colors.error }]}>Cancel</Text>
+              {cancelOrder.isPending ? (
+                <ActivityIndicator color={Colors.error} size="small" />
+              ) : (
+                <>
+                  <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
+                  <Text style={[styles.actionButtonText, { color: Colors.error }]}>Cancel</Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
         );
 
+      // ── SHIPPED: awaiting buyer confirmation ────────────────────────────
       case 'SHIPPED':
         return (
           <View style={styles.actionContainer}>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.primaryButton]}
-              onPress={handleUpdateDeliveryStatus}
-              disabled={actionLoading}
-            >
-              <Ionicons name="swap-horizontal-outline" size={20} color={Colors.white} />
-              <Text style={styles.actionButtonText}>Update Delivery Status</Text>
-            </TouchableOpacity>
             <View style={styles.statusMessageContainer}>
               <Ionicons name="time-outline" size={24} color={Colors.info} />
               <Text style={styles.statusMessageText}>
-                Order has been shipped. Waiting for delivery confirmation.
+                Order has been shipped. Funds will be released once the buyer confirms receipt.
               </Text>
             </View>
           </View>
         );
 
-      case 'OUT_FOR_DELIVERY':
+      // ── DISPUTED ────────────────────────────────────────────────────────
+      case 'DISPUTED':
         return (
           <View style={styles.actionContainer}>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.primaryButton]}
-              onPress={handleUpdateDeliveryStatus}
-              disabled={actionLoading}
-            >
-              <Ionicons name="swap-horizontal-outline" size={20} color={Colors.white} />
-              <Text style={styles.actionButtonText}>Update Delivery Status</Text>
-            </TouchableOpacity>
-            <View style={styles.statusMessageContainer}>
-              <Ionicons name="hourglass-outline" size={24} color={Colors.warning} />
-              <Text style={styles.statusMessageText}>
-                Order is out for delivery. Awaiting buyer confirmation.
+            <View style={[styles.statusMessageContainer, { backgroundColor: '#FFE8D6' }]}>
+              <Ionicons name="alert-circle-outline" size={24} color="#F97316" />
+              <Text style={[styles.statusMessageText, { color: '#F97316' }]}>
+                A dispute has been opened for this order. Our team is reviewing it.
               </Text>
             </View>
           </View>
         );
 
-      case 'DELIVERED':
-        return (
-          <View style={styles.actionContainer}>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.primaryButton]}
-              onPress={handleUpdateDeliveryStatus}
-              disabled={actionLoading}
-            >
-              <Ionicons name="swap-horizontal-outline" size={20} color={Colors.white} />
-              <Text style={styles.actionButtonText}>Update Delivery Status</Text>
-            </TouchableOpacity>
-            <View style={styles.statusMessageContainer}>
-              <Ionicons name="lock-closed-outline" size={24} color={Colors.success} />
-              <Text style={styles.statusMessageText}>
-                Order delivered. Funds held in escrow until buyer confirms receipt.
-              </Text>
-            </View>
-          </View>
-        );
-
+      // ── COMPLETED ───────────────────────────────────────────────────────
       case 'COMPLETED':
         return (
           <View style={styles.completedContainer}>
             <Ionicons name="checkmark-circle" size={48} color={Colors.success} />
-            <Text style={styles.completedTitle}>Order Completed Successfully!</Text>
-            <Text style={styles.completedText}>
-              Payment has been released to your account.
-            </Text>
+            <Text style={styles.completedTitle}>Order Completed!</Text>
+            <Text style={styles.completedText}>Payment has been released to your account.</Text>
           </View>
         );
 
+      // ── CANCELLED ───────────────────────────────────────────────────────
       case 'CANCELLED':
         return (
           <View style={styles.cancelledContainer}>
@@ -350,7 +307,9 @@ const SellerOrderDetails: React.FC = () => {
     }
   };
 
-  if (loading && !order) {
+  // ── Loading / Error ───────────────────────────────────────────────────────
+
+  if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={Colors.primary} />
@@ -359,31 +318,41 @@ const SellerOrderDetails: React.FC = () => {
     );
   }
 
-  if (!order && !loading) {
+  if (error || !order) {
     return (
       <View style={styles.errorContainer}>
         <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
         <Text style={styles.errorTitle}>Order Not Found</Text>
-        <Text style={styles.errorText}>Unable to load order details.</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={fetchOrderDetails}>
+        <Text style={styles.errorText}>
+          {error instanceof Error ? error.message : 'Unable to load order details.'}
+        </Text>
+        <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
           <Text style={styles.retryButtonText}>Retry</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
+  const safeItems = order.items || [];
+
   return (
-    <>
-      <ScrollView
-        style={styles.container}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
+    <ScrollView
+      style={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={isLoading}
+          onRefresh={() => refetch()}
+          colors={[Colors.primary]}
+          tintColor={Colors.primary}
+        />
+      }
+    >
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.orderIdText}>Order #{order?.id.slice(0, 8)}</Text>
+        <Text style={styles.orderIdText}>Order #{order.id.slice(0, 8)}</Text>
         <View style={styles.statusRow}>
-          {renderStatusBadge(order?.status || 'PENDING')}
-          {renderPaymentStatus(order?.paymentStatus || 'PENDING')}
+          {renderStatusBadge(order.status)}
+          {renderPaymentStatus(order.paymentStatus)}
         </View>
       </View>
 
@@ -399,7 +368,7 @@ const SellerOrderDetails: React.FC = () => {
             <View style={styles.infoTextContainer}>
               <Text style={styles.infoLabel}>Name</Text>
               <Text style={styles.infoValue}>
-                {order?.buyer?.firstName} {order?.buyer?.lastName}
+                {order.buyer?.firstName} {order.buyer?.lastName}
               </Text>
             </View>
           </View>
@@ -408,14 +377,14 @@ const SellerOrderDetails: React.FC = () => {
             <Ionicons name="mail-outline" size={20} color={Colors.gray600} />
             <View style={styles.infoTextContainer}>
               <Text style={styles.infoLabel}>Email</Text>
-              <Text style={styles.infoValue}>{order?.buyer?.email}</Text>
+              <Text style={styles.infoValue}>{order.buyer?.email}</Text>
             </View>
           </View>
         </View>
       </View>
 
       {/* Delivery Information */}
-      {order?.deliveryInfo && (
+      {order.deliveryInfo && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Delivery Information</Text>
           <View style={styles.infoCard}>
@@ -445,6 +414,18 @@ const SellerOrderDetails: React.FC = () => {
                 </Text>
               </View>
             </View>
+            {order.deliveryInfo.courierService && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.infoRow}>
+                  <Ionicons name="car-outline" size={20} color={Colors.gray600} />
+                  <View style={styles.infoTextContainer}>
+                    <Text style={styles.infoLabel}>Courier</Text>
+                    <Text style={styles.infoValue}>{order.deliveryInfo.courierService}</Text>
+                  </View>
+                </View>
+              </>
+            )}
             {order.deliveryInfo.trackingNumber && (
               <>
                 <View style={styles.divider} />
@@ -457,6 +438,33 @@ const SellerOrderDetails: React.FC = () => {
                 </View>
               </>
             )}
+            {order.deliveryInfo.estimatedDeliveryDays && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.infoRow}>
+                  <Ionicons name="time-outline" size={20} color={Colors.gray600} />
+                  <View style={styles.infoTextContainer}>
+                    <Text style={styles.infoLabel}>Estimated Delivery</Text>
+                    <Text style={styles.infoValue}>
+                      {order.deliveryInfo.estimatedDeliveryDays} day
+                      {order.deliveryInfo.estimatedDeliveryDays !== 1 ? 's' : ''}
+                    </Text>
+                  </View>
+                </View>
+              </>
+            )}
+            {order.deliveryInfo.dispatchNote && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.infoRow}>
+                  <Ionicons name="document-text-outline" size={20} color={Colors.gray600} />
+                  <View style={styles.infoTextContainer}>
+                    <Text style={styles.infoLabel}>Dispatch Note</Text>
+                    <Text style={styles.infoValue}>{order.deliveryInfo.dispatchNote}</Text>
+                  </View>
+                </View>
+              </>
+            )}
           </View>
         </View>
       )}
@@ -464,25 +472,23 @@ const SellerOrderDetails: React.FC = () => {
       {/* Order Items */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Order Items</Text>
-        {order?.items.map((item: any, index: number) => (
+        {safeItems.map((item: any, index: number) => (
           <View key={index} style={styles.itemCard}>
             <Image
-              source={{
-                uri: item.product?.images?.[0] || 'https://via.placeholder.com/80',
-              }}
+              source={{ uri: item.product?.images?.[0] || 'https://via.placeholder.com/80' }}
               style={styles.itemImage}
             />
             <View style={styles.itemDetails}>
               <Text style={styles.itemName} numberOfLines={2}>
-                {item.product?.name}
+                {item.product?.name || item.productName || item.name}
               </Text>
               <Text style={styles.itemQuantity}>Quantity: {item.quantity}</Text>
               <Text style={styles.itemPrice}>
-                {order.currency} {item.price.toFixed(2)} × {item.quantity}
+                {formatCurrency(item.unitPrice || item.price, order.currency)} × {item.quantity}
               </Text>
             </View>
             <Text style={styles.itemTotal}>
-              {order.currency} {item.total.toFixed(2)}
+              {formatCurrency(item.total, order.currency)}
             </Text>
           </View>
         ))}
@@ -495,30 +501,30 @@ const SellerOrderDetails: React.FC = () => {
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Subtotal</Text>
             <Text style={styles.summaryValue}>
-              {order?.currency} {order?.subtotal.toFixed(2)}
+              {formatCurrency(order.subtotal, order.currency)}
             </Text>
           </View>
-          {order && order.deliveryFee > 0 && (
+          {order.deliveryFee > 0 && (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Delivery Fee</Text>
               <Text style={styles.summaryValue}>
-                {order.currency} {order.deliveryFee.toFixed(2)}
+                {formatCurrency(order.deliveryFee, order.currency)}
               </Text>
             </View>
           )}
-          {order && order.taxAmount > 0 && (
+          {order.taxAmount > 0 && (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Tax</Text>
               <Text style={styles.summaryValue}>
-                {order.currency} {order.taxAmount.toFixed(2)}
+                {formatCurrency(order.taxAmount, order.currency)}
               </Text>
             </View>
           )}
-          {order && order.discount > 0 && (
+          {order.discount > 0 && (
             <View style={styles.summaryRow}>
               <Text style={[styles.summaryLabel, { color: Colors.success }]}>Discount</Text>
               <Text style={[styles.summaryValue, { color: Colors.success }]}>
-                -{order.currency} {order.discount.toFixed(2)}
+                -{formatCurrency(order.discount, order.currency)}
               </Text>
             </View>
           )}
@@ -526,92 +532,41 @@ const SellerOrderDetails: React.FC = () => {
           <View style={styles.summaryRow}>
             <Text style={styles.totalLabel}>Total</Text>
             <Text style={styles.totalValue}>
-              {order?.currency} {order?.totalAmount.toFixed(2)}
+              {formatCurrency(order.totalAmount, order.currency)}
             </Text>
           </View>
         </View>
       </View>
 
       {/* Order Timeline */}
-      {order?.statusHistory && order.statusHistory.length > 0 && (() => {
-        const statusHistory = order?.statusHistory ?? [];
-        return (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Order Timeline</Text>
-            <View style={styles.timelineCard}>
-              {statusHistory.map((status: any, index: number) => (
-                <View key={index} style={styles.timelineItem}>
-                  <View style={styles.timelineDot} />
-                  {index < statusHistory.length - 1 && <View style={styles.timelineLine} />}
-                  <View style={styles.timelineContent}>
-                    <Text style={styles.timelineStatus}>{status.newStatus}</Text>
-                    <Text style={styles.timelineDate}>
-                      {new Date(status.createdAt).toLocaleDateString()} at{' '}
-                      {new Date(status.createdAt).toLocaleTimeString()}
-                    </Text>
-                    {status.reason && (
-                      <Text style={styles.timelineReason}>{status.reason}</Text>
-                    )}
-                  </View>
-                </View>
-              ))}
-            </View>
-          </View>
-        );
-      })()}
-
-      <View style={styles.bottomPadding} />
-    </ScrollView>
-
-    {/* Delivery Status Modal */}
-    {showStatusModal && (
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Update Delivery Status</Text>
-            <TouchableOpacity onPress={() => setShowStatusModal(false)}>
-              <Ionicons name="close" size={24} color={Colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.statusOptions}>
-            {[
-              { value: 'PENDING', label: 'Pending', icon: 'time-outline', color: Colors.warning },
-              { value: 'PROCESSING', label: 'Processing', icon: 'hourglass-outline', color: Colors.info },
-              { value: 'SHIPPED', label: 'Shipped', icon: 'airplane-outline', color: Colors.primary },
-              { value: 'OUT_FOR_DELIVERY', label: 'Out for Delivery', icon: 'car-outline', color: Colors.primaryLight },
-              { value: 'DELIVERED', label: 'Delivered', icon: 'checkmark-circle-outline', color: Colors.success },
-              { value: 'RETURNED', label: 'Returned', icon: 'return-down-back-outline', color: Colors.accent },
-              { value: 'CANCELLED', label: 'Cancelled', icon: 'close-circle-outline', color: Colors.error },
-            ].map((status) => (
-              <TouchableOpacity
-                key={status.value}
-                style={[
-                  styles.statusOption,
-                  order?.deliveryInfo?.status === status.value && styles.statusOptionActive
-                ]}
-                onPress={() => handleDeliveryStatusChange(status.value)}
-                disabled={order?.deliveryInfo?.status === status.value}
-              >
-                <Ionicons name={status.icon as any} size={24} color={status.color} />
-                <Text style={[
-                  styles.statusOptionText,
-                  order?.deliveryInfo?.status === status.value && styles.statusOptionTextActive
-                ]}>
-                  {status.label}
-                </Text>
-                {order?.deliveryInfo?.status === status.value && (
-                  <View style={styles.currentBadge}>
-                    <Text style={styles.currentBadgeText}>Current</Text>
-                  </View>
+      {order.statusHistory && order.statusHistory.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Order Timeline</Text>
+          <View style={styles.timelineCard}>
+            {order.statusHistory.map((status: any, index: number) => (
+              <View key={index} style={styles.timelineItem}>
+                <View style={styles.timelineDot} />
+                {index < order.statusHistory!.length - 1 && (
+                  <View style={styles.timelineLine} />
                 )}
-              </TouchableOpacity>
+                <View style={styles.timelineContent}>
+                  <Text style={styles.timelineStatus}>{status.newStatus}</Text>
+                  <Text style={styles.timelineDate}>
+                    {new Date(status.createdAt).toLocaleDateString()} at{' '}
+                    {new Date(status.createdAt).toLocaleTimeString()}
+                  </Text>
+                  {status.reason && (
+                    <Text style={styles.timelineReason}>{status.reason}</Text>
+                  )}
+                </View>
+              </View>
             ))}
           </View>
         </View>
-      </View>
-    )}
-  </>
+      )}
+
+      <View style={styles.bottomPadding} />
+    </ScrollView>
   );
 };
 
@@ -717,8 +672,10 @@ const styles = StyleSheet.create({
   deliveryButton: {
     backgroundColor: Colors.primary,
   },
-  primaryButton: {
-    backgroundColor: Colors.primary,
+  rejectButton: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.error,
   },
   cancelButton: {
     backgroundColor: Colors.white,
@@ -737,7 +694,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginTop: 12,
   },
   statusMessageText: {
     flex: 1,
@@ -931,73 +887,6 @@ const styles = StyleSheet.create({
   },
   bottomPadding: {
     height: 24,
-  },
-  modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: Colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingBottom: 40,
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  statusOptions: {
-    padding: 16,
-  },
-  statusOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: Colors.backgroundSecondary,
-    borderRadius: 12,
-    marginBottom: 12,
-    gap: 12,
-  },
-  statusOptionActive: {
-    backgroundColor: Colors.primaryLight + '15',
-    borderWidth: 2,
-    borderColor: Colors.primary,
-  },
-  statusOptionText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '500',
-    color: Colors.textPrimary,
-  },
-  statusOptionTextActive: {
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  currentBadge: {
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  currentBadgeText: {
-    color: Colors.white,
-    fontSize: 12,
-    fontWeight: '600',
   },
 });
 

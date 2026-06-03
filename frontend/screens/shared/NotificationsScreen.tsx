@@ -59,38 +59,66 @@ const NotificationsScreen = () => {
 
   // Load more notifications
   const loadMore = async () => {
-    if (pagination && pagination.page < pagination.pages && !loadingMore) {
-      setLoadingMore(true);
+    if (!pagination) return;
+    if (pagination.page >= pagination.pages) return;
+    if (loadingMore) return;
+
+    setLoadingMore(true);
+    try {
       await fetchNotifications(pagination.page + 1);
+    } finally {
       setLoadingMore(false);
     }
   };
 
   // Navigate based on notification type
   const handleViewDetails = async (notification: Notification) => {
-    // Mark as read first
     try {
-      if (!notification.read) {
-        await markAsRead(notification.id);
-      }
-
       // Navigate based on type and user role
       const { type, data } = notification;
       const userRole = user?.role;
 
-      switch (type.toLowerCase()) {
+      const safeData = data && typeof data === 'object' ? data : {};
+      const typeKey = (type || '').toLowerCase();
+
+      const orderId = safeData?.orderId;
+      const disputeId = safeData?.disputeId;
+      const paymentId = safeData?.paymentId;
+      const productId = safeData?.productId;
+      const chatId = safeData?.chatId;
+      const senderName = safeData?.senderName;
+      const senderAvatar = safeData?.senderAvatar;
+      const senderRole = safeData?.senderRole;
+      const storeName = safeData?.storeName;
+      const storeLogo = safeData?.storeLogo;
+
+      const canMarkRead = async () => {
+        if (!notification.read) {
+          await markAsRead(notification.id);
+        }
+      };
+
+      switch (typeKey) {
         case 'order':
         case 'order_created':
         case 'order_updated':
         case 'order_cancelled':
         case 'order_confirmed':
         case 'order_completed':
+          if (!orderId) {
+            Alert.alert('Notification', 'Order details not available');
+            return;
+          }
+
           if (userRole === 'BUYER') {
-            (navigation as any).navigate('OrderDetails', { orderId: data?.orderId });
+            (navigation as any).navigate('OrderDetails', { orderId });
+            await canMarkRead();
           } else if (userRole === 'SELLER') {
-            (navigation as any).navigate('SellerOrderDetails', { orderId: data?.orderId });
+            (navigation as any).navigate('SellerOrderDetails', { orderId });
+            await canMarkRead();
           } else if (userRole === 'ADMIN') {
             (navigation as any).navigate('OrderManagement');
+            await canMarkRead();
           }
           break;
 
@@ -98,8 +126,14 @@ const NotificationsScreen = () => {
         case 'dispute_created':
         case 'dispute_updated':
         case 'dispute_resolved':
+          if (!disputeId) {
+            Alert.alert('Notification', 'Dispute details not available');
+            return;
+          }
+
           if (userRole === 'BUYER' || userRole === 'ADMIN') {
-            (navigation as any).navigate('DisputeDetails', { disputeId: data?.disputeId });
+            (navigation as any).navigate('DisputeDetails', { disputeId });
+            await canMarkRead();
           } else {
             Alert.alert('Notification', 'Dispute details not available for sellers');
           }
@@ -109,7 +143,13 @@ const NotificationsScreen = () => {
         case 'payment_received':
         case 'payment_failed':
         case 'payment_refunded':
-          (navigation as any).navigate('PaymentDetails', { paymentId: data?.paymentId });
+          if (!paymentId) {
+            Alert.alert('Notification', 'Payment details not available');
+            return;
+          }
+
+          (navigation as any).navigate('PaymentDetails', { paymentId });
+          await canMarkRead();
           break;
 
         case 'escrow':
@@ -117,9 +157,11 @@ const NotificationsScreen = () => {
         case 'escrow_held':
           if (userRole === 'SELLER') {
             (navigation as any).navigate('SellerEscrow');
+            await canMarkRead();
           } else if (userRole === 'ADMIN') {
             (navigation as any).navigate('AdminEscrow');
-          } else {
+            await canMarkRead();
+          } else { 
             Alert.alert('Notification', 'Escrow details not available for buyers');
           }
           break;
@@ -127,9 +169,15 @@ const NotificationsScreen = () => {
         case 'review':
         case 'review_received':
           if (userRole === 'BUYER') {
-            (navigation as any).navigate('ProductReviews', { productId: data?.productId });
+            if (!productId) {
+              Alert.alert('Notification', 'Review details not available');
+              return;
+            }
+            (navigation as any).navigate('ProductReviews', { productId });
+            await canMarkRead();
           } else if (userRole === 'SELLER') {
             (navigation as any).navigate('MyStoreReviews');
+            await canMarkRead();
           } else {
             Alert.alert('Notification', 'Review details not available for admins');
           }
@@ -137,24 +185,32 @@ const NotificationsScreen = () => {
 
         case 'message':
         case 'new_message':
-          (navigation as any).navigate('ChatScreen', {
-            chatRoomId: data?.chatId,
-            otherUserName: data?.senderName,
-            otherUserAvatar: data?.senderAvatar,
-            otherUserType: data?.senderRole?.toLowerCase(),
-            storeName: data?.storeName,
-            storeLogo: data?.storeLogo
+          if (!chatId) {
+            Alert.alert('Notification', 'Chat details not available');
+            return;
+          }
+
+          (navigation as any).navigate('Chat', {
+            chatRoomId: chatId,
+            otherUserName: senderName,
+            otherUserAvatar: senderAvatar,
+            otherUserType: senderRole?.toLowerCase?.(),
+            storeName,
+            storeLogo
           });
+          await canMarkRead();
           break;
 
         case 'profile':
         case 'profile_updated':
           (navigation as any).navigate('EditProfile');
+          await canMarkRead();
           break;
 
         case 'wallet':
         case 'wallet_updated':
           (navigation as any).navigate('PaymentsScreen');
+          await canMarkRead();
           break;
 
         default:
@@ -231,8 +287,11 @@ const NotificationsScreen = () => {
   // Format date
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
+    if (!dateString || Number.isNaN(date.getTime())) return '';
+
     const now = new Date();
     const diff = now.getTime() - date.getTime();
+
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
@@ -269,12 +328,9 @@ const NotificationsScreen = () => {
         <Text style={styles.timestamp}>{formatDate(item.createdAt)}</Text>
       </View>
 
-      <TouchableOpacity
-        style={styles.detailsButton}
-        onPress={() => handleViewDetails(item)}
-      >
+      <View style={styles.detailsButton}>
         <Text style={styles.detailsButtonText}>View</Text>
-      </TouchableOpacity>
+      </View>
     </TouchableOpacity>
   );
 

@@ -1,42 +1,43 @@
 import express from 'express';
 import {
-  assignCourier,
   getDeliveryInfoByOrderId,
-  editAssignedDeliveryCourierInfo,
-  deleteAssignedDeliveryCourierInfo,
-  setDeliveryStatus,
+  shipOrder,
+  updateDeliveryInfo,
+  addDeliveryProof,
   getAllSellerDeliveries,
+  getBuyerDeliveries,
   getSellerDeliveryStats
 } from '../controllers/deliverycontrollers.js';
 import {
-  assignCourierValidation,
   getDeliveryInfoValidation,
-  editDeliveryCourierValidation,
-  deleteDeliveryCourierValidation,
-  setDeliveryStatusValidation,
+  shipOrderValidation,
+  updateDeliveryInfoValidation,
+  addDeliveryProofValidation,
   getAllSellerDeliveriesValidation,
+  getBuyerDeliveriesValidation,
   getSellerDeliveryStatsValidation
 } from '../middleware/deliveryValidation.js';
 import { authenticateToken, authorizeRoles } from '../middleware/authmiddleware.js';
 import { rateLimiter } from '../middleware/rateLimiter.js';
+import { deliveryProofUpload } from '../middleware/upload.js';
 
 const router = express.Router();
 
-// Rate limiting configurations
 const standardRateLimit = rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // 100 requests per window
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 
 const strictRateLimit = rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 30 // 30 requests per window for write operations
+  windowMs: 15 * 60 * 1000,
+  max: 30
 });
+
 
 router.get(
   '/seller/all',
   authenticateToken,
-  authorizeRoles("SELLER"),
+  authorizeRoles('SELLER'),
   standardRateLimit,
   getAllSellerDeliveriesValidation,
   getAllSellerDeliveries
@@ -45,19 +46,38 @@ router.get(
 router.get(
   '/seller/stats',
   authenticateToken,
-  authorizeRoles("SELLER"),
+  authorizeRoles('SELLER'),
   standardRateLimit,
   getSellerDeliveryStatsValidation,
   getSellerDeliveryStats
 );
 
 router.post(
-  '/assign-courier/:orderId',
+  '/ship/:orderId',
   authenticateToken,
-  authorizeRoles("SELLER"),
+  authorizeRoles('SELLER'),
   strictRateLimit,
-  assignCourierValidation,
-  assignCourier
+  deliveryProofUpload.array('proofs', 5),
+  shipOrderValidation,
+  shipOrder
+);
+
+router.patch(
+  '/order/:orderId',
+  authenticateToken,
+  authorizeRoles('SELLER'),
+  strictRateLimit,
+  updateDeliveryInfoValidation,
+  updateDeliveryInfo
+);
+
+router.get(
+  '/buyer/all',
+  authenticateToken,
+  authorizeRoles('BUYER'),
+  standardRateLimit,
+  getBuyerDeliveriesValidation,
+  getBuyerDeliveries
 );
 
 router.get(
@@ -68,33 +88,13 @@ router.get(
   getDeliveryInfoByOrderId
 );
 
-router.patch(
-  '/order/:orderId',
+router.post(
+  '/order/:orderId/proof',
   authenticateToken,
-  authorizeRoles("SELLER"),
   strictRateLimit,
-  editDeliveryCourierValidation,
-  editAssignedDeliveryCourierInfo
-);
-
-
-router.delete(
-  '/order/:orderId',
-  authenticateToken,
-  authorizeRoles("SELLER"),
-  strictRateLimit,
-  deleteDeliveryCourierValidation,
-  deleteAssignedDeliveryCourierInfo
-);
-
-
-router.patch(
-  '/order/:orderId/status',
-  authenticateToken,
-  authorizeRoles("SELLER"),
-  strictRateLimit,
-  setDeliveryStatusValidation,
-  setDeliveryStatus
+  deliveryProofUpload.array('proofs', 5),
+  addDeliveryProofValidation,
+  addDeliveryProof
 );
 
 export default router;

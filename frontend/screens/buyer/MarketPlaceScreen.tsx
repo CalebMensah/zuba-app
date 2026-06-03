@@ -1,49 +1,51 @@
-// screens/MarketplaceScreen.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
   Image,
-  ActivityIndicator,
+  ImageBackground,
   RefreshControl,
   TextInput,
   StyleSheet,
   Dimensions,
   FlatList,
   Modal,
-  Alert,
+  StatusBar,
 } from 'react-native';
-import { useProduct } from '../../hooks/useProducts';
+import { useAllProducts } from '../../hooks/useProducts';
 import { useCart } from '../../context/CartContext';
-import { Colors } from '../../constants/colors';
-import Feather from '@expo/vector-icons/Feather';
-import AntDesign from '@expo/vector-icons/AntDesign';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import EvilIcons from '@expo/vector-icons/EvilIcons';
+import { useAuth } from '../../context/AuthContext';
+import { Colors, Typography } from '../../constants/colors';
 import { Ionicons } from '@expo/vector-icons';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2;
+const CATEGORY_CHIP_WIDTH = 110;
+const CATEGORY_CHIP_HEIGHT = 88;
+const BANNER_WIDTH = width - 40;
 
 const CATEGORIES = [
-  'All',
-  'Electronics',
-  'Fashion & Clothing',
-  'Home & Garden',
-  'Health & Beauty',
-  'Sports & Outdoors',
-  'Toys & Games',
-  'Books & Media',
-  'Food & Beverages',
-  'Automotive',
-  'Jewelry & Accessories',
-  'Art & Crafts',
-  'Pet Supplies',
-  'Office Supplies',
-  'Baby & Kids',
-  'Other',
+  { name: 'Phones & Electronics', image: require('../../assets/categories/electronics.webp') },
+  { name: 'Fashion', image: require('../../assets/categories/fashion.jpg') },
+  { name: 'Beauty', image: require('../../assets/categories/beauty.jpg') },
+  { name: 'Home & Furniture', image: require('../../assets/categories/home.jpg') },
+  { name: 'Shoes & Bags', image: require('../../assets/categories/shoes.jpeg') },
+  { name: 'Health & Fitness', image: require('../../assets/categories/health.jpg') },
+  { name: 'Food & Groceries', image: require('../../assets/categories/food.jpg') },
+  { name: 'Baby & Kids', image: require('../../assets/categories/baby.webp') },
+  { name: 'Automobiles', image: require('../../assets/categories/automobile.jpg') },
+  { name: 'Sports', image: require('../../assets/categories/sports.jpg') },
+  { name: 'Jewelry & Watches', image: require('../../assets/categories/jeweries.jpg') },
+  { name: 'Services', image: require('../../assets/categories/services.jpg') },
+];
+
+const BANNERS = [
+  require('../../assets/banners/banner1.png'),
+  require('../../assets/banners/banner2.png'),
+  require('../../assets/banners/banner3.png'),
 ];
 
 interface MarketplaceScreenProps {
@@ -51,413 +53,463 @@ interface MarketplaceScreenProps {
 }
 
 const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => {
-  const { getAllProducts, products, pagination, loading, error } = useProduct();
   const { addItem } = useCart();
 
-  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [sortBy, setSortBy] = useState<'createdAt' | 'price' | 'name' | 'quantityBought' | 'viewCount'>('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  
-  // Filter states
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
-  const [selectedColors, setSelectedColors] = useState<string[]>([]);
-   const [selectedSize, setSelectedSize] = useState<string | null>(null);
-    const [selectedColor, setSelectedColor] = useState<string | null>(null);
-    const [addingToCart, setAddingToCart] = useState(false);
-    const [quantity, setQuantity] = useState(1);
+  const [activeBanner, setActiveBanner] = useState(0);
 
+  // FIX: Use FlatList ref instead of ScrollView ref
+  const bannerFlatListRef = useRef<FlatList>(null);
+  const bannerTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const filters: any = {
+    page,
+    limit: 10,
+    search: searchQuery || undefined,
+    category: selectedCategory !== 'All' ? selectedCategory : undefined,
+    sortBy,
+    sortOrder,
+  };
+
+  if (minPrice) filters.minPrice = parseFloat(minPrice);
+  if (maxPrice) filters.maxPrice = parseFloat(maxPrice);
+
+  const {
+    data: productData,
+    isLoading,
+    error,
+    refetch,
+    isFetching,
+  } = useAllProducts(filters);
+
+  const products = productData?.products || [];
+  const pagination = productData?.pagination;
+
+  // FIX: Use scrollToIndex instead of scrollTo — works cleanly with FlatList pagingEnabled
   useEffect(() => {
-    fetchProducts();
-  }, [searchQuery, selectedCategory, sortBy, sortOrder, page]);
+    bannerTimer.current = setInterval(() => {
+      setActiveBanner(prev => {
+        const next = (prev + 1) % BANNERS.length;
+        bannerFlatListRef.current?.scrollToIndex({ index: next, animated: true });
+        return next;
+      });
+    }, 5000);
 
-  const fetchProducts = async () => {
-    const filters: any = {
-      page,
-      limit: 10,
-      search: searchQuery,
-      category: selectedCategory !== 'All' ? selectedCategory : undefined,
-      sortBy,
-      sortOrder,
+    return () => {
+      if (bannerTimer.current) clearInterval(bannerTimer.current);
     };
+  }, []);
 
-    if (minPrice) filters.minPrice = parseFloat(minPrice);
-    if (maxPrice) filters.maxPrice = parseFloat(maxPrice);
-    if (selectedTags.length > 0) filters.tags = selectedTags;
-    if (selectedSizes.length > 0) filters.sizes = selectedSizes;
-    if (selectedColors.length > 0) filters.color = selectedColors;
+  const handleSearch = useCallback(() => {
+    navigation.navigate('SearchScreen');
+  }, [navigation]);
 
-    await getAllProducts(filters);
-  };
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    setPage(1);
-    await fetchProducts();
-    setRefreshing(false);
-  }, [searchQuery, selectedCategory, sortBy, sortOrder, minPrice, maxPrice]);
-
-  const loadMore = () => {
-    if (pagination && page < pagination.pages && !loadingMore) {
-      setLoadingMore(true);
-      setPage(page + 1);
-      setLoadingMore(false);
-    }
-  };
-
-  const handleSearch = (text: string) => {
-    setSearchQuery(text);
-    setPage(1);
-  };
-
-  const handleCategorySelect = (category: string) => {
+  const handleCategorySelect = useCallback((category: string) => {
     setSelectedCategory(category);
     setPage(1);
-  };
+  }, []);
 
-  const toggleSort = () => {
-    setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+  const toggleSort = useCallback(() => {
+    setSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
     setPage(1);
-  };
+  }, []);
 
-  const changeSortBy = (newSortBy: typeof sortBy) => {
+  const changeSortBy = useCallback((newSortBy: typeof sortBy) => {
     setSortBy(newSortBy);
     setPage(1);
-  };
+  }, []);
 
-  const handleProductPress = (product: any) => {
+  const handleProductPress = useCallback((product: any) => {
     navigation.navigate('SellerPublicProductDetails', {
       productUrl: product.url,
       storeUrl: product.store?.url,
     });
-  };
+  }, [navigation]);
 
-  const handleAddToCart = async (product: any) => {
-    if (!product) return;
-
-    // Auto-select first size if exists and not selected
-    if (product.sizes && product.sizes.length > 0 && !selectedSize) {
-      setSelectedSize(product.sizes[0]);
-    }
-
-    // Auto-select first color if exists and not selected
-    if (product.color && product.color.length > 0 && !selectedColor) {
-      setSelectedColor(product.color[0]);
-    }
-
-    setAddingToCart(true);
-    try {
-      await addItem(product.id, quantity);
-      Alert.alert(
-        'Success',
-        `${product.name} has been added to your cart!`,
-        [
-          { text: 'Continue Shopping', style: 'cancel' },
-          {
-            text: 'View Cart',
-            onPress: () => navigation.navigate('CartScreen'),
-          },
-        ]
-      );
-    } catch (err) {
-      console.error('Error adding to cart:', err);
-      Alert.alert('Error', 'Failed to add item to cart. Please try again.');
-    } finally {
-      setAddingToCart(false);
-    }
-  };
-
-  const applyFilters = () => {
+  const applyFilters = useCallback(() => {
     setShowFilters(false);
     setPage(1);
-    fetchProducts();
-  };
+  }, []);
 
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setMinPrice('');
     setMaxPrice('');
-    setSelectedTags([]);
-    setSelectedSizes([]);
-    setSelectedColors([]);
     setShowFilters(false);
     setPage(1);
-    fetchProducts();
-  };
+  }, []);
 
-  const renderProductCard = ({ item }: { item: any }) => (
+  const loadMore = useCallback(() => {
+    if (pagination && page < pagination.pages && !isFetching) {
+      setPage(prev => prev + 1);
+    }
+  }, [pagination, page, isFetching]);
+
+  const renderProductCard = useCallback(({ item }: { item: any }) => (
     <TouchableOpacity
       style={styles.productCard}
       onPress={() => handleProductPress(item)}
       activeOpacity={0.7}
     >
-      {/* Product Image */}
       <View style={styles.imageContainer}>
         {item.images && item.images.length > 0 ? (
-          <Image source={{ uri: item.images[0] }} style={styles.productImage} />
+          <Image
+            source={{ uri: item.images[0] }}
+            style={styles.productImage}
+            resizeMode="cover"
+          />
         ) : (
           <View style={styles.placeholderImage}>
-            <Text style={styles.placeholderText}>No Image</Text>
+            <Ionicons name="image-outline" size={40} color={Colors.gray400} />
           </View>
         )}
+
         {item.stock === 0 && (
           <View style={styles.outOfStockBadge}>
-            <Text style={styles.outOfStockText}>Out of Stock</Text>
+            <Text style={styles.badgeText}>Out of Stock</Text>
+          </View>
+        )}
+
+        {item.stock > 0 && item.stock <= 10 && (
+          <View style={styles.lowStockBadge}>
+            <Text style={styles.badgeText}>{item.stock} left</Text>
           </View>
         )}
       </View>
 
-      {/* Product Info */}
       <View style={styles.productInfo}>
         <Text style={styles.productName} numberOfLines={2}>
           {item.name}
         </Text>
 
         {item.store && (
-          <Text style={styles.storeName} numberOfLines={1}>
-            By {item.store.name}
-          </Text>
-        )}
-
-        {item.category && (
-          <Text style={styles.categoryText} numberOfLines={1}>
-            {item.category}
-          </Text>
-        )}
-
-        <View style={styles.priceRow}>
-          <Text style={styles.priceText}>GH₵ {item.price.toFixed(2)}</Text>
-          {item.stock > 0 && item.stock <= 10 && (
-            <Text style={styles.lowStockText}>{item.stock} left</Text>
-          )}
-        </View>
-
-        {/* Add to Cart Button */}
-        <TouchableOpacity
-          style={[
-            styles.addToCartBtn,
-            item.stock === 0 && styles.addToCartBtnDisabled,
-          ]}
-          onPress={() => handleAddToCart(item)}
-          disabled={item.stock === 0}
-        >
-          <View style={styles.addToCartContent}>
-            {item.stock !== 0 && (
-              <Ionicons name="cart" size={18} color={Colors.white} style={styles.cartIcon} />
-            )}
-            <Text style={styles.addToCartText}>
-              {item.stock === 0 ? 'Out of Stock' : 'Add'}
+          <View style={styles.storeRow}>
+            <Ionicons name="storefront-outline" size={12} color={Colors.gray500} />
+            <Text style={styles.storeName} numberOfLines={1}>
+              {item.store.name}
             </Text>
           </View>
-        </TouchableOpacity>
+        )}
+
+        <View style={styles.bottomRow}>
+          <Text style={styles.priceText}>GH₵{item.price.toFixed(2)}</Text>
+          {item.quantityBought > 0 && (
+            <Text style={styles.soldText}>{item.quantityBought} sold</Text>
+          )}
+        </View>
       </View>
     </TouchableOpacity>
-  );
+  ), [handleProductPress]);
 
-  const renderHeader = () => (
-    <View style={styles.headerContainer}>
-            {/* Title and Results Count */}
-      <View style={styles.titleRow}>
-        <Text style={styles.title}>Marketplace</Text>
-        {pagination && (
-          <Text style={styles.resultCount}>
-            {pagination.total} {pagination.total === 1 ? 'Product' : 'Products'}
+  const renderCategoryChip = useCallback((category: typeof CATEGORIES[0]) => {
+    const isActive = selectedCategory === category.name;
+
+    return (
+      <TouchableOpacity
+        key={category.name}
+        style={styles.categoryChipWrapper}
+        onPress={() => handleCategorySelect(category.name)}
+        activeOpacity={0.85}
+      >
+        <ImageBackground
+          source={category.image}
+          style={styles.categoryChip}
+          imageStyle={styles.categoryChipImage}
+          resizeMode="cover"
+        >
+          <View style={[styles.categoryOverlay, isActive && styles.categoryOverlayActive]} />
+          {isActive && <View style={styles.categoryActiveBorder} />}
+          <Text style={styles.categoryChipText} numberOfLines={2}>
+            {category.name}
           </Text>
-        )}
-      </View>
+        </ImageBackground>
+      </TouchableOpacity>
+    );
+  }, [selectedCategory, handleCategorySelect]);
 
-      {/* Top Bar with Search and Icons */}
-      <View style={styles.topBar}>
-        <View style={styles.searchContainer}>
-          <Text style={styles.searchIcon}><Feather name="search" size={24} color="black" /></Text>
+  // FIX: Banner rendered via FlatList — no pagingEnabled + scrollTo conflict
+  const renderBannerItem = useCallback(({ item }: { item: any }) => (
+    <Image
+      source={item}
+      style={styles.bannerImage}
+      resizeMode="cover"
+    />
+  ), []);
+
+  const bannerKeyExtractor = useCallback((_: any, index: number) => String(index), []);
+
+  // FIX: getItemLayout is required for scrollToIndex to work reliably
+  const getBannerItemLayout = useCallback((_: any, index: number) => ({
+    length: BANNER_WIDTH,
+    offset: BANNER_WIDTH * index,
+    index,
+  }), []);
+
+  // FIX: useCallback with all dependencies so FlatList gets a stable header reference
+  // This prevents the header from unmounting/remounting on every activeBanner tick,
+  // which is what was causing the category ScrollView to reset its scroll position.
+  const renderHeader = useCallback(() => (
+    <View style={styles.headerContainer}>
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
+
+      {/* Search */}
+      <View style={styles.searchHeader}>
+        <View style={styles.searchBarContainer}>
+          <Ionicons name="search" size={20} color={Colors.gray400} style={styles.searchIcon} />
           <TextInput
             style={styles.searchInput}
             placeholder="Search products..."
             placeholderTextColor={Colors.gray400}
             value={searchQuery}
-            onChangeText={handleSearch}
+            onChangeText={setSearchQuery}
+            onFocus={() => navigation.navigate('SearchScreen')}
+            returnKeyType="search"
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => handleSearch('')}>
-              <Text style={styles.clearIcon}>✕</Text>
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color={Colors.gray400} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity style={styles.goButton} onPress={handleSearch}>
+            <Text style={styles.goButtonText}>Go</Text>
+          </TouchableOpacity>
         </View>
 
-        <View style={styles.iconRow}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => navigation.navigate('LikedProducts')}
-          >
-            <Text style={styles.iconText}><AntDesign name="heart" size={24} color="#EF4444" /></Text>
-          </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.notificationBtn}
+          onPress={() => navigation.navigate('Notifications')}
+        >
+          <Ionicons name="notifications-outline" size={24} color={Colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
 
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => navigation.navigate('Notifications')}
-          >
-            <Text style={styles.iconText}><FontAwesome name="bell" size={24} color="#3B82F6" /></Text>
-          </TouchableOpacity>
+      {/* FIX: Banner now uses FlatList instead of ScrollView
+          - No pagingEnabled conflict with manual scrollTo
+          - scrollToIndex is purpose-built for FlatList
+          - scrollEnabled={false} prevents user swipe from fighting the timer */}
+      <View style={styles.bannerContainer}>
+        <FlatList
+          ref={bannerFlatListRef}
+          data={BANNERS}
+          renderItem={renderBannerItem}
+          keyExtractor={bannerKeyExtractor}
+          getItemLayout={getBannerItemLayout}
+          horizontal
+          pagingEnabled
+          scrollEnabled={false}
+          showsHorizontalScrollIndicator={false}
+          initialScrollIndex={0}
+          onMomentumScrollEnd={(e) => {
+            const index = Math.round(e.nativeEvent.contentOffset.x / BANNER_WIDTH);
+            setActiveBanner(index);
+          }}
+        />
+
+        {/* Dot indicators */}
+        <View style={styles.bannerDots}>
+          {BANNERS.map((_, index) => (
+            <View
+              key={index}
+              style={[styles.bannerDot, activeBanner === index && styles.bannerDotActive]}
+            />
+          ))}
         </View>
       </View>
 
-
-
       {/* Categories */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.categoriesContainer}
-      >
-        {CATEGORIES.map((category) => (
-          <TouchableOpacity
-            key={category}
-            style={[
-              styles.categoryBtn,
-              selectedCategory === category && styles.categoryBtnActive,
-            ]}
-            onPress={() => handleCategorySelect(category)}
-          >
-            <Text
-              style={[
-                styles.categoryText,
-                selectedCategory === category && styles.categoryTextActive,
-              ]}
-            >
-              {category}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Sort and Filter Bar */}
-      <View style={styles.controlBar}>
+      <View style={styles.categoriesSection}>
+        <Text style={styles.sectionTitle}>Categories</Text>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={styles.sortContainer}
+          contentContainerStyle={styles.categoriesScroll}
         >
           <TouchableOpacity
-            style={[styles.sortBtn, sortBy === 'createdAt' && styles.sortBtnActive]}
+            style={[styles.allChip, selectedCategory === 'All' && styles.allChipActive]}
+            onPress={() => handleCategorySelect('All')}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name="grid-outline"
+              size={20}
+              color={selectedCategory === 'All' ? Colors.white : Colors.primary}
+            />
+            <Text style={[styles.allChipText, selectedCategory === 'All' && styles.allChipTextActive]}>
+              All
+            </Text>
+          </TouchableOpacity>
+
+          {CATEGORIES.map(category => renderCategoryChip(category))}
+        </ScrollView>
+      </View>
+
+      {/* Sort & Filters */}
+      <View style={styles.filtersSection}>
+        <Text style={styles.sectionTitle}>Sort & Filter</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filtersScroll}
+        >
+          <TouchableOpacity
+            style={[styles.filterChip, sortBy === 'createdAt' && styles.filterChipActive]}
             onPress={() => changeSortBy('createdAt')}
           >
-            <Text
-              style={[
-                styles.sortBtnText,
-                sortBy === 'createdAt' && styles.sortBtnTextActive,
-              ]}
-            >
+            <Ionicons
+              name="time-outline"
+              size={16}
+              color={sortBy === 'createdAt' ? Colors.white : Colors.textSecondary}
+            />
+            <Text style={[styles.filterChipText, sortBy === 'createdAt' && styles.filterChipTextActive]}>
               Latest
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.sortBtn, sortBy === 'price' && styles.sortBtnActive]}
+            style={[styles.filterChip, sortBy === 'price' && styles.filterChipActive]}
             onPress={() => changeSortBy('price')}
           >
-            <Text
-              style={[
-                styles.sortBtnText,
-                sortBy === 'price' && styles.sortBtnTextActive,
-              ]}
-            >
+            <Ionicons
+              name="pricetag-outline"
+              size={16}
+              color={sortBy === 'price' ? Colors.white : Colors.textSecondary}
+            />
+            <Text style={[styles.filterChipText, sortBy === 'price' && styles.filterChipTextActive]}>
               Price
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.sortBtn, sortBy === 'quantityBought' && styles.sortBtnActive]}
+            style={[styles.filterChip, sortBy === 'quantityBought' && styles.filterChipActive]}
             onPress={() => changeSortBy('quantityBought')}
           >
-            <Text
-              style={[
-                styles.sortBtnText,
-                sortBy === 'quantityBought' && styles.sortBtnTextActive,
-              ]}
-            >
+            <Ionicons
+              name="trending-up-outline"
+              size={16}
+              color={sortBy === 'quantityBought' ? Colors.white : Colors.textSecondary}
+            />
+            <Text style={[styles.filterChipText, sortBy === 'quantityBought' && styles.filterChipTextActive]}>
               Popular
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.sortBtn, sortBy === 'viewCount' && styles.sortBtnActive]}
+            style={[styles.filterChip, sortBy === 'viewCount' && styles.filterChipActive]}
             onPress={() => changeSortBy('viewCount')}
           >
-            <Text
-              style={[
-                styles.sortBtnText,
-                sortBy === 'viewCount' && styles.sortBtnTextActive,
-              ]}
-            >
-              Most Viewed
+            <Ionicons
+              name="eye-outline"
+              size={16}
+              color={sortBy === 'viewCount' ? Colors.white : Colors.textSecondary}
+            />
+            <Text style={[styles.filterChipText, sortBy === 'viewCount' && styles.filterChipTextActive]}>
+              Views
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.sortOrderBtn} onPress={toggleSort}>
+          <TouchableOpacity style={styles.sortOrderChip} onPress={toggleSort}>
+            <Ionicons
+              name={sortOrder === 'asc' ? 'arrow-up' : 'arrow-down'}
+              size={16}
+              color={Colors.textPrimary}
+            />
             <Text style={styles.sortOrderText}>
-              {sortOrder === 'asc' ? '↑' : '↓'}
+              {sortOrder === 'asc' ? 'Low-High' : 'High-Low'}
             </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.priceFilterBtn}
+            onPress={() => setShowFilters(true)}
+          >
+            <Ionicons name="options-outline" size={16} color={Colors.primary} />
+            <Text style={styles.priceFilterText}>Price Range</Text>
           </TouchableOpacity>
         </ScrollView>
-
-        <TouchableOpacity
-          style={styles.filterBtn}
-          onPress={() => setShowFilters(true)}
-        >
-          <Text style={styles.filterBtnText}><EvilIcons name="gear" size={24} color="white" /> Filters</Text>
-        </TouchableOpacity>
       </View>
-    </View>
-  );
 
-  const renderEmpty = () => (
+      {/* Results count */}
+      {pagination && (
+        <View style={styles.resultsSection}>
+          <Text style={styles.resultsText}>
+            {pagination.total} {pagination.total === 1 ? 'Product' : 'Products'} Found
+          </Text>
+        </View>
+      )}
+    </View>
+  ), [
+    searchQuery,
+    selectedCategory,
+    sortBy,
+    sortOrder,
+    activeBanner,
+    pagination,
+    minPrice,
+    maxPrice,
+    handleSearch,
+    handleCategorySelect,
+    changeSortBy,
+    toggleSort,
+    renderCategoryChip,
+    renderBannerItem,
+    bannerKeyExtractor,
+    getBannerItemLayout,
+    navigation,
+  ]);
+
+  const renderEmpty = useCallback(() => (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyIcon}>🛍️</Text>
+      <Ionicons name="search-outline" size={80} color={Colors.gray300} />
       <Text style={styles.emptyTitle}>No Products Found</Text>
       <Text style={styles.emptyText}>
         {searchQuery
-          ? 'Try different keywords or filters'
-          : 'Check back later for new products'}
+          ? 'Try different keywords or adjust your filters'
+          : 'Check back soon for new arrivals'}
       </Text>
+      {searchQuery && (
+        <TouchableOpacity style={styles.clearSearchBtn} onPress={() => setSearchQuery('')}>
+          <Text style={styles.clearSearchText}>Clear Search</Text>
+        </TouchableOpacity>
+      )}
     </View>
-  );
+  ), [searchQuery]);
 
-  const renderFooter = () => {
-    if (!loadingMore) return null;
+  const renderFooter = useCallback(() => {
+    if (!isFetching || page === 1) return null;
     return (
       <View style={styles.footerLoader}>
-        <ActivityIndicator size="small" color={Colors.primary} />
+        <LoadingSpinner size={20} color={Colors.primary} />
+        <Text style={styles.loadingMoreText}>Loading more...</Text>
       </View>
     );
-  };
+  }, [isFetching, page]);
 
   const renderFiltersModal = () => (
     <Modal
       visible={showFilters}
       animationType="slide"
-      transparent={true}
+      transparent
       onRequestClose={() => setShowFilters(false)}
     >
       <View style={styles.modalOverlay}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Filters</Text>
+            <Text style={styles.modalTitle}>Price Range</Text>
             <TouchableOpacity onPress={() => setShowFilters(false)}>
-              <Text style={styles.modalClose}>✕</Text>
+              <Ionicons name="close" size={28} color={Colors.textPrimary} />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.modalScroll}>
-            {/* Price Range */}
-            <View style={styles.filterSection}>
-              <Text style={styles.filterLabel}>Price Range</Text>
-              <View style={styles.priceRow}>
+          <View style={styles.modalBody}>
+            <View style={styles.priceInputRow}>
+              <View style={styles.priceInputWrapper}>
+                <Text style={styles.currencyLabel}>GH₵</Text>
                 <TextInput
                   style={styles.priceInput}
                   placeholder="Min"
@@ -466,7 +518,12 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
                   onChangeText={setMinPrice}
                   keyboardType="decimal-pad"
                 />
-                <Text style={styles.priceSeparator}>—</Text>
+              </View>
+              <View style={styles.priceSeparator}>
+                <View style={styles.separatorLine} />
+              </View>
+              <View style={styles.priceInputWrapper}>
+                <Text style={styles.currencyLabel}>GH₵</Text>
                 <TextInput
                   style={styles.priceInput}
                   placeholder="Max"
@@ -477,21 +534,14 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
                 />
               </View>
             </View>
-          </ScrollView>
+          </View>
 
           <View style={styles.modalFooter}>
-            <TouchableOpacity
-              style={styles.clearFiltersBtn}
-              onPress={clearFilters}
-            >
-              <Text style={styles.clearFiltersBtnText}>Clear All</Text>
+            <TouchableOpacity style={styles.clearFiltersBtn} onPress={clearFilters}>
+              <Text style={styles.clearFiltersBtnText}>Clear</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.applyFiltersBtn}
-              onPress={applyFilters}
-            >
-              <Text style={styles.applyFiltersBtnText}>Apply Filters</Text>
+            <TouchableOpacity style={styles.applyFiltersBtn} onPress={applyFilters}>
+              <Text style={styles.applyFiltersBtnText}>Apply</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -499,23 +549,24 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
     </Modal>
   );
 
-  if (loading && !refreshing && page === 1) {
+  if (isLoading && !productData) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingText}>Loading marketplace...</Text>
+        <LoadingSpinner size={40} color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading products...</Text>
       </View>
     );
   }
 
-  if (error && !refreshing) {
+  if (error) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.errorIcon}>⚠️</Text>
-        <Text style={styles.errorTitle}>Error Loading Products</Text>
-        <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
-          <Text style={styles.retryBtnText}>Retry</Text>
+        <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+        <Text style={styles.errorTitle}>Oops! Something went wrong</Text>
+        <Text style={styles.errorText}>{error.message}</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
+          <Ionicons name="refresh" size={20} color={Colors.white} />
+          <Text style={styles.retryBtnText}>Try Again</Text>
         </TouchableOpacity>
       </View>
     );
@@ -526,7 +577,7 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
       <FlatList
         data={products}
         renderItem={renderProductCard}
-        keyExtractor={(item) => item.id}
+        keyExtractor={item => item.id}
         numColumns={2}
         columnWrapperStyle={styles.row}
         ListHeaderComponent={renderHeader}
@@ -534,8 +585,8 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
         ListFooterComponent={renderFooter}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
+            refreshing={isFetching && !!productData}
+            onRefresh={refetch}
             colors={[Colors.primary]}
             tintColor={Colors.primary}
           />
@@ -554,329 +605,443 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.backgroundSecondary,
+    backgroundColor: Colors.background,
+    marginTop: 20,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
-    backgroundColor: Colors.backgroundSecondary,
+    padding: 24,
+    backgroundColor: Colors.background,
   },
   loadingText: {
-    marginTop: 12,
+    marginTop: 16,
     fontSize: 16,
     color: Colors.textSecondary,
-  },
-  errorIcon: {
-    fontSize: 48,
-    marginBottom: 16,
+    fontFamily: Typography.medium,
   },
   errorTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
+    marginTop: 16,
     marginBottom: 8,
   },
   errorText: {
     fontSize: 14,
     color: Colors.textSecondary,
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
+    paddingHorizontal: 32,
+    fontFamily: Typography.regular,
   },
   retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: Colors.primary,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 12,
   },
   retryBtnText: {
     color: Colors.white,
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: Typography.semiBold,
   },
   listContent: {
     paddingBottom: 20,
   },
   headerContainer: {
-    backgroundColor: Colors.white,
-    paddingBottom: 12,
-    marginBottom: 8,
+    backgroundColor: Colors.background,
+    paddingTop: 12,
   },
-  topBar: {
+  searchHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    gap: 8,
-    marginBottom: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 12,
   },
-  searchContainer: {
+  searchBarContainer: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.backgroundSecondary,
+    backgroundColor: Colors.white,
     borderRadius: 12,
-    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 16,
+    height: 48,
   },
   searchIcon: {
-    fontSize: 18,
     marginRight: 8,
   },
   searchInput: {
     flex: 1,
-    height: 44,
-    fontSize: 16,
+    fontSize: 15,
     color: Colors.textPrimary,
+    fontFamily: Typography.regular,
   },
-  clearIcon: {
-    fontSize: 20,
-    color: Colors.gray500,
-    padding: 4,
+  goButton: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginLeft: 8,
   },
-  iconRow: {
-    flexDirection: 'row',
-    gap: 8,
+  goButtonText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontFamily: Typography.semiBold,
   },
-  iconBtn: {
-    width: 44,
-    height: 44,
-    backgroundColor: Colors.backgroundSecondary,
+  notificationBtn: {
+    width: 48,
+    height: 48,
     borderRadius: 12,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  iconText: {
-    fontSize: 20,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    marginTop: 32,
-    marginBottom: 12,
-    backgroundColor: Colors.white,
-    padding:14,
-    borderTopLeftRadius:6,
-    borderTopRightRadius:6,
-    height:80,
+
+  // ── Banner ──────────────────────────────────────────────────────────────────
+  bannerContainer: {
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 16,
+    overflow: 'hidden',
     shadowColor: Colors.black,
-    borderColor: Colors.overlay,
-    borderWidth: 0.1,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 5,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.primaryDark,
+  bannerImage: {
+    width: BANNER_WIDTH,
+    height: 160,
   },
-  resultCount: {
-    fontSize: 14,
-    color: Colors.primaryLight,
+  bannerDots: {
+    position: 'absolute',
+    bottom: 10,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
-  categoriesContainer: {
-    paddingHorizontal: 16,
+  bannerDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  bannerDotActive: {
+    width: 18,
+    backgroundColor: Colors.white,
+  },
+
+  // ── Categories ──────────────────────────────────────────────────────────────
+  categoriesSection: {
+    paddingTop: 20,
+    paddingBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontFamily: Typography.bold,
+    color: Colors.textPrimary,
+    paddingHorizontal: 20,
     marginBottom: 12,
   },
-  categoryBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: Colors.backgroundSecondary,
-    marginRight: 8,
+  categoriesScroll: {
+    paddingHorizontal: 20,
+    gap: 10,
+    alignItems: 'center',
   },
-  categoryBtnActive: {
+  allChip: {
+    width: CATEGORY_CHIP_WIDTH,
+    height: CATEGORY_CHIP_HEIGHT,
+    borderRadius: 16,
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  allChipActive: {
     backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
   },
-  categoryText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.textSecondary,
+  allChipText: {
+    fontSize: 12,
+    fontFamily: Typography.semiBold,
+    color: Colors.primary,
   },
-  categoryTextActive: {
+  allChipTextActive: {
     color: Colors.white,
   },
-  controlBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
+  categoryChipWrapper: {
+    width: CATEGORY_CHIP_WIDTH,
+    height: CATEGORY_CHIP_HEIGHT,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  categoryChip: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'flex-end',
+    padding: 8,
+  },
+  categoryChipImage: {
+    borderRadius: 16,
+  },
+  categoryOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.38)',
+    borderRadius: 16,
+  },
+  categoryOverlayActive: {
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  categoryActiveBorder: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 16,
+    borderWidth: 2.5,
+    borderColor: Colors.primary,
+  },
+  categoryChipText: {
+    fontSize: 11,
+    fontFamily: Typography.semiBold,
+    color: Colors.white,
+    lineHeight: 14,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+
+  // ── Sort / Filters ──────────────────────────────────────────────────────────
+  filtersSection: {
+    paddingBottom: 16,
+  },
+  filtersScroll: {
+    paddingHorizontal: 20,
     gap: 8,
   },
-  sortContainer: {
-    flex: 1,
-  },
-  sortBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: 20,
-    backgroundColor: Colors.backgroundSecondary,
-    marginRight: 8,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  sortBtnActive: {
+  filterChipActive: {
     backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
   },
-  sortBtnText: {
+  filterChipText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: Typography.medium,
     color: Colors.textSecondary,
   },
-  sortBtnTextActive: {
+  filterChipTextActive: {
     color: Colors.white,
   },
-  sortOrderBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.backgroundSecondary,
-    justifyContent: 'center',
+  sortOrderChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 8,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   sortOrderText: {
-    fontSize: 18,
+    fontSize: 13,
+    fontFamily: Typography.medium,
     color: Colors.textPrimary,
   },
-  filterBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  priceFilterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: 20,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.primary,
   },
-  filterBtnText: {
+  priceFilterText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: Colors.white,
+    fontFamily: Typography.medium,
+    color: Colors.primary,
   },
+  resultsSection: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  resultsText: {
+    fontSize: 14,
+    fontFamily: Typography.medium,
+    color: Colors.textSecondary,
+  },
+
+  // ── Product Cards ───────────────────────────────────────────────────────────
   row: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     justifyContent: 'space-between',
   },
   productCard: {
     width: CARD_WIDTH,
     backgroundColor: Colors.white,
-    borderRadius: 12,
+    borderRadius: 20,
     marginBottom: 16,
     overflow: 'hidden',
     shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 4,
   },
   imageContainer: {
     width: '100%',
     height: CARD_WIDTH,
-    position: 'relative',
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: Colors.gray50,
   },
   productImage: {
     width: '100%',
     height: '100%',
-    backgroundColor: Colors.gray100,
   },
   placeholderImage: {
     width: '100%',
     height: '100%',
-    backgroundColor: Colors.gray200,
+    backgroundColor: Colors.gray100,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  placeholderText: {
-    fontSize: 12,
-    color: Colors.gray500,
   },
   outOfStockBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: 10,
+    left: 10,
     backgroundColor: Colors.error,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
-  outOfStockText: {
+  lowStockBadge: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    backgroundColor: Colors.accent,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  badgeText: {
     fontSize: 10,
-    fontWeight: 'bold',
+    fontFamily: Typography.bold,
     color: Colors.white,
+    textTransform: 'uppercase',
   },
   productInfo: {
-    padding: 12,
+    padding: 14,
   },
   productName: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: Typography.semiBold,
     color: Colors.textPrimary,
-    marginBottom: 2,
-    lineHeight: 18,
+    marginBottom: 6,
+    lineHeight: 20,
+  },
+  storeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 8,
   },
   storeName: {
     fontSize: 11,
-    color: Colors.textSecondary,
-    marginBottom: 4,
+    color: Colors.gray500,
+    fontFamily: Typography.medium,
   },
-  priceRow: {
+  bottomRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
   },
   priceText: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontFamily: Typography.bold,
     color: Colors.primary,
   },
-  lowStockText: {
-    fontSize: 10,
-    color: Colors.accent,
-    fontWeight: '600',
+  soldText: {
+    fontSize: 11,
+    color: Colors.gray500,
+    fontFamily: Typography.medium,
   },
-  addToCartBtn: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  addToCartBtnDisabled: {
-    backgroundColor: Colors.gray300,
-  },
-  addToCartContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cartIcon: {
-    marginRight: 4,
-  },
-  addToCartText: {
-    color: Colors.white,
-    fontSize: 12,
-    fontWeight: '600',
-  },
+
+  // ── Empty / Footer ──────────────────────────────────────────────────────────
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: 16,
+    paddingVertical: 80,
+    paddingHorizontal: 24,
   },
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 22,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
+    marginTop: 20,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 14,
     color: Colors.textSecondary,
     textAlign: 'center',
+    lineHeight: 20,
+    fontFamily: Typography.regular,
+  },
+  clearSearchBtn: {
+    marginTop: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+  },
+  clearSearchText: {
+    fontSize: 14,
+    fontFamily: Typography.semiBold,
+    color: Colors.white,
   },
   footerLoader: {
-    paddingVertical: 20,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 24,
+    gap: 12,
   },
+  loadingMoreText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    fontFamily: Typography.medium,
+  },
+
+  // ── Modal ───────────────────────────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -884,9 +1049,9 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: Colors.white,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '80%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '50%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -898,41 +1063,50 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
   },
-  modalClose: {
-    fontSize: 28,
-    color: Colors.gray500,
-  },
-  modalScroll: {
+  modalBody: {
     padding: 20,
   },
-  filterSection: {
-    marginBottom: 24,
+  priceInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
-  filterLabel: {
+  priceInputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.backgroundSecondary,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 8,
+  },
+  currencyLabel: {
     fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 12,
+    fontFamily: Typography.semiBold,
+    color: Colors.textSecondary,
   },
   priceInput: {
     flex: 1,
-    backgroundColor: Colors.backgroundSecondary,
-    borderRadius: 8,
-    padding: 12,
     fontSize: 16,
     color: Colors.textPrimary,
+    fontFamily: Typography.semiBold,
   },
   priceSeparator: {
-    marginHorizontal: 12,
-    fontSize: 16,
-    color: Colors.textSecondary,
+    width: 24,
+    alignItems: 'center',
+  },
+  separatorLine: {
+    width: 16,
+    height: 2,
+    backgroundColor: Colors.gray300,
   },
   modalFooter: {
     flexDirection: 'row',
-    padding: 16,
+    padding: 20,
     gap: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
@@ -946,11 +1120,11 @@ const styles = StyleSheet.create({
   },
   clearFiltersBtnText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: Typography.semiBold,
     color: Colors.textPrimary,
   },
   applyFiltersBtn: {
-    flex: 1,
+    flex: 2,
     backgroundColor: Colors.primary,
     padding: 16,
     borderRadius: 12,
@@ -958,7 +1132,7 @@ const styles = StyleSheet.create({
   },
   applyFiltersBtnText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: Typography.semiBold,
     color: Colors.white,
   },
 });

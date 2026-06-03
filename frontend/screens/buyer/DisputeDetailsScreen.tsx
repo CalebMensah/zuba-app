@@ -8,11 +8,9 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
-  Modal,
-  TextInput,
 } from 'react-native';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useDisputes, Dispute, DisputeType } from '../../hooks/useDisputes';
 import { useAuth } from '../../context/AuthContext';
 import { Colors } from '../../constants/colors';
@@ -27,20 +25,10 @@ const DisputeDetailsScreen: React.FC = () => {
   const { disputeId } = route.params as RouteParams;
   const { user } = useAuth();
 
-  const {
-    loading,
-    error,
-    getDisputeById,
-    updateDispute,
-    cancelDispute,
-    clearError,
-  } = useDisputes();
+  const { loading, error, getDisputeById, cancelDispute, clearError } = useDisputes();
 
   const [dispute, setDispute] = useState<Dispute | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [showAddInfoModal, setShowAddInfoModal] = useState(false);
-  const [additionalInfo, setAdditionalInfo] = useState('');
-  const [addingInfo, setAddingInfo] = useState(false);
 
   useEffect(() => {
     loadDispute();
@@ -49,6 +37,7 @@ const DisputeDetailsScreen: React.FC = () => {
   useFocusEffect(
     useCallback(() => {
       loadDispute();
+      return () => clearError();
     }, [disputeId])
   );
 
@@ -80,29 +69,6 @@ const DisputeDetailsScreen: React.FC = () => {
     setRefreshing(false);
   };
 
-  const handleAddInfo = async () => {
-    if (!additionalInfo.trim()) {
-      Alert.alert('Error', 'Please provide additional information');
-      return;
-    }
-
-    if (additionalInfo.trim().length < 10) {
-      Alert.alert('Error', 'Additional information must be at least 10 characters');
-      return;
-    }
-
-    setAddingInfo(true);
-    const updatedDispute = await updateDispute(disputeId, additionalInfo.trim());
-    setAddingInfo(false);
-
-    if (updatedDispute) {
-      setDispute(updatedDispute);
-      setAdditionalInfo('');
-      setShowAddInfoModal(false);
-      Alert.alert('Success', 'Additional information added successfully');
-    }
-  };
-
   const handleCancelDispute = () => {
     Alert.alert(
       'Cancel Dispute',
@@ -113,9 +79,9 @@ const DisputeDetailsScreen: React.FC = () => {
           text: 'Yes, Cancel',
           style: 'destructive',
           onPress: async () => {
-            const cancelled = await cancelDispute(disputeId, 'Cancelled by user');
-            if (cancelled) {
-              Alert.alert('Dispute Cancelled', 'Your dispute has been cancelled', [
+            const success = await cancelDispute(disputeId, 'Cancelled by user');
+            if (success) {
+              Alert.alert('Dispute Cancelled', 'Your dispute has been cancelled.', [
                 { text: 'OK', onPress: () => navigation.goBack() },
               ]);
             }
@@ -149,9 +115,9 @@ const DisputeDetailsScreen: React.FC = () => {
     return icons[type] || 'help-circle-outline';
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string): string => {
     switch (status) {
-      case 'PENDING':
+      case 'OPEN':
         return Colors.warning;
       case 'RESOLVED':
         return Colors.success;
@@ -162,9 +128,9 @@ const DisputeDetailsScreen: React.FC = () => {
     }
   };
 
-  const getStatusBgColor = (status: string) => {
+  const getStatusBgColor = (status: string): string => {
     switch (status) {
-      case 'PENDING':
+      case 'OPEN':
         return Colors.warningLight;
       case 'RESOLVED':
         return Colors.infoLight;
@@ -173,24 +139,6 @@ const DisputeDetailsScreen: React.FC = () => {
       default:
         return Colors.gray100;
     }
-  };
-
-  const parseDescription = (description: string) => {
-    // Split description by update markers
-    const parts = description.split(/\[UPDATE from (Buyer|Seller)\]:/);
-    const mainDescription = parts[0].trim();
-    const updates: Array<{ from: string; text: string }> = [];
-
-    for (let i = 1; i < parts.length; i += 2) {
-      if (parts[i + 1]) {
-        updates.push({
-          from: parts[i],
-          text: parts[i + 1].trim(),
-        });
-      }
-    }
-
-    return { mainDescription, updates };
   };
 
   if (loading && !dispute) {
@@ -211,16 +159,17 @@ const DisputeDetailsScreen: React.FC = () => {
     );
   }
 
-  const { mainDescription, updates } = parseDescription(dispute.description);
   const isBuyer = user?.id === dispute.buyerId;
-  const canAddInfo = dispute.status === 'PENDING';
-  const canCancel = dispute.status === 'PENDING';
+  const canCancel = dispute.status === 'OPEN' && isBuyer;
 
   return (
     <View style={styles.container}>
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          canCancel && styles.scrollContentWithFooter
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -231,7 +180,12 @@ const DisputeDetailsScreen: React.FC = () => {
         }
       >
         {/* Status Header */}
-        <View style={[styles.statusHeader, { backgroundColor: getStatusBgColor(dispute.status) }]}>
+        <View
+          style={[
+            styles.statusHeader,
+            { backgroundColor: getStatusBgColor(dispute.status) },
+          ]}
+        >
           <View style={styles.statusHeaderContent}>
             <View style={styles.statusIconContainer}>
               <Ionicons
@@ -241,12 +195,21 @@ const DisputeDetailsScreen: React.FC = () => {
               />
             </View>
             <View style={styles.statusHeaderText}>
-              <Text style={styles.disputeTypeLabel}>{getDisputeTypeLabel(dispute.type)}</Text>
-              <Text style={styles.disputeId}>Dispute #{dispute.id.slice(0, 8)}</Text>
+              <Text style={styles.disputeTypeLabel}>
+                {getDisputeTypeLabel(dispute.type)}
+              </Text>
+              <Text style={styles.disputeId}>
+                Dispute #{dispute.id.slice(0, 8)}
+              </Text>
             </View>
           </View>
           <View style={[styles.statusBadgeLarge, { backgroundColor: Colors.white }]}>
-            <Text style={[styles.statusTextLarge, { color: getStatusColor(dispute.status) }]}>
+            <Text
+              style={[
+                styles.statusTextLarge,
+                { color: getStatusColor(dispute.status) },
+              ]}
+            >
               {dispute.status}
             </Text>
           </View>
@@ -292,7 +255,9 @@ const DisputeDetailsScreen: React.FC = () => {
 
             {dispute.resolvedAt && (
               <View style={styles.timelineItem}>
-                <View style={[styles.timelineDot, styles.timelineDotResolved]} />
+                <View
+                  style={[styles.timelineDot, styles.timelineDotResolved]}
+                />
                 <View style={styles.timelineContent}>
                   <Text style={styles.timelineTitle}>
                     {dispute.status === 'RESOLVED' ? 'Resolved' : 'Cancelled'}
@@ -317,33 +282,48 @@ const DisputeDetailsScreen: React.FC = () => {
           <Text style={styles.sectionTitle}>Order Information</Text>
           <TouchableOpacity
             style={styles.orderCard}
-            onPress={() => (navigation as any).navigate('OrderDetails', { orderId: dispute.orderId })}
+            onPress={() =>
+              (navigation as any).navigate('OrderDetails', {
+                orderId: dispute.orderId,
+              })
+            }
           >
             <View style={styles.orderCardHeader}>
               <View style={styles.orderCardInfo}>
-                <Text style={styles.orderCardTitle}>Order #{dispute.orderId.slice(0, 8)}</Text>
+                <Text style={styles.orderCardTitle}>
+                  Order #{dispute.orderId.slice(0, 8)}
+                </Text>
                 <Text style={styles.orderCardSubtitle}>
                   {dispute.order?.store?.name || 'Unknown Store'}
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={24} color={Colors.textTertiary} />
+              <Ionicons
+                name="chevron-forward"
+                size={24}
+                color={Colors.textTertiary}
+              />
             </View>
             {dispute.order && (
               <View style={styles.orderCardDetails}>
                 <View style={styles.orderDetailRow}>
                   <Text style={styles.orderDetailLabel}>Total Amount</Text>
                   <Text style={styles.orderDetailValue}>
-                    {dispute.order.currency || 'GHS'} {dispute.order.totalAmount.toFixed(2)}
+                    {dispute.order.currency || 'GHS'}{' '}
+                    {dispute.order.totalAmount.toFixed(2)}
                   </Text>
                 </View>
                 <View style={styles.orderDetailRow}>
                   <Text style={styles.orderDetailLabel}>Order Status</Text>
-                  <Text style={styles.orderDetailValue}>{dispute.order.status}</Text>
+                  <Text style={styles.orderDetailValue}>
+                    {dispute.order.status}
+                  </Text>
                 </View>
                 {dispute.order.payment && (
                   <View style={styles.orderDetailRow}>
                     <Text style={styles.orderDetailLabel}>Payment Status</Text>
-                    <Text style={styles.orderDetailValue}>{dispute.order.payment.status}</Text>
+                    <Text style={styles.orderDetailValue}>
+                      {dispute.order.payment.status}
+                    </Text>
                   </View>
                 )}
               </View>
@@ -358,58 +338,25 @@ const DisputeDetailsScreen: React.FC = () => {
             <View style={styles.complaintHeader}>
               <View style={styles.avatarPlaceholder}>
                 <Text style={styles.avatarText}>
-                  {isBuyer ? 'You' : dispute.order?.buyer?.firstName?.charAt(0) || 'B'}
+                  {isBuyer
+                    ? 'You'
+                    : dispute.order?.buyer?.firstName?.charAt(0) || 'B'}
                 </Text>
               </View>
               <View style={styles.complaintHeaderText}>
                 <Text style={styles.complaintAuthor}>
-                  {isBuyer ? 'You' : dispute.order?.buyer?.firstName || 'Buyer'}
+                  {isBuyer
+                    ? 'You'
+                    : dispute.order?.buyer?.firstName || 'Buyer'}
                 </Text>
                 <Text style={styles.complaintRole}>Buyer</Text>
               </View>
             </View>
-            <Text style={styles.complaintText}>{mainDescription}</Text>
+            <Text style={styles.complaintText}>{dispute.description}</Text>
           </View>
         </View>
 
-        {/* Updates/Messages */}
-        {updates.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Updates</Text>
-            {updates.map((update, index) => (
-              <View key={index} style={styles.updateCard}>
-                <View style={styles.updateHeader}>
-                  <View style={styles.avatarPlaceholder}>
-                    <Text style={styles.avatarText}>
-                      {update.from === 'Buyer'
-                        ? isBuyer
-                          ? 'You'
-                          : 'B'
-                        : isBuyer
-                        ? 'S'
-                        : 'You'}
-                    </Text>
-                  </View>
-                  <View style={styles.updateHeaderText}>
-                    <Text style={styles.updateAuthor}>
-                      {update.from === 'Buyer'
-                        ? isBuyer
-                          ? 'You'
-                          : 'Buyer'
-                        : isBuyer
-                        ? 'Seller'
-                        : 'You'}
-                    </Text>
-                    <Text style={styles.updateRole}>{update.from}</Text>
-                  </View>
-                </View>
-                <Text style={styles.updateText}>{update.text}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Resolution (if resolved) */}
+        {/* Resolution */}
         {dispute.resolution && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Resolution</Text>
@@ -427,10 +374,16 @@ const DisputeDetailsScreen: React.FC = () => {
                       : 'close-circle'
                   }
                   size={24}
-                  color={dispute.status === 'RESOLVED' ? Colors.success : Colors.gray400}
+                  color={
+                    dispute.status === 'RESOLVED'
+                      ? Colors.success
+                      : Colors.gray400
+                  }
                 />
                 <Text style={styles.resolutionTitle}>
-                  {dispute.status === 'RESOLVED' ? 'Dispute Resolved' : 'Dispute Cancelled'}
+                  {dispute.status === 'RESOLVED'
+                    ? 'Dispute Resolved'
+                    : 'Dispute Cancelled'}
                 </Text>
               </View>
               <Text style={styles.resolutionText}>{dispute.resolution}</Text>
@@ -438,95 +391,94 @@ const DisputeDetailsScreen: React.FC = () => {
           </View>
         )}
 
-        {/* Help Section */}
+        {/* Outcome — shown once admin has resolved with BUYER_WON / SELLER_WON */}
+        {dispute.outcome && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Outcome</Text>
+            <View
+              style={[
+                styles.outcomeCard,
+                {
+                  backgroundColor:
+                    dispute.outcome === 'BUYER_WON'
+                      ? Colors.successLight
+                      : Colors.warningLight,
+                  borderColor:
+                    dispute.outcome === 'BUYER_WON'
+                      ? Colors.success
+                      : Colors.warning,
+                },
+              ]}
+            >
+              <Ionicons
+                name={
+                  dispute.outcome === 'BUYER_WON'
+                    ? 'checkmark-circle'
+                    : 'storefront-outline'
+                }
+                size={28}
+                color={
+                  dispute.outcome === 'BUYER_WON' ? Colors.success : Colors.warning
+                }
+              />
+              <View style={styles.outcomeText}>
+                <Text
+                  style={[
+                    styles.outcomeTitle,
+                    {
+                      color:
+                        dispute.outcome === 'BUYER_WON'
+                          ? Colors.success
+                          : Colors.warning,
+                    },
+                  ]}
+                >
+                  {dispute.outcome === 'BUYER_WON'
+                    ? 'Decided in your favour'
+                    : 'Decided for seller'}
+                </Text>
+                <Text style={styles.outcomeSubtitle}>
+                  {dispute.outcome === 'BUYER_WON'
+                    ? 'A refund will be processed to your account.'
+                    : 'Funds have been released to the seller.'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Help */}
         <View style={styles.section}>
           <View style={styles.helpCard}>
             <Ionicons name="help-circle-outline" size={24} color={Colors.info} />
             <View style={styles.helpText}>
               <Text style={styles.helpTitle}>Need Help?</Text>
               <Text style={styles.helpDescription}>
-                If you have questions about this dispute, please contact our support team.
+                If you have questions about this dispute, please contact our
+                support team.
               </Text>
             </View>
           </View>
         </View>
       </ScrollView>
 
-      {/* Action Buttons */}
-      {canAddInfo && (
+      {/* Footer — Cancel Dispute (buyer + open only) */}
+      {canCancel && (
         <View style={styles.footer}>
-          {canCancel && (
-            <TouchableOpacity
-              style={styles.cancelDisputeButton}
-              onPress={handleCancelDispute}
-              disabled={loading}
-            >
-              <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
-              <Text style={styles.cancelDisputeButtonText}>Cancel Dispute</Text>
-            </TouchableOpacity>
-          )}
           <TouchableOpacity
-            style={styles.addInfoButton}
-            onPress={() => setShowAddInfoModal(true)}
+            style={styles.cancelDisputeButton}
+            onPress={handleCancelDispute}
             disabled={loading}
           >
-            <Ionicons name="add-circle-outline" size={20} color={Colors.white} />
-            <Text style={styles.addInfoButtonText}>Add Information</Text>
+            <Ionicons
+              name="close-circle-outline"
+              size={20}
+              color={Colors.error}
+            />
+            <Text style={styles.cancelDisputeButtonText}>Cancel Dispute</Text>
           </TouchableOpacity>
         </View>
       )}
-
-      {/* Add Info Modal */}
-      <Modal
-        visible={showAddInfoModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowAddInfoModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Additional Information</Text>
-              <TouchableOpacity onPress={() => setShowAddInfoModal(false)}>
-                <Ionicons name="close" size={24} color={Colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.modalDescription}>
-              Provide any additional details that might help resolve this dispute.
-            </Text>
-
-            <TextInput
-              style={styles.modalTextArea}
-              value={additionalInfo}
-              onChangeText={setAdditionalInfo}
-              placeholder="Enter additional information..."
-              placeholderTextColor={Colors.textTertiary}
-              multiline
-              numberOfLines={6}
-              maxLength={500}
-              textAlignVertical="top"
-            />
-
-            <Text style={styles.modalCharCount}>{additionalInfo.length}/500 characters</Text>
-
-            <TouchableOpacity
-              style={[
-                styles.modalSubmitButton,
-                (!additionalInfo.trim() || addingInfo) && styles.modalSubmitButtonDisabled,
-              ]}
-              onPress={handleAddInfo}
-              disabled={!additionalInfo.trim() || addingInfo}
-            >
-              {addingInfo ? (
-                <ActivityIndicator size="small" color={Colors.white} />
-              ) : (
-                <Text style={styles.modalSubmitButtonText}>Submit</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
@@ -540,6 +492,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
+    paddingBottom: 24,
+  },
+  scrollContentWithFooter: {
     paddingBottom: 100,
   },
   loadingContainer: {
@@ -746,39 +701,6 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     lineHeight: 22,
   },
-  updateCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  updateHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  updateHeaderText: {
-    flex: 1,
-  },
-  updateAuthor: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  updateRole: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-  },
-  updateText: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    lineHeight: 20,
-  },
   resolutionCard: {
     backgroundColor: Colors.gray100,
     borderRadius: 12,
@@ -804,6 +726,27 @@ const styles = StyleSheet.create({
   resolutionText: {
     fontSize: 14,
     color: Colors.textPrimary,
+    lineHeight: 20,
+  },
+  outcomeCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 2,
+    gap: 12,
+  },
+  outcomeText: {
+    flex: 1,
+  },
+  outcomeTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  outcomeSubtitle: {
+    fontSize: 14,
+    color: Colors.textSecondary,
     lineHeight: 20,
   },
   helpCard: {
@@ -834,15 +777,12 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    flexDirection: 'row',
     padding: 16,
     backgroundColor: Colors.white,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-    gap: 12,
   },
   cancelDisputeButton: {
-    flex: 1,
     backgroundColor: Colors.errorLight,
     padding: 16,
     borderRadius: 12,
@@ -855,88 +795,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: Colors.error,
-  },
-  addInfoButton: {
-    flex: 1,
-    backgroundColor: Colors.primary,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-    gap: 8,
-  },
-  addInfoButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.white,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: Colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-  },
-  modalDescription: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  modalTextArea: {
-    backgroundColor: Colors.backgroundSecondary,
-    borderRadius: 12,
-    padding: 12,
-    fontSize: 14,
-    color: Colors.textPrimary,
-    minHeight: 120,
-    textAlignVertical: 'top',
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  modalCharCount: {
-    fontSize: 12,
-    color: Colors.textTertiary,
-    textAlign: 'right',
-    marginTop: 8,
-    marginBottom: 16,
-  },
-  modalSubmitButton: {
-    backgroundColor: Colors.primary,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalSubmitButtonDisabled: {
-    backgroundColor: Colors.disabled,
-  },
-  modalSubmitButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.white,
   },
 });
 

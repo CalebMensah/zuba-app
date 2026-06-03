@@ -82,6 +82,7 @@ export const getUserById = async (req, res) => {
         store: true, // optional if you want store info
       },
     });
+    console.log('Fetched user:', user.accessToken);
 
     if (!user) {
       return res.status(404).json({
@@ -528,6 +529,161 @@ export const getAllOrdersForAdmin = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+export const deleteAllOrdersAndPayments = async (req, res) => {
+  try {
+    console.log('🗑️ Starting deletion of all orders and payments...');
+
+    // Use transaction to ensure data consistency
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Delete all escrows first (foreign key constraint)
+      const deletedEscrows = await tx.escrow.deleteMany({});
+      console.log(`✅ Deleted ${deletedEscrows.count} escrows`);
+
+      // 2. Delete all payouts
+      const deletedPayouts = await tx.payout.deleteMany({});
+      console.log(`✅ Deleted ${deletedPayouts.count} payouts`);
+
+      // 3. Delete all payments
+      const deletedPayments = await tx.payment.deleteMany({});
+      console.log(`✅ Deleted ${deletedPayments.count} payments`);
+
+      // 4. Delete all order items
+      const deletedOrderItems = await tx.orderItem.deleteMany({});
+      console.log(`✅ Deleted ${deletedOrderItems.count} order items`);
+
+      // 5. Delete all orders
+      const deletedOrders = await tx.order.deleteMany({});
+      console.log(`✅ Deleted ${deletedOrders.count} orders`);
+
+      return {
+        escrows: deletedEscrows.count,
+        payouts: deletedPayouts.count,
+        payments: deletedPayments.count,
+        orderItems: deletedOrderItems.count,
+        orders: deletedOrders.count
+      };
+    });
+
+    // Clear all related caches
+    console.log('🧹 Clearing Redis cache...');
+    try {
+      const keys = await cache.keys('*order*');
+      const paymentKeys = await cache.keys('*payment*');
+      const checkoutKeys = await cache.keys('*checkout*');
+      
+      const allKeys = [...keys, ...paymentKeys, ...checkoutKeys];
+      
+      if (allKeys.length > 0) {
+        await Promise.all(allKeys.map(key => cache.del(key)));
+        console.log(`✅ Cleared ${allKeys.length} cache keys`);
+      }
+    } catch (cacheError) {
+      console.error('⚠️ Error clearing cache:', cacheError);
+    }
+
+    console.log('✅ All orders and payments deleted successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'All orders and payments deleted successfully',
+      deleted: result
+    });
+
+  } catch (error) {
+    console.error('❌ Error deleting orders and payments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete orders and payments',
+      error: error.message
+    });
+  }
+};
+
+export const deleteUserOrdersAndPayments = async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    console.log(`🗑️ Deleting orders and payments for user: ${userId}`);
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Find all orders for this user (as buyer)
+      const userOrders = await tx.order.findMany({
+        where: { buyerId: userId },
+        select: { id: true }
+      });
+
+      const orderIds = userOrders.map(o => o.id);
+
+      if (orderIds.length === 0) {
+        return {
+          escrows: 0,
+          payouts: 0,
+          payments: 0,
+          orderItems: 0,
+          orders: 0
+        };
+      }
+
+      // Delete related records
+      const deletedEscrows = await tx.escrow.deleteMany({
+        where: { orderId: { in: orderIds } }
+      });
+
+      const deletedPayouts = await tx.payout.deleteMany({
+        where: { orderId: { in: orderIds } }
+      });
+
+      const deletedPayments = await tx.payment.deleteMany({
+        where: { orderId: { in: orderIds } }
+      });
+
+      const deletedOrderItems = await tx.orderItem.deleteMany({
+        where: { orderId: { in: orderIds } }
+      });
+
+      const deletedOrders = await tx.order.deleteMany({
+        where: { id: { in: orderIds } }
+      });
+
+      return {
+        escrows: deletedEscrows.count,
+        payouts: deletedPayouts.count,
+        payments: deletedPayments.count,
+        orderItems: deletedOrderItems.count,
+        orders: deletedOrders.count
+      };
+    });
+
+    // Clear user-specific caches
+    await cache.del(`user:${userId}:orders`);
+    for (const orderId of result.orders) {
+      await cache.del(`order:${orderId}:user:${userId}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Deleted all orders and payments for user ${userId}`,
+      deleted: result
+    });
+
+  } catch (error) {
+    console.error('❌ Error deleting user orders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete user orders and payments',
       error: error.message
     });
   }

@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "1080883654544",
+    "project_id": "zuba-c6e5c",
+    "storage_bucket": "zuba-c6e5c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1080883654544:android:82230843a901a3f9f1cd15",
+        "android_client_info": {
+          "package_name": "com.zuba.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1080883654544-oph4pntj274540kq41btf9peo3fp1msp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.zuba.app",
+            "certificate_hash": "218db06dd20d14b02a0f292a40e9983f859520b2"
+          }
+        },
+        {
+          "client_id": "1080883654544-9q5ifg3b1vg6plkce93gi1h27n2fia4c.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAmtGIy1QZZeVvREJqPlbEQTIAynzAWgJE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1080883654544-9q5ifg3b1vg6plkce93gi1h27n2fia4c.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

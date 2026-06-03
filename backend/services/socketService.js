@@ -16,7 +16,7 @@ export const getSocketIO = () => {
 // Emit new message to a chat room
 export const emitNewMessage = (chatRoomId, messageData) => {
   if (ioInstance) {
-    ioInstance.to(chatRoomId).emit('new-message', messageData);
+    ioInstance.in(chatRoomId).emit('new-message', messageData);
     console.log(`Emitted 'new-message' to room ${chatRoomId}`);
   } else {
     console.warn('Socket.IO instance not set for emitting new message');
@@ -26,7 +26,7 @@ export const emitNewMessage = (chatRoomId, messageData) => {
 // Emit message read status
 export const emitMessageRead = (chatRoomId, readData) => {
   if (ioInstance) {
-    ioInstance.to(chatRoomId).emit('message-read', readData);
+    ioInstance.in(chatRoomId).emit('message-read', readData);
     console.log(`Emitted 'message-read' to room ${chatRoomId}`);
   } else {
     console.warn('Socket.IO instance not set for emitting message read');
@@ -36,7 +36,7 @@ export const emitMessageRead = (chatRoomId, readData) => {
 // Emit typing indicator
 export const emitTyping = (chatRoomId, typingData) => {
   if (ioInstance) {
-    ioInstance.to(chatRoomId).emit('user-typing', typingData);
+    ioInstance.in(chatRoomId).emit('user-typing', typingData);
   }
 };
 
@@ -50,14 +50,29 @@ export const emitUserStatus = (userId, status) => {
 // Emit message deleted
 export const emitMessageDeleted = (chatRoomId, messageId) => {
   if (ioInstance) {
-    ioInstance.to(chatRoomId).emit('message-deleted', { messageId, chatRoomId });
+    ioInstance.in(chatRoomId).emit('message-deleted', { messageId, chatRoomId });
   }
 };
 
 // Emit message edited
 export const emitMessageEdited = (chatRoomId, messageData) => {
   if (ioInstance) {
-    ioInstance.to(chatRoomId).emit('message-edited', messageData);
+    ioInstance.in(chatRoomId).emit('message-edited', messageData);
+  }
+};
+
+// Emit order cancelled event
+export const emitOrderCancelled = (userId, orderId, cancelledBy = 'buyer') => {
+  if (ioInstance) {
+    ioInstance.emit('order_cancelled', { 
+      userId, 
+      orderId, 
+      cancelledBy,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`Emitted 'order_cancelled' to user ${userId}: order ${orderId}`);
+  } else {
+    console.warn('Socket.IO instance not set for emitting order_cancelled');
   }
 };
 
@@ -69,5 +84,7 @@ export default {
   emitTyping,
   emitUserStatus,
   emitMessageDeleted,
-  emitMessageEdited
+  emitMessageEdited,
+  emitOrderCancelled
 };
+

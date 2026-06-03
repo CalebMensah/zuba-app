@@ -28,7 +28,7 @@ const strictRateLimit = rateLimiter({
 });
 
 router.post(
-  '/:orderId/confrim',
+  '/:orderId/confirm-order-received',
   authenticateToken,
   authorizeRoles('BUYER'),
   strictRateLimit,

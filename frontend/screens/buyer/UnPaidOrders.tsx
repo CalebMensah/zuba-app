@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -12,108 +12,65 @@ import {
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useOrders } from '../../hooks/useOrder';
-import { Colors } from '../../constants/colors';
+import { 
+  useUnpaidOrders, 
+  useCancelUnpaidOrder,
+  formatCurrency,
+  orderKeys 
+} from '../../hooks/useOrder';
+import socketService from '../../services/socketServices';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
-interface Order {
-  id: string;
-  createdAt: string;
-  store?: {
-    name?: string;
-    logo?: string;
-  } | null;
-  items: {
-    product?: {
-      images?: string[] | null;
-      name?: string | null;
-    } | null;
-    quantity: number;
-    total: number;
-  }[];
-  currency?: string;
-  checkoutSession?: string;
-  totalAmount: number;
-}
+import { Colors } from '../../constants/colors';
+import { Order } from '../../types/order';
 
 const UnpaidOrdersScreen = () => {
   const navigation = useNavigation();
-  const {
-    getUnpaidOrders,
-    getUnpaidOrdersSummary,
-    cancelUnpaidOrder,
-    loading,
-    error,
-  } = useOrders();
-
-  const [unpaidOrders, setUnpaidOrders] = useState<Order[]>([]);
-  const [ordersByStore, setOrdersByStore] = useState<any[]>([]);
-  const [summary, setSummary] = useState<any>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  
+  // TanStack Query hooks
+  const { data: ordersData, isLoading, error, refetch } = useUnpaidOrders({
+    page,
+    limit: 10,
+  });
+  const cancelUnpaidOrder = useCancelUnpaidOrder();
 
-  // Fetch unpaid orders
-  const fetchUnpaidOrders = useCallback(async (pageNum: number = 1, refresh: boolean = false) => {
-    try {
-      const response = await getUnpaidOrders(pageNum, 10);
-      
-      if (response) {
-        if (refresh) {
-          setUnpaidOrders(response.orders);
-        } else {
-          setUnpaidOrders(prev => [...prev, ...response.orders]);
-        }
-        setOrdersByStore(response.ordersByStore);
-        setSummary(response.summary);
-        setHasMore(response.pagination.hasNextPage);
-      }
-    } catch (err) {
-      console.error('Error fetching unpaid orders:', err);
-    }
-  }, [getUnpaidOrders]);
-
-  // Fetch summary
-  const fetchSummary = useCallback(async () => {
-    try {
-      const summaryData = await getUnpaidOrdersSummary();
-      if (summaryData) {
-        setSummary(summaryData);
-      }
-    } catch (err) {
-      console.error('Error fetching summary:', err);
-    }
-  }, [getUnpaidOrdersSummary]);
-
-  // Initial load
+  // Socket listener for real-time order cancels
   useEffect(() => {
-    fetchUnpaidOrders(1, true);
-    fetchSummary();
-  }, []);
+    const handleOrderCancelled = (data: { userId: string; orderId: string }) => {
+      if (data.userId === 'current-user-id') { // Replace with actual user ID from context
+        queryClient.invalidateQueries({ queryKey: orderKeys.unpaid() });
+        console.log('Order cancelled via socket:', data.orderId);
+      }
+    };
 
-  // Refresh on screen focus
+    socketService.onOrderCancelled(handleOrderCancelled);
+
+    return () => {
+      socketService.off('order_cancelled');
+    };
+  }, [queryClient]);
+
+
+  // Refetch on screen focus
   useFocusEffect(
-    useCallback(() => {
-      fetchUnpaidOrders(1, true);
-      fetchSummary();
-    }, [])
+    React.useCallback(() => {
+      refetch();
+    }, [refetch])
   );
 
   // Pull to refresh
-  const onRefresh = async () => {
-    setRefreshing(true);
+  const onRefresh = () => {
     setPage(1);
-    await fetchUnpaidOrders(1, true);
-    await fetchSummary();
-    setRefreshing(false);
+    refetch();
   };
 
   // Load more orders
   const loadMore = () => {
-    if (!loading && hasMore) {
-      const nextPage = page + 1;
-      setPage(nextPage);
-      fetchUnpaidOrders(nextPage, false);
+    if (ordersData?.pagination?.hasNextPage && !isLoading) {
+      setPage(prev => prev + 1);
     }
   };
 
@@ -121,25 +78,18 @@ const UnpaidOrdersScreen = () => {
   const handleCancelOrder = (orderId: string) => {
     Alert.alert(
       'Cancel Order',
-      'Are you sure you want to cancel this unpaid order? Product stock will be restored.',
+      'Are you sure you want to cancel this unpaid order?',
       [
         { text: 'No', style: 'cancel' },
         {
           text: 'Yes, Cancel',
           style: 'destructive',
-          onPress: async () => {
-            setCancellingOrderId(orderId);
-            const success = await cancelUnpaidOrder(orderId);
-            
-            if (success) {
-              Alert.alert('Success', 'Order cancelled successfully');
-              // Refresh the list
-              await fetchUnpaidOrders(1, true);
-              await fetchSummary();
-            } else {
-              Alert.alert('Error', error || 'Failed to cancel order');
-            }
-            setCancellingOrderId(null);
+          onPress: () => {
+            cancelUnpaidOrder.mutate(orderId, {
+              onSuccess: () => {
+                Alert.alert('Success', 'Order cancelled successfully');
+              },
+            });
           },
         },
       ]
@@ -155,43 +105,13 @@ const UnpaidOrdersScreen = () => {
         checkoutSession: order.checkoutSession || order.id,
       }],
       totalOrders: 1,
-    });
-  };
-
-  // Handle proceed to payment for all orders from a store
-  const handlePayAllFromStore = (storeOrders: Order[], storeName: string) => {
-    (navigation as any).navigate('Payment', { 
-      orders: storeOrders.map(order => ({
-        orderId: order.id,
-        storeName: storeName,
-        checkoutSession: order.checkoutSession || order.id,
-      })),
-      totalOrders: storeOrders.length,
-    });
-  };
-
-  // Handle proceed to payment for all unpaid orders
-  const handlePayAllOrders = () => {
-    const ordersForPayment = unpaidOrders.map(order => ({
-      orderId: order.id,
-      storeName: order.store?.name || 'Store',
-      checkoutSession: order.checkoutSession || order.id,
-    }));
-
-    (navigation as any).navigate('Payment', { 
-      orders: ordersForPayment,
-      totalOrders: ordersForPayment.length,
+      checkoutSessionId: order.checkoutSession || order.id,
     });
   };
 
   // Handle view order details
   const handleViewDetails = (orderId: string) => {
     (navigation as any).navigate('OrderDetails', { orderId });
-  };
-
-  // Format currency
-  const formatCurrency = (amount: number, currency: string = 'GHS') => {
-    return `${currency} ${amount.toFixed(2)}`;
   };
 
   // Format date
@@ -206,7 +126,7 @@ const UnpaidOrdersScreen = () => {
 
   // Render order card
   const renderOrderCard = (order: Order) => {
-    const isCancelling = cancellingOrderId === order.id;
+    const isCancelling = cancelUnpaidOrder.isPending && cancelUnpaidOrder.variables === order.id;
 
     return (
       <View key={order.id} style={styles.orderCard}>
@@ -251,7 +171,7 @@ const UnpaidOrdersScreen = () => {
               )}
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName} numberOfLines={1}>
-                  {item.product?.name || 'Product'}
+                  {item.product?.name || item.productName || item.name || 'Product'}
                 </Text>
                 <Text style={styles.itemQuantity}>Qty: {item.quantity}</Text>
               </View>
@@ -281,8 +201,8 @@ const UnpaidOrdersScreen = () => {
             style={styles.viewDetailsButton}
             onPress={() => handleViewDetails(order.id)}
           >
-            <Ionicons name="eye-outline" size={18} color={Colors.primary} />
-            <Text style={styles.viewDetailsText}>View Details</Text>
+            <Ionicons name="eye-outline" size={14} color={Colors.primary} />
+            <Text style={styles.viewDetailsText}>Details</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -294,7 +214,7 @@ const UnpaidOrdersScreen = () => {
               <ActivityIndicator size="small" color={Colors.white} />
             ) : (
               <>
-                <Ionicons name="close-circle-outline" size={18} color={Colors.white} />
+                <Ionicons name="close-circle-outline" size={14} color={Colors.white} />
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </>
             )}
@@ -304,63 +224,48 @@ const UnpaidOrdersScreen = () => {
             style={styles.payButton}
             onPress={() => handleProceedToPayment(order)}
           >
-            <Ionicons name="card-outline" size={18} color={Colors.white} />
-            <Text style={styles.payButtonText}>Pay Now</Text>
+            <Ionicons name="card-outline" size={14} color={Colors.white} />
+            <Text style={styles.payButtonText}>Pay</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   };
 
-  // Render summary card
-  const renderSummary = () => {
-    if (!summary) return null;
-
+  // Loading state
+  if (isLoading && page === 1) {
     return (
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryHeader}>
-          <Ionicons name="wallet-outline" size={24} color={Colors.primary} />
-          <Text style={styles.summaryTitle}>Unpaid Orders Summary</Text>
+      <View style={styles.container}>
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.loadingText}>Loading unpaid orders...</Text>
         </View>
-        <View style={styles.summaryGrid}>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{summary.totalUnpaidOrders}</Text>
-            <Text style={styles.summaryLabel}>Total Orders</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>
-              {formatCurrency(summary.totalAmount, summary.currency)}
-            </Text>
-            <Text style={styles.summaryLabel}>Total Amount</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{summary.totalItems}</Text>
-            <Text style={styles.summaryLabel}>Total Items</Text>
-          </View>
-          <View style={styles.summaryItem}>
-            <Text style={styles.summaryValue}>{summary.uniqueStores}</Text>
-            <Text style={styles.summaryLabel}>Stores</Text>
-          </View>
-        </View>
-
-        {/* Pay All Button */}
-        {summary.totalUnpaidOrders > 0 && (
-          <TouchableOpacity
-            style={styles.payAllButton}
-            onPress={handlePayAllOrders}
-          >
-            <Ionicons name="card" size={20} color={Colors.white} />
-            <Text style={styles.payAllButtonText}>
-              Pay All Orders ({summary.totalUnpaidOrders})
-            </Text>
-          </TouchableOpacity>
-        )}
       </View>
     );
-  };
+  }
+
+  // Error state
+  if (error && !ordersData) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+          <Text style={styles.errorTitle}>Failed to Load Orders</Text>
+          <Text style={styles.errorText}>
+            {error instanceof Error ? error.message : 'Unable to load unpaid orders'}
+          </Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  const unpaidOrders = ordersData?.orders || [];
 
   // Empty state
-  if (!loading && unpaidOrders.length === 0) {
+  if (unpaidOrders.length === 0) {
     return (
       <View style={styles.container}>
         <View style={styles.emptyState}>
@@ -387,7 +292,7 @@ const UnpaidOrdersScreen = () => {
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
+            refreshing={isLoading}
             onRefresh={onRefresh}
             colors={[Colors.primary]}
             tintColor={Colors.primary}
@@ -403,9 +308,6 @@ const UnpaidOrdersScreen = () => {
         }}
         scrollEventThrottle={400}
       >
-        {/* Summary Card */}
-        {renderSummary()}
-
         {/* Alert Banner */}
         <View style={styles.alertBanner}>
           <Ionicons name="alert-circle-outline" size={20} color={Colors.warning} />
@@ -414,28 +316,46 @@ const UnpaidOrdersScreen = () => {
           </Text>
         </View>
 
+        {/* Summary Info */}
+        {ordersData?.summary && (
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Total Orders</Text>
+                <Text style={styles.summaryValue}>{ordersData.summary.totalUnpaidOrders}</Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Total Amount</Text>
+                <Text style={styles.summaryValue}>
+                  {formatCurrency(ordersData.summary.totalAmount, ordersData.summary.currency)}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Orders List */}
         <View style={styles.ordersContainer}>
-          <Text style={styles.sectionTitle}>Your Unpaid Orders</Text>
+          <Text style={styles.sectionTitle}>Your Unpaid Orders ({unpaidOrders.length})</Text>
           {unpaidOrders.map(order => renderOrderCard(order))}
         </View>
 
         {/* Loading More Indicator */}
-        {loading && page > 1 && (
+        {isLoading && page > 1 && (
           <View style={styles.loadingMore}>
             <ActivityIndicator size="small" color={Colors.primary} />
             <Text style={styles.loadingMoreText}>Loading more orders...</Text>
           </View>
         )}
-      </ScrollView>
 
-      {/* Initial Loading */}
-      {loading && page === 1 && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Loading unpaid orders...</Text>
-        </View>
-      )}
+        {/* No More Orders */}
+        {!isLoading && !ordersData?.pagination?.hasNextPage && unpaidOrders.length > 0 && (
+          <View style={styles.endOfList}>
+            <Text style={styles.endOfListText}>You've reached the end</Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 };
@@ -453,67 +373,6 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
-  summaryCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  summaryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  summaryTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.primary,
-    marginLeft: 8,
-  },
-  summaryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  summaryItem: {
-    width: '48%',
-    backgroundColor: Colors.backgroundTertiary,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    alignItems: 'center',
-  },
-  summaryValue: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.primary,
-    marginBottom: 4,
-  },
-  summaryLabel: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-  payAllButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-    paddingVertical: 14,
-    marginTop: 16,
-  },
-  payAllButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.white,
-    marginLeft: 8,
-  },
   alertBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -527,6 +386,41 @@ const styles = StyleSheet.create({
     color: Colors.warning,
     marginLeft: 8,
     flex: 1,
+  },
+  summaryCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  summaryItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  summaryLabel: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  summaryValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  summaryDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: Colors.borderLight,
+    marginHorizontal: 16,
   },
   ordersContainer: {
     marginTop: 8,
@@ -676,15 +570,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.backgroundTertiary,
     borderRadius: 8,
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderWidth: 1,
     borderColor: Colors.primary,
+    gap: 4,
   },
   viewDetailsText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     color: Colors.primary,
-    marginLeft: 4,
   },
   cancelButton: {
     flex: 1,
@@ -693,16 +587,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.error,
     borderRadius: 8,
-    paddingVertical: 10,
+    paddingVertical: 8,
+    gap: 4,
   },
   cancelButtonDisabled: {
     opacity: 0.6,
   },
   cancelButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     color: Colors.white,
-    marginLeft: 4,
   },
   payButton: {
     flex: 1,
@@ -711,13 +605,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: Colors.success,
     borderRadius: 8,
-    paddingVertical: 10,
+    paddingVertical: 8,
+    gap: 4,
   },
   payButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     color: Colors.white,
-    marginLeft: 4,
   },
   loadingMore: {
     flexDirection: 'row',
@@ -730,16 +624,55 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textSecondary,
   },
+  endOfList: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  endOfListText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    fontStyle: 'italic',
+  },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
     backgroundColor: Colors.backgroundSecondary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   loadingText: {
     marginTop: 12,
+    fontSize: 16,
+    color: Colors.textSecondary,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  errorText: {
     fontSize: 14,
     color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  retryButton: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
   emptyState: {
     flex: 1,

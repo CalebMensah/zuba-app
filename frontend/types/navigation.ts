@@ -13,6 +13,7 @@ export type AuthStackParamList = {
   VerifyEmail: { email: string };
   Terms: undefined;
   Privacy:undefined;
+  MarketPlace: undefined;
 };
 
 export type BuyerStackParamList = {
@@ -83,6 +84,8 @@ export type BuyerStackParamList = {
   RequestRefund: { orderId: string; productId: string; productName: string };
   SellerStoreReviews: { storeId: string };
   ReviewDetails: { reviewId: string };
+  PaymentSuccess: { amount: number; orderCount: number; reference: string, checkoutSessionId: string; orderId?: string };
+  SearchScreen: undefined;
 
   // Add more buyer-specific screens
 };
@@ -121,6 +124,12 @@ export type SellerStackParamList = {
     SellerEscrow: undefined;
     About: undefined;
     ContactUs: undefined;
+    DeletedProducts: undefined;
+    SellerDisputeManagement: undefined;
+    PaymentScreen: undefined;
+    PaymentAnalytics: undefined
+    CustomerAnalytics: undefined;
+    StockAnalytics: undefined;
   // Add more seller-specific screens
 };
 

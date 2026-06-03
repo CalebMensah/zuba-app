@@ -88,6 +88,7 @@ export const useStoreFollowing = () => {
     }
   }, []);
 
+
   const getMyFollowing = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -98,13 +99,16 @@ export const useStoreFollowing = () => {
         headers,
       });
 
-      const data: ApiResponse<{ stores: Store[] }> = await response.json();
+      const data: ApiResponse<{ stores: Store[]; count: number }> = await response.json();
 
       if (!response.ok) {
         throw new Error(data.message || 'Failed to fetch following list');
       }
 
-      return data.data?.stores || [];
+      return {
+        stores: data.data?.stores || [],
+        count: data.data?.count || 0
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'An error occurred';
       setError(message);

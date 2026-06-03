@@ -24,7 +24,7 @@ import SellerDashboardScreen from '../screens/seller/SellerDashBoard';
 import ManageProductsScreen from '../screens/seller/ManageProductsScreen';
 import NotificationsScreen from '../screens/shared/NotificationsScreen'
 import MainChatScreen from '../screens/shared/MainChatScreen';
-import AddDeliveryCourierInfo  from '../screens/seller/AddDeliveryCourierInfo'
+import AddDeliveryCourierInfo  from '../screens/seller/ShipOrderScreen'
 import ManageDeliveryInfo from '../screens/seller/ManageDeliveryInfo'
 import Chat from '../screens/shared/ChatScreen';
 import TermsScreen from '../screens/auth/TermsConditionsScreen'
@@ -37,6 +37,11 @@ import PaymentsScreen from '../screens/shared/UserPaymentScreen';
 import PaymentDetailsScreen from '../screens/shared/PaymentDetailsScreen';
 import AboutScreen from '../screens/shared/Aboutscreen';
 import ContactUsScreen from '../screens/shared/ContactUs';
+import ListDeletedProductsScreen from '../screens/seller/DeletedProductsScreen';
+import SellerDisputeManagement from '../screens/seller/SellerDisputeManagement';
+import PaymentAnalyticsScreen from '../screens/seller/PaymentAnalyticsScreen';
+import CustomerAnalyticsScreen from '../screens/seller/CustomerAnalyticsScreen';
+import StockAnalyticsScreen from '../screens/seller/StockAnalyticsScreen';
 
 const Stack = createNativeStackNavigator<SellerStackParamList>();
 const Tab = createBottomTabNavigator<SellerStackParamList>();
@@ -74,17 +79,17 @@ const SellerTabNavigator: React.FC = () => {
       <Tab.Screen
         name="SellerProducts"
         component={SellerProductsScreen}
-        options={{ headerShown: false}}
+        options={{ title: 'Products', headerShown: false}}
       />
             <Tab.Screen
               name="MainChatScreen"
               component={MainChatScreen}
-              options={{ title: 'Chat', headerShown: false }}
+              options={{ title: 'Messages', headerShown: false }}
             />
       <Tab.Screen
         name="SellerProfile"
         component={SellerProfileScreen}
-        options={{ title: 'Profile', headerShown: false }}
+        options={{ title: 'Account', headerShown: false }}
       />
     </Tab.Navigator>
   );
@@ -122,6 +127,11 @@ const SellerNavigator: React.FC = () => {
           <Stack.Screen name="SellerEscrow" component={PaymentsScreen} />
           <Stack.Screen name="About" component={AboutScreen} />
           <Stack.Screen name="ContactUs" component={ContactUsScreen} />
+          <Stack.Screen name="DeletedProducts" component={ListDeletedProductsScreen} />
+          <Stack.Screen name="SellerDisputeManagement" component={SellerDisputeManagement} />
+          <Stack.Screen name="PaymentAnalytics" component={PaymentAnalyticsScreen} />
+          <Stack.Screen name="CustomerAnalytics" component={CustomerAnalyticsScreen} />
+          <Stack.Screen name="StockAnalytics" component={StockAnalyticsScreen} />
     </Stack.Navigator>
   );
 };

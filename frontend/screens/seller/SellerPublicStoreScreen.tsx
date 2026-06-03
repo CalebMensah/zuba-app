@@ -14,10 +14,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '../../hooks/useStore';
-import { useProduct } from '../../hooks/useProducts';
+import { useStoreProducts } from '../../hooks/useProducts';
+
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
 import { useReviews } from '../../hooks/useReview';
-import { Colors } from '../../constants/colors';
+import { Colors, Typography } from '../../constants/colors';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 const { width } = Dimensions.get('window');
@@ -34,7 +35,15 @@ export default function SellerPublicStoreScreen({
 }: SellerPublicStoreProps) {
   const { storeId } = route.params || {};
   const { store, loading, error, getStoreById, clearStore } = useStore();
-  const { products, loading: productsLoading, getStoreProducts } = useProduct();
+
+  const {
+    data: storeProductsResponse,
+    isLoading: productsLoading,
+    error: productsError,
+  } = useStoreProducts(store?.url ?? '', { page: 1, limit: 10 });
+
+  const products = storeProductsResponse?.products ?? [];
+
   const {
     loading: followLoading,
     followStore,
@@ -64,12 +73,12 @@ export default function SellerPublicStoreScreen({
     if (storeId) {
       const storeData = await getStoreById(storeId);
       if (storeData?.url) {
-        await Promise.all([
+          await Promise.all([
           fetchFollowStatus(storeData.url),
           fetchFollowerCount(storeData.url),
-          fetchProducts(storeData.url),
           fetchStoreReviews(),
         ]);
+
       }
     }
   };
@@ -92,13 +101,8 @@ export default function SellerPublicStoreScreen({
     }
   };
 
-  const fetchProducts = async (storeUrl: string) => {
-    try {
-      await getStoreProducts(storeUrl, { page: 1, limit: 10 });
-    } catch (err) {
-      console.error('Error fetching products:', err);
-    }
-  };
+  // Products are fetched via react-query (useStoreProducts) once store?.url is available.
+
 
   const fetchStoreReviews = async () => {
     try {
@@ -172,7 +176,7 @@ export default function SellerPublicStoreScreen({
     });
   };
 
-  const renderStarRating = (rating: number, size: number = 20) => {
+  const renderStarRating = (rating: number, size: number = 16) => {
     const stars = [];
     const fullStars = Math.floor(rating);
     const hasHalfStar = rating % 1 >= 0.5;
@@ -180,21 +184,15 @@ export default function SellerPublicStoreScreen({
     for (let i = 0; i < 5; i++) {
       if (i < fullStars) {
         stars.push(
-          <Text key={i} style={[styles.star, { fontSize: size }]}>
-            ★
-          </Text>
+          <Ionicons key={i} name="star" size={size} color="#FFA500" />
         );
       } else if (i === fullStars && hasHalfStar) {
         stars.push(
-          <Text key={i} style={[styles.star, { fontSize: size }]}>
-            ★
-          </Text>
+          <Ionicons key={i} name="star-half" size={size} color="#FFA500" />
         );
       } else {
         stars.push(
-          <Text key={i} style={[styles.starEmpty, { fontSize: size }]}>
-            ★
-          </Text>
+          <Ionicons key={i} name="star-outline" size={size} color={Colors.gray300} />
         );
       }
     }
@@ -212,7 +210,12 @@ export default function SellerPublicStoreScreen({
           <Image source={{ uri: item.images[0] }} style={styles.productImage} />
         ) : (
           <View style={styles.productImagePlaceholder}>
-            <Text style={styles.productImagePlaceholderText}>📦</Text>
+            <Ionicons name="cube-outline" size={40} color={Colors.gray400} />
+          </View>
+        )}
+        {item.stock > 0 && (
+          <View style={styles.inStockBadge}>
+            <View style={styles.inStockDot} />
           </View>
         )}
       </View>
@@ -220,16 +223,7 @@ export default function SellerPublicStoreScreen({
         <Text style={styles.productName} numberOfLines={2}>
           {item.name}
         </Text>
-        <Text style={styles.productPrice}>GH₵ {item.price.toFixed(2)}</Text>
-        {item.stock > 0 ? (
-          <View style={styles.stockBadge}>
-            <Text style={styles.stockBadgeText}>In Stock</Text>
-          </View>
-        ) : (
-          <View style={[styles.stockBadge, styles.outOfStockBadge]}>
-            <Text style={[styles.stockBadgeText, styles.outOfStockText]}>Out of Stock</Text>
-          </View>
-        )}
+        <Text style={styles.productPrice}>GH₵ {(item.price || 0).toFixed(2)}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -248,13 +242,21 @@ export default function SellerPublicStoreScreen({
               {item.user?.firstName || 'User'}
             </Text>
             {item.isVerified && (
-              <View style={styles.verifiedPurchaseBadge}>
-                <Text style={styles.verifiedPurchaseText}>✓ Verified</Text>
+              <View style={styles.verifiedBadge}>
+                <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
               </View>
             )}
           </View>
-          <View style={styles.reviewStars}>
-            {renderStarRating(item.rating, 14)}
+          <View style={styles.reviewStarsRow}>
+            <View style={styles.reviewStars}>
+              {renderStarRating(item.rating, 12)}
+            </View>
+            <Text style={styles.reviewDate}>
+              {new Date(item.createdAt).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+              })}
+            </Text>
           </View>
         </View>
       </View>
@@ -273,35 +275,28 @@ export default function SellerPublicStoreScreen({
       
       {item.product && (
         <View style={styles.reviewProductTag}>
+          <Ionicons name="pricetag-outline" size={12} color={Colors.textSecondary} />
           <Text style={styles.reviewProductName} numberOfLines={1}>
-            Product: {item.product.name}
+            {item.product.name}
           </Text>
         </View>
       )}
       
-      <View style={styles.reviewFooter}>
-        <Text style={styles.reviewDate}>
-          {new Date(item.createdAt).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-          })}
-        </Text>
-        {item._count?.likes > 0 && (
-          <Text style={styles.reviewLikes}>
-            👍 {item._count.likes}
-          </Text>
-        )}
-      </View>
+      {item._count?.likes > 0 && (
+        <View style={styles.reviewLikesRow}>
+          <Ionicons name="thumbs-up-outline" size={14} color={Colors.textSecondary} />
+          <Text style={styles.reviewLikes}>{item._count.likes}</Text>
+        </View>
+      )}
     </View>
   );
 
   if (loading && !store) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backButton}>← Back</Text>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         </View>
         <View style={styles.loadingContainer}>
@@ -314,22 +309,21 @@ export default function SellerPublicStoreScreen({
 
   if (error && !store) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backButton}>← Back</Text>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorIcon}>⚠️</Text>
+          <View style={styles.errorIconContainer}>
+            <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+          </View>
           <Text style={styles.errorTitle}>Store Not Found</Text>
           <Text style={styles.errorMessage}>
             {error || 'This store could not be found or is no longer available.'}
           </Text>
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={fetchStoreData}
-          >
+          <TouchableOpacity style={styles.retryButton} onPress={fetchStoreData}>
             <Text style={styles.retryButtonText}>Try Again</Text>
           </TouchableOpacity>
         </View>
@@ -339,32 +333,35 @@ export default function SellerPublicStoreScreen({
 
   if (!store) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backButton}>← Back</Text>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
+            <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
           </TouchableOpacity>
         </View>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorIcon}>🏪</Text>
+          <View style={styles.errorIconContainer}>
+            <Ionicons name="storefront-outline" size={64} color={Colors.gray400} />
+          </View>
           <Text style={styles.errorTitle}>No Store Data</Text>
-          <Text style={styles.errorMessage}>
-            Unable to load store information.
-          </Text>
+          <Text style={styles.errorMessage}>Unable to load store information.</Text>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Fixed Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}><Ionicons name="arrow-back-outline" size={24} color="#1E3A8A" /></Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
+          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={handleShare}>
-          <Text style={styles.shareButton}>Share <Ionicons name="share-sharp" size={24} color="#1E3A8A" /></Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity onPress={handleShare} style={styles.headerButton}>
+            <Ionicons name="share-social-outline" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -378,11 +375,10 @@ export default function SellerPublicStoreScreen({
           />
         }
       >
-        {/* Hero Section */}
-        <View style={styles.heroSection}>
-          <View style={styles.heroBackground} />
-          <View style={styles.heroContent}>
-            <View style={styles.logoWrapper}>
+        {/* Store Header Card */}
+        <View style={styles.storeHeaderCard}>
+          <View style={styles.storeMainInfo}>
+            <View style={styles.logoContainer}>
               {store.logo ? (
                 <Image source={{ uri: store.logo }} style={styles.logoImage} />
               ) : (
@@ -393,112 +389,105 @@ export default function SellerPublicStoreScreen({
                 </View>
               )}
               {store.verification?.status === 'verified' && (
-                <View style={styles.verifiedBadge}>
-                  <Text style={styles.verifiedBadgeText}>✓</Text>
+                <View style={styles.verifiedBadgeIcon}>
+                  <Ionicons name="checkmark-circle" size={24} color={Colors.success} />
                 </View>
               )}
             </View>
 
-            <Text style={styles.storeName}>{store.name}</Text>
-            
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryBadgeText}>{store.category}</Text>
-            </View>
-
-            <View style={styles.ratingContainer}>
-              <View style={styles.stars}>
-                {renderStarRating(store.rating, 18)}
+            <View style={styles.storeDetails}>
+              <View style={styles.storeNameRow}>
+                <Text style={styles.storeName} numberOfLines={2}>
+                  {store.name}
+                </Text>
               </View>
-              <Text style={styles.ratingText}>
-                {store.rating.toFixed(1)} ({store.totalReviews} reviews)
-              </Text>
-            </View>
-
-            <View style={styles.statsRow}>
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>{followerCount}</Text>
-                <Text style={styles.statLabel}>Followers</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>{products.length}+</Text>
-                <Text style={styles.statLabel}>Products</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>{store.viewCount || 0}</Text>
-                <Text style={styles.statLabel}>Views</Text>
-              </View>
-            </View>
-
-            <View style={styles.actionButtons}>
-              <TouchableOpacity
-                style={[
-                  styles.followButton,
-                  isFollowing && styles.followingButton,
-                ]}
-                onPress={handleFollowToggle}
-                disabled={followLoading}
-              >
-                {followLoading ? (
-                  <ActivityIndicator size="small" color={isFollowing ? Colors.primary : Colors.white} />
-                ) : (
-                  <>
-                    <Text style={[styles.followButtonIcon, isFollowing && styles.followingIcon]}>
-                      {isFollowing ? '✓' : '+'}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.followButtonText,
-                        isFollowing && styles.followingButtonText,
-                      ]}
-                    >
-                      {isFollowing ? 'Following' : 'Follow'}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
               
-              <TouchableOpacity
-                style={styles.contactButton}
-                onPress={handleContactSeller}
-              >
-                <Text style={styles.contactButtonIcon}><Ionicons name="chatbubble" size={24} color="#1E3A8A" /></Text>
-                <Text style={styles.contactButtonText}>Message</Text>
-              </TouchableOpacity>
+              <View style={styles.categoryLocationRow}>
+                <View style={styles.categoryPill}>
+                  <Text style={styles.categoryText}>{store.category}</Text>
+                </View>
+                <View style={styles.locationPill}>
+                  <Ionicons name="location-sharp" size={12} color={Colors.textSecondary} />
+                  <Text style={styles.locationText}>{store.location}</Text>
+                </View>
+              </View>
+
+              <View style={styles.ratingRow}>
+                <View style={styles.stars}>
+                  {renderStarRating(store.rating || 0, 14)}
+                </View>
+                <Text style={styles.ratingText}>
+                  {(store.rating || 0).toFixed(1)} ({store.totalReviews || 0})
+                </Text>
+              </View>
             </View>
+          </View>
+
+          {/* Stats Row */}
+          <View style={styles.statsContainer}>
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{followerCount}</Text>
+              <Text style={styles.statLabel}>Followers</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{(products ?? []).length}+</Text>
+              <Text style={styles.statLabel}>Products</Text>
+            </View>
+
+            <View style={styles.statDivider} />
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{store.viewCount || 0}</Text>
+              <Text style={styles.statLabel}>Views</Text>
+            </View>
+          </View>
+
+          {/* Action Buttons */}
+          <View style={styles.actionButtonsRow}>
+            <TouchableOpacity
+              style={[styles.followButton, isFollowing && styles.followingButton]}
+              onPress={handleFollowToggle}
+              disabled={followLoading}
+            >
+              {followLoading ? (
+                <ActivityIndicator size="small" color={isFollowing ? Colors.primary : Colors.white} />
+              ) : (
+                <>
+                  <Ionicons 
+                    name={isFollowing ? "checkmark" : "add"} 
+                    size={18} 
+                    color={isFollowing ? Colors.primary : Colors.white} 
+                  />
+                  <Text style={[styles.followButtonText, isFollowing && styles.followingButtonText]}>
+                    {isFollowing ? 'Following' : 'Follow'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.messageButton} onPress={handleContactSeller}>
+              <Ionicons name="chatbubble-outline" size={18} color={Colors.primary} />
+              <Text style={styles.messageButtonText}>Message</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
         {/* About Section */}
         {store.description && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>About</Text>
+            <Text style={styles.sectionTitle}>About Store</Text>
             <Text style={styles.description}>{store.description}</Text>
           </View>
         )}
-
-        {/* Location Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Location</Text>
-          <View style={styles.locationCard}>
-            <Text style={styles.locationIcon}><Ionicons name="location" size={24} color="#1E3A8A" /></Text>
-            <View style={styles.locationInfo}>
-              <Text style={styles.locationText}>{store.location}</Text>
-              {store.region && (
-                <Text style={styles.regionText}>{store.region}</Text>
-              )}
-            </View>
-          </View>
-        </View>
 
         {/* Products Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Products</Text>
             {products.length > 0 && (
-              <TouchableOpacity onPress={handleViewAllProducts}>
-                <Text style={styles.viewAllLink}>View All <Ionicons name="arrow-forward" size={24} color={Colors.primary} /></Text>
+              <TouchableOpacity onPress={handleViewAllProducts} style={styles.viewAllButton}>
+                <Text style={styles.viewAllText}>View All</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
               </TouchableOpacity>
             )}
           </View>
@@ -509,7 +498,7 @@ export default function SellerPublicStoreScreen({
             </View>
           ) : products.length > 0 ? (
             <FlatList
-              data={products}
+              data={products.slice(0, 6)}
               renderItem={renderProductCard}
               keyExtractor={(item) => item.id}
               numColumns={2}
@@ -519,21 +508,22 @@ export default function SellerPublicStoreScreen({
             />
           ) : (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>📦</Text>
-              <Text style={styles.emptyStateText}>No products yet</Text>
+              <Ionicons name="cube-outline" size={48} color={Colors.gray300} />
+              <Text style={styles.emptyStateText}>No products available</Text>
             </View>
           )}
         </View>
 
-        {/* Store Reviews Section */}
+        {/* Reviews Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>
-              Customer Reviews {reviewCount > 0 && `(${reviewCount})`}
+              Reviews {reviewCount > 0 && `(${reviewCount})`}
             </Text>
             {storeReviews.length > 0 && (
-              <TouchableOpacity onPress={handleViewAllReviews}>
-                <Text style={styles.viewAllLink}>View All <Text style={styles.buttonArrow}><Ionicons name="arrow-forward" size={24} color={Colors.primary} /></Text></Text>
+              <TouchableOpacity onPress={handleViewAllReviews} style={styles.viewAllButton}>
+                <Text style={styles.viewAllText}>View All</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
               </TouchableOpacity>
             )}
           </View>
@@ -544,7 +534,7 @@ export default function SellerPublicStoreScreen({
             </View>
           ) : storeReviews.length > 0 ? (
             <FlatList
-              data={storeReviews}
+              data={storeReviews.slice(0, 3)}
               renderItem={renderReviewCard}
               keyExtractor={(item) => item.id}
               scrollEnabled={false}
@@ -552,7 +542,7 @@ export default function SellerPublicStoreScreen({
             />
           ) : (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyStateIcon}>⭐</Text>
+              <Ionicons name="star-outline" size={48} color={Colors.gray300} />
               <Text style={styles.emptyStateText}>No reviews yet</Text>
               <Text style={styles.emptyStateSubtext}>
                 Be the first to review products from this store
@@ -561,11 +551,9 @@ export default function SellerPublicStoreScreen({
           )}
         </View>
 
-        {/* Store Details Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Store Information</Text>
-          
-          <View style={styles.infoGrid}>
+        {/* Store Info Footer */}
+        <View style={styles.footerSection}>
+          <View style={styles.infoRow}>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>Seller</Text>
               <Text style={styles.infoValue}>
@@ -574,7 +562,7 @@ export default function SellerPublicStoreScreen({
             </View>
             
             <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Member Since</Text>
+              <Text style={styles.infoLabel}>Joined</Text>
               <Text style={styles.infoValue}>
                 {new Date(store.createdAt).toLocaleDateString('en-US', {
                   month: 'short',
@@ -583,15 +571,15 @@ export default function SellerPublicStoreScreen({
               </Text>
             </View>
           </View>
-        </View>
 
-        {/* Report Button */}
-        <TouchableOpacity
-          style={styles.reportButton}
-          onPress={() => console.log('Report store')}
-        >
-          <Text style={styles.reportButtonText}>🚩 Report this store</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.reportButton}
+            onPress={() => console.log('Report store')}
+          >
+            <Ionicons name="flag-outline" size={14} color={Colors.error} />
+            <Text style={styles.reportButtonText}>Report Store</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
@@ -602,39 +590,39 @@ export default function SellerPublicStoreScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.backgroundSecondary,
+    backgroundColor: Colors.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  backButton: {
-    fontSize: 16,
-    color: Colors.primary,
-    fontWeight: '600',
+  headerButton: {
+    padding: 4,
   },
-  shareButton: {
-    fontSize: 16,
-    color: Colors.primary,
-    fontWeight: '600',
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
   content: {
     flex: 1,
   },
   loadingContainer: {
-    paddingVertical: 40,
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: 60,
   },
   loadingText: {
     marginTop: 16,
-    fontSize: 16,
+    fontSize: Typography.base,
     color: Colors.textSecondary,
+    fontFamily: Typography.medium,
   },
   errorContainer: {
     flex: 1,
@@ -642,22 +630,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 40,
   },
-  errorIcon: {
-    fontSize: 64,
-    marginBottom: 16,
+  errorIconContainer: {
+    marginBottom: 20,
   },
   errorTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: Typography.xl,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
     marginBottom: 8,
+    textAlign: 'center',
   },
   errorMessage: {
-    fontSize: 16,
+    fontSize: Typography.base,
     color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 24,
+    fontFamily: Typography.regular,
   },
   retryButton: {
     backgroundColor: Colors.primary,
@@ -667,151 +656,139 @@ const styles = StyleSheet.create({
   },
   retryButtonText: {
     color: Colors.white,
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
   },
-  heroSection: {
-    position: 'relative',
+  storeHeaderCard: {
     backgroundColor: Colors.white,
-    overflow: 'hidden',
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  heroBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 120,
-    backgroundColor: Colors.primary,
-    opacity: 0.1,
+  storeMainInfo: {
+    flexDirection: 'row',
+    marginBottom: 20,
   },
-  heroContent: {
-    paddingTop: 40,
-    paddingBottom: 32,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  logoWrapper: {
+  logoContainer: {
     position: 'relative',
-    marginBottom: 16,
+    marginRight: 16,
   },
   logoImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 72,
+    height: 72,
+    borderRadius: 16,
     backgroundColor: Colors.gray100,
-    borderWidth: 4,
-    borderColor: Colors.white,
   },
   logoPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 72,
+    height: 72,
+    borderRadius: 16,
     backgroundColor: Colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 4,
-    borderColor: Colors.white,
   },
   logoPlaceholderText: {
-    fontSize: 40,
-    fontWeight: '700',
+    fontSize: 32,
+    fontFamily: Typography.bold,
     color: Colors.white,
   },
-  verifiedBadge: {
+  verifiedBadgeIcon: {
     position: 'absolute',
-    bottom: -2,
-    right: -2,
-    backgroundColor: Colors.success,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: Colors.white,
+    bottom: -4,
+    right: -4,
+    backgroundColor: Colors.white,
+    borderRadius: 12,
   },
-  verifiedBadgeText: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: '700',
+  storeDetails: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  storeNameRow: {
+    marginBottom: 6,
   },
   storeName: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: Typography['2xl'],
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
-    textAlign: 'center',
+    lineHeight: 28,
+  },
+  categoryLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginBottom: 8,
   },
-  categoryBadge: {
+  categoryPill: {
     backgroundColor: Colors.primary + '15',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-    marginBottom: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
   },
-  categoryBadgeText: {
-    fontSize: 13,
+  categoryText: {
+    fontSize: Typography.xs,
     color: Colors.primary,
-    fontWeight: '600',
+    fontFamily: Typography.semiBold,
   },
-  ratingContainer: {
+  locationPill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    gap: 4,
+  },
+  locationText: {
+    fontSize: Typography.xs,
+    color: Colors.textSecondary,
+    fontFamily: Typography.medium,
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   stars: {
     flexDirection: 'row',
-    marginBottom: 4,
-  },
-  star: {
-    color: '#FFA500',
-    marginHorizontal: 1,
-  },
-  starEmpty: {
-    color: Colors.gray300,
-    marginHorizontal: 1,
+    gap: 2,
   },
   ratingText: {
-    fontSize: 13,
+    fontSize: Typography.sm,
     color: Colors.textSecondary,
+    fontFamily: Typography.medium,
   },
-  statsRow: {
+  statsContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: Colors.backgroundSecondary,
     borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    marginBottom: 20,
-    width: '100%',
+    padding: 16,
+    marginBottom: 16,
   },
-  statItem: {
+  statBox: {
     flex: 1,
     alignItems: 'center',
   },
   statValue: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: Typography.xl,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
-  },
-    buttonArrow: {
-    color: Colors.white,
-    fontSize: 22,
-    fontWeight: '700',
+    fontFamily: Typography.medium,
   },
   statDivider: {
     width: 1,
-    height: 30,
     backgroundColor: Colors.border,
+    marginHorizontal: 8,
   },
-  actionButtons: {
+  actionButtonsRow: {
     flexDirection: 'row',
     gap: 12,
-    width: '100%',
   },
   followButton: {
     flex: 1,
@@ -825,26 +802,18 @@ const styles = StyleSheet.create({
   },
   followingButton: {
     backgroundColor: Colors.white,
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderColor: Colors.primary,
-  },
-  followButtonIcon: {
-    fontSize: 18,
-    color: Colors.white,
-    fontWeight: '700',
-  },
-  followingIcon: {
-    color: Colors.primary,
   },
   followButtonText: {
     color: Colors.white,
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
   },
   followingButtonText: {
     color: Colors.primary,
   },
-  contactButton: {
+  messageButton: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
     flexDirection: 'row',
@@ -856,19 +825,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  contactButtonIcon: {
-    fontSize: 18,
-  },
-  contactButtonText: {
-    color: Colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '600',
+  messageButtonText: {
+    color: Colors.primary,
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
   },
   section: {
     backgroundColor: Colors.white,
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    marginTop: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -877,46 +849,28 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: Typography.lg,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
   },
-  viewAllLink: {
-    fontSize: 14,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  description: {
-    fontSize: 15,
-    color: Colors.textSecondary,
-    lineHeight: 22,
-  },
-  locationCard: {
+  viewAllButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.backgroundSecondary,
-    padding: 16,
-    borderRadius: 12,
+    gap: 2,
   },
-  locationIcon: {
-    fontSize: 24,
-    marginRight: 12,
+  viewAllText: {
+    fontSize: Typography.sm,
+    color: Colors.primary,
+    fontFamily: Typography.semiBold,
   },
-  locationInfo: {
-    flex: 1,
-  },
-  locationText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 2,
-  },
-  regionText: {
-    fontSize: 13,
+  description: {
+    fontSize: Typography.base,
     color: Colors.textSecondary,
+    lineHeight: 24,
+    fontFamily: Typography.regular,
   },
   productsGrid: {
-    paddingBottom: 8,
+    paddingBottom: 4,
   },
   productRow: {
     justifyContent: 'space-between',
@@ -928,12 +882,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.borderLight,
   },
   productImageContainer: {
     width: '100%',
-    height: PRODUCT_CARD_WIDTH,
+    height: PRODUCT_CARD_WIDTH * 0.9,
     backgroundColor: Colors.gray100,
+    position: 'relative',
   },
   productImage: {
     width: '100%',
@@ -947,186 +902,202 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: Colors.gray200,
   },
-  productImagePlaceholderText: {
-    fontSize: 40,
+  inStockBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.success,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  inStockDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: Colors.white,
   },
   productInfo: {
-    padding: 12,
+    padding: 10,
   },
   productName: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: Typography.sm,
+    fontFamily: Typography.semiBold,
     color: Colors.textPrimary,
-    marginBottom: 6,
-    height: 36,
+    marginBottom: 4,
+    lineHeight: 20,
   },
   productPrice: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: Typography.base,
+    fontFamily: Typography.bold,
     color: Colors.primary,
-    marginBottom: 6,
-  },
-  stockBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: Colors.success + '20',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
-  },
-  stockBadgeText: {
-    fontSize: 11,
-    color: Colors.success,
-    fontWeight: '600',
-  },
-  outOfStockBadge: {
-    backgroundColor: Colors.error + '20',
-  },
-  outOfStockText: {
-    color: Colors.error,
   },
   reviewCard: {
     backgroundColor: Colors.backgroundSecondary,
-    padding: 16,
     borderRadius: 12,
+    padding: 16,
   },
   reviewHeader: {
     flexDirection: 'row',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   reviewerAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: Colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
   },
   reviewerAvatarText: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: Typography.lg,
+    fontFamily: Typography.bold,
     color: Colors.white,
   },
   reviewerInfo: {
     flex: 1,
+    justifyContent: 'center',
   },
   reviewerNameRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    gap: 4,
+    marginBottom: 2,
   },
   reviewerName: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
     color: Colors.textPrimary,
-    marginRight: 8,
   },
-  verifiedPurchaseBadge: {
+  verifiedBadge: {
     backgroundColor: Colors.success + '20',
-    paddingHorizontal: 6,
+    borderRadius: 8,
+    paddingHorizontal: 4,
     paddingVertical: 2,
-    borderRadius: 4,
   },
-  verifiedPurchaseText: {
-    fontSize: 10,
-    color: Colors.success,
-    fontWeight: '600',
+  reviewStarsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   reviewStars: {
     flexDirection: 'row',
-  },
-  reviewTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 6,
-  },
-  reviewComment: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    lineHeight: 20,
-    marginBottom: 10,
-  },
-  reviewProductTag: {
-    backgroundColor: Colors.white,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    marginBottom: 10,
-    alignSelf: 'flex-start',
-  },
-  reviewProductName: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-  },
-  reviewFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 2,
   },
   reviewDate: {
-    fontSize: 12,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
+    fontFamily: Typography.medium,
+  },
+  reviewTitle: {
+    fontSize: Typography.sm,
+    fontFamily: Typography.semiBold,
+    color: Colors.textPrimary,
+    marginBottom: 4,
+    lineHeight: 20,
+  },
+  reviewComment: {
+    fontSize: Typography.base,
+    color: Colors.textSecondary,
+    lineHeight: 22,
+    marginBottom: 8,
+    fontFamily: Typography.regular,
+  },
+  reviewProductTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.backgroundTertiary,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+  },
+  reviewProductName: {
+    fontSize: Typography.xs,
+    color: Colors.textSecondary,
+    fontFamily: Typography.medium,
+    maxWidth: PRODUCT_CARD_WIDTH - 40,
+  },
+  reviewLikesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   reviewLikes: {
-    fontSize: 12,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
+    fontFamily: Typography.medium,
   },
   reviewSeparator: {
     height: 12,
   },
-  infoGrid: {
+  emptyState: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    marginTop: 12,
+    fontSize: Typography.base,
+    color: Colors.textSecondary,
+    fontFamily: Typography.medium,
+  },
+  emptyStateSubtext: {
+    marginTop: 4,
+    fontSize: Typography.sm,
+    color: Colors.textSecondary,
+    fontFamily: Typography.regular,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  footerSection: {
+    backgroundColor: Colors.white, 
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  infoRow: {
     flexDirection: 'row',
-    gap: 12,
+    justifyContent: 'space-between',
+    marginBottom: 16,
   },
   infoItem: {
     flex: 1,
-    backgroundColor: Colors.backgroundSecondary,
-    padding: 14,
-    borderRadius: 10,
-  },
+  }, 
   infoLabel: {
-    fontSize: 12,
+    fontSize: Typography.sm,
     color: Colors.textSecondary,
+    fontFamily: Typography.medium,
     marginBottom: 4,
-  },
+  }, 
   infoValue: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: Typography.base,
     color: Colors.textPrimary,
-  },
-  emptyState: {
-    paddingVertical: 40,
-    alignItems: 'center',
-  },
-  emptyStateIcon: {
-    fontSize: 48,
-    marginBottom: 12,
-  },
-  emptyStateText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: 4,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    paddingHorizontal: 20,
+    fontFamily: Typography.semiBold,
   },
   reportButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 20,
-    paddingHorizontal: 20,
+    gap: 6,
+    alignSelf: 'flex-start',
   },
   reportButtonText: {
-    fontSize: 14,
+    fontSize: Typography.sm,
     color: Colors.error,
-    fontWeight: '500',
+    fontFamily: Typography.semiBold,
   },
   bottomSpacer: {
-    height: 40,
+    height: 24,
   },
 });
-

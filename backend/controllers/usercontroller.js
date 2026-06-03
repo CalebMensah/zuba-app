@@ -210,6 +210,3 @@ export const deleteAvatar = async (req, res) => {
     });
   }
 };
-
-// Fetch all users (Admin only)
-

@@ -5,13 +5,19 @@ import {
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
+import { useQueries, type UseQueryResult } from '@tanstack/react-query';
+import type { OrderWithBreakdown } from '../../types/order';
 import { usePayment } from '../../hooks/usePayment';
-import { useOrders } from '../../hooks/useOrder';
+import { orderAPI } from '../../services/orderApi';
+import { orderKeys } from '../../hooks/useOrder';
+import { useAuth } from '../../context/AuthContext';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 
 interface PaymentOrder {
@@ -21,263 +27,532 @@ interface PaymentOrder {
 }
 
 const PaymentScreen = ({ route, navigation }: any) => {
-  // Get orders from route params (passed from CheckoutScreen)
-  const { orders: ordersParam, totalOrders } = route.params || {};
+  const {
+    orders: ordersParam,
+    paymentSession,
+    totalAmount: totalAmountParam,
+    totalOrders,
+    email: emailParam,
+    reference,
+    checkoutSessionId,
+  } = route.params || {};
+
   const orders: PaymentOrder[] = ordersParam || [];
 
-  const { 
-    createCheckoutSession, 
-    verifyPayment, 
-    getPaymentsByCheckoutSession,
-    loading: paymentLoading 
-  } = usePayment();
-  const { getOrderById } = useOrders();
+  const { createCheckoutSession, verifyPayment, loading: paymentLoading } = usePayment();
 
-  const [orderDetails, setOrderDetails] = useState<any[]>([]);
-  const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
-  const [paymentReference, setPaymentReference] = useState<string | null>(null);
-  const [checkoutSessionId, setCheckoutSessionId] = useState<string | null>(null);
-  const [paymentInitiated, setPaymentInitiated] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState(emailParam || '');
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [sessionReference, setSessionReference] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+const [isVerifying, setIsVerifying] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState<number>(0);
+
+// Use TanStack Query's useQueries to fetch multiple orders in parallel
+const orderQueries = useQueries({
+  queries: orders.map((order) => ({
+    queryKey: orderKeys.detail(order.orderId),
+    queryFn: () => orderAPI.getOrderById(order.orderId),
+    enabled: !!order.orderId,
+    staleTime: 60000,
+  })),
+}) as UseQueryResult<OrderWithBreakdown>[];
+
+  // Derive loading and error states from all queries
+  const isLoadingOrders = orderQueries.some((query) => query.isLoading);
+  const hasErrors = orderQueries.some((query) => query.error);
+  const orderDetails = orderQueries
+    .map((query) => query.data)
+    .filter((order): order is OrderWithBreakdown => Boolean(order)) as OrderWithBreakdown[];
+
+  // Check authentication status
+  const checkAuthentication = async (): Promise<boolean> => {
+    try {
+      const token = await AsyncStorage.getItem('token');
+      const user = await AsyncStorage.getItem('user');
+
+      if (!token || !user) {
+        console.log('❌ No authentication token or user data found');
+        return false;
+      }
+
+      if (!token.startsWith('eyJ')) {
+        console.log('❌ Invalid token format');
+        return false;
+      }
+
+      setIsAuthenticated(true);
+      console.log('✅ User authenticated');
+      return true;
+    } catch (error) {
+      console.error('❌ Error checking authentication:', error);
+      return false;
+    }
+  };
 
   useEffect(() => {
-    if (orders && orders.length > 0) {
-      loadOrderDetails();
-    } else {
-      Alert.alert('Error', 'No orders found', [
-        { text: 'OK', onPress: () => navigation.goBack() }
-      ]);
-    }
-  }, [orders]);
+    initializeScreen();
+  }, []);
 
-  const loadOrderDetails = async () => {
+  const initializeScreen = async () => {
     try {
-      setLoading(true);
-      const orderDataPromises = orders.map(order => getOrderById(order.orderId));
-      const fetchedOrders = await Promise.all(orderDataPromises);
-      
-      const validOrders = fetchedOrders.filter(order => order !== null);
-      
-      if (validOrders.length === 0) {
-        Alert.alert('Error', 'Failed to load order details', [
-          { text: 'OK', onPress: () => navigation.goBack() }
-        ]);
+      const authenticated = await checkAuthentication();
+      if (!authenticated) {
+        Alert.alert(
+          'Authentication Required',
+          'Please log in to continue with payment.',
+          [
+            { text: 'Cancel', onPress: () => navigation.goBack() },
+            { text: 'Log In', onPress: () => navigation.navigate('Login') },
+          ]
+        );
         return;
       }
 
-      setOrderDetails(validOrders);
+      if (!orders || orders.length === 0) {
+        Alert.alert('Error', 'No orders found', [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+        return;
+      }
     } catch (error) {
-      console.error('Error loading orders:', error);
-      Alert.alert('Error', 'Failed to load order details');
-    } finally {
-      setLoading(false);
+      console.error('❌ Error initializing payment screen:', error);
+      Alert.alert('Error', 'Failed to initialize payment screen');
+      navigation.goBack();
     }
   };
 
-  const handleInitiatePayment = async () => {
-    if (!orderDetails || orderDetails.length === 0) return;
+  // Set email preferring auth user → order buyer → param
+  const { user } = useAuth();
+  useEffect(() => {
+    if (orderDetails.length > 0 && !email) {
+      const orderEmail = orderDetails[0].buyer?.email || '';
+      const finalEmail = orderEmail || user?.email || emailParam || '';
+      setEmail(finalEmail);
+    }
+  }, [orderDetails, user?.email, emailParam]);
 
+  const handlePayNow = async () => {
     try {
-      // Get user email from first order
-      const userEmail = orderDetails[0].buyer?.email || orderDetails[0].buyerEmail || 'user@example.com';
-      
-      // Extract order IDs
-      const orderIds = orders.map(order => order.orderId);
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        Alert.alert('Invalid Email', 'Please enter a valid email address');
+        return;
+      }
 
-      // Create checkout session for multiple orders
-      const response = await createCheckoutSession({
-        orderIds,
-        email: userEmail,
-        callbackUrl: `${process.env.EXPO_PUBLIC_FRONTEND_URL}/payment/success`
+      if (totalAmount <= 0) {
+        Alert.alert('Invalid Amount', 'Cannot process payment with zero amount. Please check your orders.');
+        return;
+      }
+
+      if (!orders || orders.length === 0) {
+        Alert.alert('Error', 'No orders found for payment');
+        return;
+      }
+
+      if (!totalAmount || totalAmount <= 0) {
+        Alert.alert('Error', 'Invalid payment amount');
+        return;
+      }
+
+      console.log('💳 Starting payment process with:', {
+        ordersCount: orders.length,
+        totalAmount,
+        email,
+        hasPaymentSession: !!paymentSession,
+        hasReference: !!reference,
+        referenceValue: reference,
       });
 
-      if (response && response.data) {
-        setPaymentUrl(response.data.authorizationUrl);
-        setPaymentReference(response.data.reference);
-        setCheckoutSessionId(response.data.checkoutSessionId);
-        setPaymentInitiated(true);
+      let paymentReference: string = '';
+      let paymentAmount: number = 0;
+      let authorizationUrl: string = '';
+
+      if (paymentSession && reference) {
+        console.log('🔄 Using existing payment session with reference:', reference);
+        paymentReference = reference;
+        paymentAmount = totalAmount;
+        authorizationUrl = paymentSession.authorizationUrl;
       } else {
-        Alert.alert('Error', 'Failed to initiate payment. Please try again.');
+        console.log('🔄 Creating new checkout session');
+        const orderIds = orders.map((order) => order.orderId);
+
+        const response = await createCheckoutSession({
+          orderIds,
+          email: email.trim(),
+        });
+
+        if (response && response.data) {
+          console.log('✅ Checkout session created:', response.data);
+          paymentReference = response.data.reference;
+          setPaymentAmount(response.data.totalAmount);
+          paymentAmount = response.data.totalAmount;
+          authorizationUrl = response.data.authorizationUrl;
+          
+          // ✅ Conditional refetch: Skip if totalAmountParam provided (from CheckoutScreen)
+          if (!totalAmountParam) {
+            console.log('🔄 Refetching orders for breakdown details...');
+            orderQueries.forEach((query) => query.refetch());
+          } else {
+            console.log('✅ Using totalAmountParam from CheckoutScreen - skipping refetch');
+          }
+        } else {
+          console.error('❌ No response data from checkout session creation');
+          Alert.alert('Error', 'Failed to initiate payment. Please try again.');
+          return;
+        }
       }
+
+      if (!paymentAmount || paymentAmount <= 0) {
+        Alert.alert('Invalid Amount', 'Payment amount is invalid');
+        return;
+      }
+
+      if (!paymentReference || paymentReference.length < 5) {
+        Alert.alert('Invalid Reference', 'Payment reference is invalid');
+        return;
+      }
+
+      if (!authorizationUrl) {
+        Alert.alert('Error', 'Payment authorization URL not found');
+        return;
+      }
+
+      console.log('🚀 Opening Paystack payment page:', {
+        reference: paymentReference,
+        amount: paymentAmount,
+        authorizationUrl,
+      });
+
+      setSessionReference(paymentReference);
+      setAuthUrl(authorizationUrl);
     } catch (error: any) {
-      console.error('Payment initiation error:', error);
-      Alert.alert(
-        'Payment Error',
-        error.message || 'Failed to initiate payment. Please try again.'
-      );
+      console.error('💥 Payment initiation error:', error);
+
+      let errorMessage = 'Failed to initiate payment. Please try again.';
+
+      if (error.message.includes('Authentication required')) {
+        errorMessage = 'Please log in again to continue with payment.';
+      } else if (error.message.includes('Too many payment attempts')) {
+        errorMessage =
+          'Too many payment attempts. Please wait a few minutes before trying again.';
+      } else if (error.message.includes('Network error')) {
+        errorMessage =
+          'Network connection error. Please check your internet connection and try again.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      Alert.alert('Payment Error', errorMessage, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Retry', onPress: () => handlePayNow() },
+      ]);
     }
   };
 
-  const handleWebViewNavigationStateChange = (navState: any) => {
-    const { url } = navState;
+const handleWebViewNavigationStateChange = async (navState: any) => {
+    const { url, loading } = navState as { url?: string; loading?: boolean };
+    if (!url || isVerifying) return;
 
-    // Check if payment was successful
-    if (url.includes('/payment/success') || url.includes('success')) {
-      setPaymentUrl(null);
-      handleVerifyPayment();
-    }
+    console.log('🔍 WebView navigation:', { url, loading, isVerifying, sessionReference });
 
-    // Check if payment was cancelled
-    if (url.includes('cancel') || url.includes('cancelled')) {
-      setPaymentUrl(null);
-      Alert.alert(
-        'Payment Cancelled',
-        'Your payment was cancelled. Would you like to try again?',
-        [
-          { text: 'No', onPress: () => navigation.goBack() },
-          { text: 'Yes', onPress: () => setPaymentInitiated(false) }
-        ]
-      );
-    }
-  };
+    // ✅ Enhanced Paystack detection patterns (tested)
+    const isSuccessPage = 
+      url.includes('/paystack/pay/complete/') ||
+      url.includes('status=success') ||
+      url.includes('&trxref=') ||
+      url.includes('#success') ||
+      url.includes('payment-success');
 
-  const handleVerifyPayment = async () => {
-    if (!paymentReference) {
-      Alert.alert('Error', 'Payment reference not found');
-      return;
-    }
+    const isCancelPage = 
+      url.includes('/paystack/pay/cancel/') ||
+      url.includes('status=cancelled') ||
+      url.includes('cancel');
 
-    setVerifying(true);
+    if (isSuccessPage || isCancelPage) {
+      console.log(`🎯 ${isSuccessPage ? 'SUCCESS' : 'CANCEL'} page detected:`, url);
+      
+      if (isVerifying || !sessionReference) {
+        console.log('⚠️ Already processing, skipping');
+        return;
+      }
 
-    try {
-      const verification = await verifyPayment(paymentReference);
+      setIsVerifying(true);
+      const referenceToVerify = sessionReference!;
+      
+      // Hide WebView immediately
+      setAuthUrl(null);
+      setSessionReference(null);
 
-      if (verification && verification.success) {
-        const payments = verification.data.payments;
-        const isMultiStore = verification.data.isMultiStore;
+      try {
+        console.log('🔍 Auto-verifying payment:', referenceToVerify);
+        await new Promise(resolve => setTimeout(resolve, 1500)); // Brief delay
 
-        // Check if all payments are successful
-        const allSuccessful = payments.every(p => p.status === 'SUCCESS');
-
-        if (allSuccessful) {
+        const verification = await verifyPayment(referenceToVerify);
+        
+        if (verification?.success) {
+          console.log('✅ Auto-verification SUCCESS!');
           Alert.alert(
-            'Payment Successful! 🎉',
-            `Your payment for ${payments.length} order(s) has been confirmed.`,
-            [
-              {
-                text: 'View Orders',
-                onPress: () => {
-                  if (checkoutSessionId) {
-                    navigation.navigate('OrderSummary', { 
-                      checkoutSession: checkoutSessionId 
-                    });
-                  } else {
-                    navigation.navigate('Orders');
-                  }
-                }
-              }
-            ]
+            'Payment Successful!',
+            `Your payment has been verified successfully.\n\nRedirecting to Orders...`,
+            [{ text: 'OK', onPress: () => navigation.replace('Orders') }]
           );
         } else {
-          const successCount = payments.filter(p => p.status === 'SUCCESS').length;
+          console.warn('❌ Auto-verification failed:', verification);
+          setIsVerifying(false);
           Alert.alert(
-            'Payment Partially Processed',
-            `${successCount} of ${payments.length} payment(s) successful. Please check your orders.`,
-            [
-              {
-                text: 'View Orders',
-                onPress: () => navigation.navigate('Orders')
-              }
-            ]
+            'Payment Pending',
+            'Payment initiated but needs verification.\n\nCheck your Orders tab.',
+            [{ text: 'Go to Orders', onPress: () => navigation.replace('Orders') }]
           );
         }
-      } else {
-        Alert.alert('Verification Failed', 'Unable to verify payment. Please contact support.');
+      } catch (err: any) {
+        console.error('❌ Auto-verification error:', err);
+        setIsVerifying(false);
+        Alert.alert(
+          'Verification Issue',
+          'Please check your Orders tab for payment status.',
+          [{ text: 'Go to Orders', onPress: () => navigation.replace('Orders') }]
+        );
       }
-    } catch (error: any) {
-      console.error('Payment verification error:', error);
-      Alert.alert(
-        'Verification Error',
-        'Failed to verify payment. Please contact support if payment was deducted.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
-    } finally {
-      setVerifying(false);
     }
   };
+
+  // ✅ Injected JS to detect Paystack success via DOM polling
+  const injectedJavaScript = `
+    (function() {
+      function pollPaystackStatus() {
+        // Paystack success indicators
+        const successSelectors = [
+          '.checkout-success',
+          '[data-testid="success-screen"]',
+          '.payment-success',
+          '#success-message',
+          '.success-icon',
+          'h1:contains("Success")',
+          'h2:contains("Complete")',
+          '.checkmark-icon'
+        ];
+        
+        const cancelSelectors = [
+          '.checkout-cancel',
+          '[data-testid="cancel-screen"]',
+          '.payment-cancel',
+          '#cancel-message',
+          '.cancel-icon',
+          'h1:contains("Cancelled")',
+          '.error-icon'
+        ];
+        
+        const checkSuccess = () => {
+          for (let selector of successSelectors) {
+            if (document.querySelector(selector.split(':contains("')[0]) || 
+                document.body.textContent.includes('success') ||
+                document.body.textContent.includes('complete') ||
+                document.title.includes('Success')) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'PAYMENT_SUCCESS',
+                timestamp: Date.now()
+              }));
+              return true;
+            }
+          }
+          return false;
+        };
+        
+        const checkCancel = () => {
+          for (let selector of cancelSelectors) {
+            if (document.querySelector(selector.split(':contains("')[0]) || 
+                document.body.textContent.includes('cancelled') ||
+                document.body.textContent.includes('failed') ||
+                document.title.includes('Cancel')) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'PAYMENT_CANCEL',
+                timestamp: Date.now()
+              }));
+              return true;
+            }
+          }
+          return false;
+        };
+        
+        if (checkSuccess() || checkCancel()) return;
+        
+        // Poll every 2 seconds
+        setTimeout(pollPaystackStatus, 2000);
+      }
+      
+      // Initial check + start polling
+      pollPaystackStatus();
+      
+      // Listen for URL changes
+      let currentUrl = window.location.href;
+      setInterval(() => {
+        if (window.location.href !== currentUrl) {
+          currentUrl = window.location.href;
+          console.log('URL changed:', currentUrl);
+          checkSuccess() || checkCancel();
+        }
+      }, 1000);
+    })();
+  `;
+
+  // ✅ Message handler for injected JS
+  const handleWebViewMessage = async (event: any) => {
+    try {
+      const message = JSON.parse(event.nativeEvent.data);
+      console.log('📱 WebView message:', message);
+      
+      if (message.type === 'PAYMENT_SUCCESS' && !isVerifying && sessionReference) {
+        console.log('🎉 JS Success detection!');
+        setIsVerifying(true);
+        const referenceToVerify = sessionReference;
+        setAuthUrl(null);
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const verification = await verifyPayment(referenceToVerify);
+        if (verification?.success) {
+          Alert.alert('Success!', 'Payment verified. Redirecting...', [
+            { text: 'OK', onPress: () => navigation.replace('BuyerOrders') }
+          ]);
+        }
+      } else if (message.type === 'PAYMENT_CANCEL') {
+        console.log('❌ JS Cancel detection');
+        Alert.alert(
+          'Payment Cancelled',
+          'Payment was cancelled. You can try again anytime.',
+          [{ text: 'OK', onPress: () => setAuthUrl(null) }]
+        );
+      }
+    } catch (e) {
+      console.log('Non-JSON message from WebView:', event.nativeEvent.data);
+    }
+  };
+
+  // ✅ Verification timeout fallback
+  useEffect(() => {
+    if (authUrl && sessionReference) {
+      const timeout = setTimeout(async () => {
+        if (isVerifying) return;
+        
+        console.log('⏰ Verification timeout - checking status');
+        setIsVerifying(true);
+        
+        try {
+          const verification = await verifyPayment(sessionReference);
+          if (verification?.success) {
+            Alert.alert('Payment Complete', 'Payment processed successfully!', [
+              { text: 'View Orders', onPress: () => {
+                navigation.replace('Orders');
+                setAuthUrl(null);
+              }}
+            ]);
+          } else {
+            Alert.alert('Payment Status', 'Check your orders for payment status.', [
+              { text: 'View Orders', onPress: () => {
+                navigation.replace('Orders');
+                setAuthUrl(null);
+              }}
+            ]);
+          }
+        } catch (err) {
+          console.error('Timeout verification error:', err);
+          Alert.alert('Timeout', 'Payment may still be processing. Check Orders tab.', [
+            { text: 'View Orders', onPress: () => {
+              navigation.replace('Orders');
+              setAuthUrl(null);
+            }}
+          ]);
+        } finally {
+          setIsVerifying(false);
+        }
+      }, 30000); // 30 second timeout
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [authUrl, sessionReference, isVerifying]);
 
   const formatPrice = (price: number) => {
     return `GH₵ ${price.toFixed(2)}`;
   };
 
-  // Calculate total amount across all orders
-  const totalAmount = orderDetails.reduce((sum, order) => sum + order.totalAmount, 0);
-  const totalItems = orderDetails.reduce((sum, order) => sum + (order.items?.length || 0), 0);
+// 🛠️ DYNAMIC TOTAL: Prioritize param → paymentAmount state → order breakdown
+  const totalAmount = totalAmountParam ?? 
+                     (paymentAmount > 0 ? paymentAmount : 
+                       orderDetails.reduce((sum, order) => {
+                         return sum + (order.buyerTotalAmount ?? 
+(order.breakdown?.buyerTotal ?? 
+                                      order.buyerTotalAmount ?? 
+                                      order.totalAmount ?? 0));
+                       }, 0)
+                     );
+  
+  // 🐛 TEMP DEBUG LOGGING - Remove after verification
+  useEffect(() => {
+    console.log('💰 TOTAL AMOUNT DEBUG:', {
+      totalAmountParam,
+      paymentAmount,
+      orderDetailsCount: orderDetails.length,
+      orderDetails: orderDetails.map(o => ({
+        id: o.id,
+        buyerTotalAmount: o.buyerTotalAmount,
+        breakdownTotal: o.breakdown?.buyerTotal ?? o.buyerTotalAmount,
+        subtotal: o.breakdown?.subtotal
+      })),
+      calculatedTotal: orderDetails.reduce((sum, o) => sum + (o.buyerTotalAmount ?? 0), 0),
+      finalTotal: totalAmount
+    });
+  }, [totalAmount, orderDetails, totalAmountParam]);
 
-  // Show loading state
-  if (loading || orderDetails.length === 0) {
+  // Log for debugging
+  if (!totalAmountParam) {
+    console.warn('🟡 No totalAmountParam - using dynamic recalc');
+  } else {
+    console.log('✅ Using totalAmountParam from CheckoutScreen:', totalAmount);
+  }
+  
+  // Keep breakdown calcs for display (backend provides details)
+  const subtotal = orderDetails.reduce((sum, order) => sum + (order.breakdown?.subtotal ?? order.totalAmount ?? 0), 0);
+  const platformFeeTotal = orderDetails.reduce((sum, order) => sum + Number(order.breakdown?.platformFee ?? 0), 0);
+  const paystackFeeTotal = orderDetails.reduce((sum, order) => sum + Number(order.breakdown?.paystackFee ?? 0), 0);
+  const totalItems = orderDetails.reduce(
+    (sum, order) => sum + (order.items?.length || 0),
+    0
+  );
+
+  // Loading state - initial fetch only
+  if (isLoadingOrders && orderDetails.length === 0) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <LoadingSpinner size={40} color={Colors.primary} />
         <Text style={styles.loadingText}>Loading payment details...</Text>
       </View>
     );
   }
 
-  // Show WebView when payment is initiated
-  if (paymentInitiated && paymentUrl) {
-    return (
-      <View style={styles.webViewContainer}>
-        <View style={styles.webViewHeader}>
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => {
-              Alert.alert(
-                'Cancel Payment?',
-                'Are you sure you want to cancel this payment?',
-                [
-                  { text: 'No', style: 'cancel' },
-                  {
-                    text: 'Yes',
-                    onPress: () => {
-                      setPaymentUrl(null);
-                      setPaymentInitiated(false);
-                    }
-                  }
-                ]
-              );
-            }}
-          >
-            <Ionicons name="close" size={24} color={Colors.textPrimary} />
-          </TouchableOpacity>
-          <Text style={styles.webViewTitle}>Complete Payment</Text>
-          <View style={styles.placeholder} />
-        </View>
-        <WebView
-          source={{ uri: paymentUrl }}
-          onNavigationStateChange={handleWebViewNavigationStateChange}
-          startInLoadingState={true}
-          renderLoading={() => (
-            <View style={styles.webViewLoading}>
-              <ActivityIndicator size="large" color={Colors.primary} />
-            </View>
-          )}
-        />
-      </View>
-    );
-  }
-
-  // Show verification screen
-  if (verifying) {
+  // Error state
+  if (hasErrors && orderDetails.length === 0) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingText}>Verifying payment...</Text>
-        <Text style={styles.loadingSubtext}>Please wait</Text>
+        <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+        <Text style={styles.errorText}>Failed to load order details</Text>
+        <TouchableOpacity
+          style={styles.retryButton}
+          onPress={() => {
+            orderQueries.forEach((query) => query.refetch());
+          }}
+        >
+          <Ionicons name="refresh" size={20} color={Colors.white} />
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
-  // Main payment screen
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Payment</Text>
@@ -285,218 +560,234 @@ const PaymentScreen = ({ route, navigation }: any) => {
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Payment Summary Card */}
         <View style={styles.summaryCard}>
           <View style={styles.iconContainer}>
             <Ionicons name="card" size={48} color={Colors.primary} />
           </View>
-          <Text style={styles.summaryTitle}>Payment Required</Text>
-          <Text style={styles.summaryText}>
-            Complete your payment to confirm {orderDetails.length} order(s)
-          </Text>
-          
+          <Text style={styles.summaryTitle}>Complete Your Payment</Text>
+          <Text style={styles.summaryText}>Confirm {orderDetails.length} order(s)</Text>
+
           <View style={styles.amountContainer}>
-            <Text style={styles.amountLabel}>Total Amount to Pay</Text>
+            <Text style={styles.amountLabel}>Total Amount</Text>
             <Text style={styles.amountValue}>{formatPrice(totalAmount)}</Text>
           </View>
 
-          {/* Multi-store indicator */}
           {orderDetails.length > 1 && (
             <View style={styles.multiStoreIndicator}>
               <Ionicons name="storefront" size={16} color={Colors.warning} />
               <Text style={styles.multiStoreText}>
-                Payment covers {orderDetails.length} orders from different stores
+                Payment for {orderDetails.length} orders from different stores
               </Text>
             </View>
           )}
         </View>
 
-        {/* Orders Summary */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Orders Summary</Text>
+          <Text style={styles.sectionTitle}>Email Address</Text>
+          <View style={styles.inputContainer}>
+            <Ionicons name="mail-outline" size={20} color={Colors.gray400} />
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="Enter your email"
+              placeholderTextColor={Colors.gray400}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+          </View>
+          <Text style={styles.inputHint}>Payment receipt will be sent to this email</Text>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Order Summary</Text>
           {orderDetails.map((order, index) => (
             <View key={order.id} style={styles.orderCard}>
               <View style={styles.orderHeader}>
-                <Text style={styles.orderTitle}>
-                  Order #{index + 1}
+                <Text style={styles.orderTitle}>Order #{index + 1}</Text>
+                <Text style={styles.orderAmount}>
+                  {formatPrice(order.buyerTotalAmount)}
                 </Text>
-                <Text style={styles.orderAmount}>{formatPrice(order.totalAmount)}</Text>
               </View>
-              
+
               <View style={styles.orderDetails}>
                 <View style={styles.detailRow}>
                   <Ionicons name="storefront-outline" size={16} color={Colors.gray600} />
                   <Text style={styles.detailText}>{order.store?.name || 'Store'}</Text>
                 </View>
                 <View style={styles.detailRow}>
-                  <Ionicons name="receipt-outline" size={16} color={Colors.gray600} />
-                  <Text style={styles.detailText}>Order ID: #{order.id.slice(0, 8)}</Text>
-                </View>
-                <View style={styles.detailRow}>
                   <Ionicons name="cube-outline" size={16} color={Colors.gray600} />
                   <Text style={styles.detailText}>{order.items?.length || 0} item(s)</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Ionicons name="time-outline" size={16} color={Colors.gray600} />
-                  <View style={[styles.statusBadge, getStatusBadgeStyle(order.status)]}>
-                    <Text style={styles.statusText}>{order.status}</Text>
-                  </View>
                 </View>
               </View>
             </View>
           ))}
         </View>
 
-        {/* Total Summary */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Payment Summary</Text>
-          <View style={styles.detailsCard}>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Total Orders</Text>
-              <Text style={styles.summaryValue}>{orderDetails.length}</Text>
+          <Text style={styles.sectionTitle}>Payment Breakdown</Text>
+          <View style={styles.breakdownCard}>
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Subtotal</Text>
+              <Text style={styles.breakdownValue}>
+                {formatPrice(
+                  orderDetails.reduce((sum, o) => sum + Number(o.breakdown?.subtotal ?? o.totalAmount ?? 0), 0)
+                )}
+              </Text>
+            </View>
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Delivery Fee</Text>
+              <Text style={styles.breakdownValue}>
+                {formatPrice(
+                  orderDetails.reduce((sum, o) => sum + Number(o.breakdown?.deliveryFee ?? 0), 0)
+                )}
+              </Text>
+            </View>
+            <View style={styles.breakdownRow}>
+            <Text style={styles.breakdownLabel}>Platform Fee (3%)</Text>
+              <Text style={styles.breakdownValue}>
+                {formatPrice(
+                  orderDetails.reduce(
+                    (sum, o) => sum + Number(o.breakdown?.platformFee ?? 0),
+                    0
+                  )
+                )}
+              </Text>
+            </View>
+            <View style={styles.breakdownRow}>
+            <Text style={styles.breakdownLabel}>Paystack Fee (1.95%)</Text>
+              <Text style={styles.breakdownValue}>
+                {formatPrice(
+                  orderDetails.reduce(
+                    (sum, o) => sum + Number(o.breakdown?.paystackFee ?? 0),
+                    0
+                  )
+                )}
+              </Text>
             </View>
             <View style={styles.divider} />
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Total Items</Text>
-              <Text style={styles.summaryValue}>{totalItems}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.summaryRow}>
-              <Text style={styles.totalLabel}>Total Amount</Text>
+            <View style={styles.breakdownRow}>
+              <Text style={styles.totalLabel}>Total</Text>
               <Text style={styles.totalValue}>{formatPrice(totalAmount)}</Text>
             </View>
           </View>
         </View>
 
-        {/* Delivery Address (from first order) */}
-        {orderDetails[0]?.deliveryInfo && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Delivery Address</Text>
-            <View style={styles.addressCard}>
-              <View style={styles.addressRow}>
-                <Ionicons name="person" size={16} color={Colors.gray600} />
-                <Text style={styles.addressText}>{orderDetails[0].deliveryInfo.recipient}</Text>
-              </View>
-              <View style={styles.addressRow}>
-                <Ionicons name="call" size={16} color={Colors.gray600} />
-                <Text style={styles.addressText}>{orderDetails[0].deliveryInfo.phone}</Text>
-              </View>
-              <View style={styles.addressRow}>
-                <Ionicons name="location" size={16} color={Colors.gray600} />
-                <Text style={styles.addressText}>
-                  {orderDetails[0].deliveryInfo.address}, {orderDetails[0].deliveryInfo.city}, {orderDetails[0].deliveryInfo.region}
-                </Text>
-              </View>
-            </View>
-            {orderDetails.length > 1 && (
-              <Text style={styles.addressNote}>
-                * All orders will be delivered to this address
-              </Text>
-            )}
-          </View>
-        )}
-
-        {/* Payment Method Info */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Payment Method</Text>
-          <View style={styles.paymentMethodCard}>
-            <View style={styles.paystackLogo}>
-              <Ionicons name="card-outline" size={32} color={Colors.primary} />
-              <Text style={styles.paystackText}>Paystack</Text>
-            </View>
-            <Text style={styles.paymentMethodText}>
-              Secure payment powered by Paystack
-            </Text>
-            <View style={styles.paymentFeatures}>
-              <View style={styles.featureItem}>
-                <Ionicons name="shield-checkmark" size={16} color={Colors.success} />
-                <Text style={styles.featureText}>Secure & Encrypted</Text>
-              </View>
-              <View style={styles.featureItem}>
-                <Ionicons name="card" size={16} color={Colors.success} />
-                <Text style={styles.featureText}>All Cards Accepted</Text>
-              </View>
-              <View style={styles.featureItem}>
-                <Ionicons name="phone-portrait" size={16} color={Colors.success} />
-                <Text style={styles.featureText}>Mobile Money</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Security Note */}
-        <View style={styles.securityNote}>
-          <Ionicons name="lock-closed" size={20} color={Colors.info} />
-          <Text style={styles.securityText}>
-            Your payment information is secure and encrypted. All {orderDetails.length} order(s) will be processed together.
-          </Text>
-        </View>
-
         <View style={styles.bottomSpacer} />
       </ScrollView>
 
-      {/* Fixed Bottom Button */}
       <View style={styles.bottomContainer}>
         <TouchableOpacity
           style={[styles.payButton, paymentLoading && styles.payButtonDisabled]}
-          onPress={handleInitiatePayment}
+          onPress={handlePayNow}
           disabled={paymentLoading}
         >
           {paymentLoading ? (
-            <ActivityIndicator color={Colors.white} />
+            <LoadingSpinner size={20} color={Colors.white} />
           ) : (
             <>
-              <Ionicons name="card" size={20} color={Colors.white} />
-              <Text style={styles.payButtonText}>
-                Pay {formatPrice(totalAmount)}
-              </Text>
+              <Ionicons name="lock-closed" size={20} color={Colors.white} />
+              <Text style={styles.payButtonText}>Pay {formatPrice(totalAmount)}</Text>
               <Ionicons name="arrow-forward" size={20} color={Colors.white} />
             </>
           )}
         </TouchableOpacity>
+        <Text style={styles.paystackBadge}>Powered by Paystack</Text>
       </View>
+
+      {authUrl && (
+        <View style={styles.webviewContainer}>
+          <View style={styles.webviewHeader}>
+            <View>
+              <Text style={styles.webviewHeaderTitle}>Complete Payment</Text>
+              <Text style={styles.webviewHeaderAmount}>{formatPrice(totalAmount)}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.webviewClose}
+              onPress={() => {
+                setAuthUrl(null);
+                setSessionReference(null);
+                setIsVerifying(false);
+                Alert.alert(
+                  'Payment Cancelled',
+                  'Your payment was cancelled. Would you like to try again?',
+                  [
+                    { text: 'No', style: 'cancel' },
+                    { text: 'Yes', onPress: () => handlePayNow() },
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="close" size={22} color={Colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+          <WebView
+            source={{ uri: authUrl }}
+            onNavigationStateChange={handleWebViewNavigationStateChange}
+            onMessage={handleWebViewMessage}
+            injectedJavaScript={injectedJavaScript}
+            startInLoadingState
+            renderLoading={() => (
+              <View style={styles.webviewLoadingContainer}>
+                <LoadingSpinner size={40} color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading payment page...</Text>
+              </View>
+            )}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            sharedCookiesEnabled={true}
+            style={styles.webview}
+            onError={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              console.error('❌ WebView error:', nativeEvent);
+              Alert.alert('Error', 'Failed to load payment page. Please try again.');
+              setAuthUrl(null);
+              setIsVerifying(false);
+            }}
+          />
+        </View>
+      )}
     </View>
   );
-};
-
-// Helper function to get status badge style
-const getStatusBadgeStyle = (status: string) => {
-  switch (status) {
-    case 'PENDING':
-      return { backgroundColor: Colors.warning + '20' };
-    case 'CONFIRMED':
-      return { backgroundColor: Colors.success + '20' };
-    case 'PROCESSING':
-      return { backgroundColor: Colors.info + '20' };
-    case 'CANCELLED':
-      return { backgroundColor: Colors.error + '20' };
-    default:
-      return { backgroundColor: Colors.gray200 };
-  }
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.backgroundSecondary,
+    backgroundColor: '#f5f5f5',
     marginTop: 20,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.background,
+    backgroundColor: '#fff',
+    gap: 16,
   },
   loadingText: {
-    marginTop: 16,
     fontSize: 16,
     fontWeight: '600',
-    color: Colors.textPrimary,
+    color: '#333',
   },
-  loadingSubtext: {
-    marginTop: 8,
-    fontSize: 14,
-    color: Colors.textSecondary,
+  errorText: {
+    fontSize: 16,
+    color: Colors.error,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',
@@ -504,9 +795,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 16,
-    backgroundColor: Colors.white,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: '#e0e0e0',
   },
   backButton: {
     padding: 8,
@@ -514,7 +805,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: Colors.primary,
+    color: '#007AFF',
   },
   placeholder: {
     width: 40,
@@ -523,13 +814,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   summaryCard: {
-    backgroundColor: Colors.white,
+    backgroundColor: '#fff',
     marginTop: 16,
     marginHorizontal: 16,
     padding: 24,
     borderRadius: 16,
     alignItems: 'center',
-    shadowColor: Colors.black,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
@@ -539,7 +830,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: Colors.primaryLight + '20',
+    backgroundColor: '#E3F2FD',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
@@ -547,31 +838,30 @@ const styles = StyleSheet.create({
   summaryTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: '#333',
     marginBottom: 8,
   },
   summaryText: {
     fontSize: 14,
-    color: Colors.textSecondary,
-    textAlign: 'center',
+    color: '#666',
     marginBottom: 24,
   },
   amountContainer: {
     width: '100%',
     padding: 16,
-    backgroundColor: Colors.backgroundSecondary,
+    backgroundColor: '#f5f5f5',
     borderRadius: 12,
     alignItems: 'center',
   },
   amountLabel: {
     fontSize: 14,
-    color: Colors.textSecondary,
+    color: '#666',
     marginBottom: 4,
   },
   amountValue: {
     fontSize: 32,
     fontWeight: '700',
-    color: Colors.primary,
+    color: '#007AFF',
   },
   multiStoreIndicator: {
     flexDirection: 'row',
@@ -595,11 +885,33 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: '#333',
     marginBottom: 12,
   },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  input: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 16,
+    color: '#333',
+  },
+  inputHint: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 8,
+    marginLeft: 4,
+  },
   orderCard: {
-    backgroundColor: Colors.white,
+    backgroundColor: '#fff',
     padding: 16,
     borderRadius: 12,
     marginBottom: 12,
@@ -611,17 +923,17 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: '#e0e0e0',
   },
   orderTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: '#333',
   },
   orderAmount: {
     fontSize: 16,
     fontWeight: '700',
-    color: Colors.primary,
+    color: '#007AFF',
   },
   orderDetails: {
     gap: 8,
@@ -633,201 +945,136 @@ const styles = StyleSheet.create({
   },
   detailText: {
     fontSize: 14,
-    color: Colors.textSecondary,
-    flex: 1,
+    color: '#666',
   },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  detailsCard: {
-    backgroundColor: Colors.white,
+  breakdownCard: {
+    backgroundColor: '#fff',
     padding: 16,
     borderRadius: 12,
   },
-  summaryRow: {
+  breakdownRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
     paddingVertical: 8,
   },
-  summaryLabel: {
+  breakdownLabel: {
     fontSize: 14,
-    color: Colors.textSecondary,
+    color: '#666',
   },
-  summaryValue: {
+  breakdownValue: {
     fontSize: 14,
     fontWeight: '600',
-    color: Colors.textPrimary,
+    color: '#333',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#e0e0e0',
+    marginVertical: 8,
   },
   totalLabel: {
     fontSize: 16,
     fontWeight: '700',
-    color: Colors.textPrimary,
+    color: '#333',
   },
   totalValue: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.primary,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.border,
-    marginVertical: 4,
-  },
-  addressCard: {
-    backgroundColor: Colors.white,
-    padding: 16,
-    borderRadius: 12,
-    gap: 8,
-  },
-  addressRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  addressText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    flex: 1,
-  },
-  addressNote: {
-    fontSize: 12,
-    color: Colors.textTertiary,
-    fontStyle: 'italic',
-    marginTop: 8,
-  },
-  paymentMethodCard: {
-    backgroundColor: Colors.white,
-    padding: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  paystackLogo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-  },
-  paystackText: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  paymentMethodText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    marginBottom: 16,
-  },
-  paymentFeatures: {
-    width: '100%',
-    gap: 8,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  featureText: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-  },
-  securityNote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 16,
-    marginTop: 16,
-    padding: 12,
-    backgroundColor: Colors.infoLight,
-    borderRadius: 8,
-  },
-  securityText: {
-    flex: 1,
-    fontSize: 12,
-    color: Colors.info,
+    color: '#007AFF',
   },
   bottomSpacer: {
-    height: 100,
+    height: 120,
   },
   bottomContainer: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: Colors.white,
+    backgroundColor: '#fff',
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 12,
     paddingBottom: 32,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    shadowColor: Colors.black,
+    borderTopColor: '#e0e0e0',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 10,
   },
   payButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: '#007AFF',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 16,
     borderRadius: 12,
-    shadowColor: Colors.primary,
+    shadowColor: '#007AFF',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 5,
+    minHeight: 52,
   },
   payButtonDisabled: {
-    backgroundColor: Colors.disabled,
+    backgroundColor: '#ccc',
     shadowOpacity: 0,
     elevation: 0,
   },
   payButtonText: {
-    color: Colors.white,
+    color: '#fff',
     fontSize: 18,
     fontWeight: '700',
   },
-  webViewContainer: {
-    flex: 1,
-    backgroundColor: Colors.white,
+  paystackBadge: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#999',
+    marginTop: 8,
   },
-  webViewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    backgroundColor: Colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  closeButton: {
-    padding: 8,
-  },
-  webViewTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  webViewLoading: {
+  webviewContainer: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
+    backgroundColor: '#fff',
+    zIndex: 999,
+  },
+  webviewHeader: {
+    height: 88,
+    paddingTop: 36,
+    paddingHorizontal: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  webviewHeaderTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+  },
+  webviewHeaderAmount: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  webviewClose: {
+    padding: 8,
+  },
+  webview: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  webviewLoadingContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.white,
+    gap: 12,
   },
 });
 

@@ -3,8 +3,8 @@ import { body, param } from 'express-validator';
 // Password validation regex: min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char
 const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 
-// Phone number validation (international format)
-const phoneRegex = /^\+?[\d\s\-\(\)]{10,}$/;
+// Phone number validation (Ghana local format - 10 digits starting with 0)
+const phoneRegex = /^0\d{9}$/;
 
 // Validation rules for signup
 export const validateSignup = [
@@ -22,10 +22,10 @@ export const validateSignup = [
     .trim()
     .notEmpty()
     .withMessage('Phone number is required')
-    .matches(phoneRegex)
-    .withMessage('Invalid phone number format')
-    .isLength({ min: 10, max: 20 })
-    .withMessage('Phone number must be between 10 and 20 characters'),
+.matches(phoneRegex)
+    .withMessage('Phone number must be a valid Ghana local number (e.g., 0241234567)')
+    .isLength({ min: 10, max: 10 })
+    .withMessage('Phone number must be exactly 10 digits'),
   
   body('firstName')
     .trim()

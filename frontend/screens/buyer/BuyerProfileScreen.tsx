@@ -7,7 +7,6 @@ import {
   Alert,
   ScrollView,
   Image,
-  ActivityIndicator,
   Modal,
   Animated,
   Dimensions,
@@ -15,14 +14,17 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
-import { useOrders } from '../../hooks/useOrder';
-import { useProduct } from '../../hooks/useProducts';
+import {
+  useBuyerOrders,
+  useUnpaidOrdersSummary,
+} from '../../hooks/useOrder';
 import { useProductLike } from '../../hooks/useProductLikes';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
 import { usePoints } from '../../hooks/usePoints';
-import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 
 const { width } = Dimensions.get('window');
@@ -30,32 +32,49 @@ const { width } = Dimensions.get('window');
 const BuyerProfileScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, logout } = useAuth();
-  console.log('User Data:', user);
-  const { getUnpaidOrdersSummary, getBuyerOrders } = useOrders();
-//  const { getProductsYouMayLike, youMayLikeProducts, loading: productsLoading } = useProduct();
+
+  const unpaidSummaryQuery = useUnpaidOrdersSummary();
+  const pendingOrdersQuery = useBuyerOrders({ page: 1, limit: 1, status: 'PENDING' });
+  const shippedOrdersQuery = useBuyerOrders({ page: 1, limit: 1, status: 'SHIPPED' });
+  const deliveredOrdersQuery = useBuyerOrders({ page: 1, limit: 1, status: 'DELIVERED' });
+
   const { getMyLikedProducts } = useProductLike();
   const { getMyFollowing } = useStoreFollowing();
   const { unreadCount } = useNotifications();
   const { getPointsBalance } = usePoints();
 
-  const [unpaidCount, setUnpaidCount] = useState(0);
-  const [unpaidAmount, setUnpaidAmount] = useState(0);
-  const [orderCounts, setOrderCounts] = useState({
-    pending: 0,
-    shipped: 0,
-    review: 0,
-  });
   const [likedCount, setLikedCount] = useState(0);
   const [followedStoresCount, setFollowedStoresCount] = useState(0);
   const [notificationsCount, setNotificationsCount] = useState(0);
   const [pointsBalance, setPointsBalance] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [loadingLegacyData, setLoadingLegacyData] = useState(true);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [slideAnim] = useState(new Animated.Value(width));
 
+  const isLoadingQueries =
+    unpaidSummaryQuery.isLoading ||
+    pendingOrdersQuery.isLoading ||
+    shippedOrdersQuery.isLoading ||
+    deliveredOrdersQuery.isLoading;
+
+  const isLoading = isLoadingQueries || loadingLegacyData;
+  const hasData =
+    unpaidSummaryQuery.data ||
+    pendingOrdersQuery.data ||
+    shippedOrdersQuery.data ||
+    deliveredOrdersQuery.data;
+
+  // Derive data from queries
+  const unpaidCount = unpaidSummaryQuery.data?.totalUnpaidOrders || 0;
+  const unpaidAmount = unpaidSummaryQuery.data?.totalAmount || 0;
+  const orderCounts = {
+    pending: pendingOrdersQuery.data?.pagination.total || 0,
+    shipped: shippedOrdersQuery.data?.pagination.total || 0,
+    review: deliveredOrdersQuery.data?.pagination.total || 0,
+  };
+
   useEffect(() => {
-    loadProfileData();
+    loadLegacyData();
   }, []);
 
   useEffect(() => {
@@ -74,61 +93,31 @@ const BuyerProfileScreen: React.FC = () => {
     }
   }, [settingsVisible]);
 
-  const loadProfileData = async (isRefreshing = false) => {
+  const loadLegacyData = async () => {
     try {
-      if (isRefreshing) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
-
-      // Load unpaid orders summary
-      const unpaidSummary = await getUnpaidOrdersSummary();
-      if (unpaidSummary) {
-        setUnpaidCount(unpaidSummary.totalUnpaidOrders);
-        setUnpaidAmount(unpaidSummary.totalAmount);
-      }
-
-      // Load orders by status
-      const pendingOrders = await getBuyerOrders(1, 1, 'PENDING');
-      const shippedOrders = await getBuyerOrders(1, 1, 'SHIPPED');
-      const deliveredOrders = await getBuyerOrders(1, 1, 'DELIVERED');
-
-      setOrderCounts({
-        pending: pendingOrders?.pagination.total || 0,
-        shipped: shippedOrders?.pagination.total || 0,
-        review: deliveredOrders?.pagination.total || 0,
-      });
-
-      // Load liked products count
+      setLoadingLegacyData(true);
       const likedProducts = await getMyLikedProducts();
       setLikedCount(likedProducts?.length || 0);
-
-      // Load followed stores count
-       const followedStores = await getMyFollowing();
-       setFollowedStoresCount(followedStores?.length || 0);
-
-       const pointBalance = await getPointsBalance();
-       setPointsBalance(pointBalance?.points || 0);
-      
-       //load unread notifications count
+      const followedStores = await getMyFollowing();
+      setFollowedStoresCount(followedStores?.count || 0);
+      const pointBalance = await getPointsBalance();
+      setPointsBalance(pointBalance?.points || 0);
       setNotificationsCount(unreadCount);
-
-      // Load recommended products
-      //await getProductsYouMayLike();
     } catch (error) {
-      console.error('Error loading profile data:', error);
+      console.error('Error loading legacy data:', error);
     } finally {
-      if (isRefreshing) {
-        setRefreshing(false);
-      } else {
-        setLoading(false);
-      }
+      setLoadingLegacyData(false);
     }
   };
 
-  const handleRefresh = () => {
-    loadProfileData(true);
+  const handleRefresh = async () => {
+    await Promise.all([
+      unpaidSummaryQuery.refetch(),
+      pendingOrdersQuery.refetch(),
+      shippedOrdersQuery.refetch(),
+      deliveredOrdersQuery.refetch(),
+    ]);
+    await loadLegacyData();
   };
 
   const handleLogout = () => {
@@ -151,39 +140,31 @@ const BuyerProfileScreen: React.FC = () => {
     }, 300);
   };
 
-  const QuickActionCard = ({ icon, label, count, color, onPress }: any) => (
+  const QuickActionCard = ({ icon, label, count, onPress }: any) => (
     <TouchableOpacity style={styles.quickActionCard} onPress={onPress}>
-      <View style={[styles.iconContainer, { backgroundColor: color + '20' }]}>
-        <MaterialCommunityIcons name={icon} size={24} color={color} />
+      <View style={styles.iconContainer}>
+        <MaterialCommunityIcons name={icon} size={24} color="#000" />
+        {count != null && count > 0 && (
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>{count > 99 ? '99+' : String(count)}</Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.quickActionCount}>{count}</Text>
       <Text style={styles.quickActionLabel}>{label}</Text>
     </TouchableOpacity>
   );
 
-  const OrderStatusCard = ({ icon, label, count, color, onPress }: any) => (
+  const OrderStatusCard = ({ icon, label, count, onPress }: any) => (
     <TouchableOpacity style={styles.orderStatusCard} onPress={onPress}>
-      <View style={[styles.orderIconContainer, { backgroundColor: color + '15' }]}>
-        <MaterialIcons name={icon} size={28} color={color} />
+      <View style={styles.orderIconContainer}>
+        <MaterialIcons name={icon} size={28} color="#000" />
+        {count != null && count > 0 && (
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>{count > 99 ? '99+' : String(count)}</Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.orderCount}>{count}</Text>
       <Text style={styles.orderLabel}>{label}</Text>
-    </TouchableOpacity>
-  );
-
-  const ProductCard = ({ product }: any) => (
-    <TouchableOpacity
-      style={styles.productCard}
-      onPress={() => (navigation as any).navigate('SellerPublicProductDetails', { productUrl: product.url })}
-    >
-      <Image
-        source={{ uri: product.images[0] || 'https://via.placeholder.com/150' }}
-        style={styles.productImage}
-      />
-      <Text style={styles.productName} numberOfLines={2}>
-        {product.name}
-      </Text>
-      <Text style={styles.productPrice}>GHS {product.price.toFixed(2)}</Text>
     </TouchableOpacity>
   );
 
@@ -197,13 +178,19 @@ const BuyerProfileScreen: React.FC = () => {
     </TouchableOpacity>
   );
 
-  if (loading) {
+  if (isLoading && !hasData) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <LoadingSpinner size={40} color="#007AFF" />
+        <Text style={styles.loadingText}>Loading profile...</Text>
       </View>
     );
   }
+  const isRefreshing =
+    (unpaidSummaryQuery.isFetching && !!unpaidSummaryQuery.data) ||
+    (pendingOrdersQuery.isFetching && !!pendingOrdersQuery.data) ||
+    (shippedOrdersQuery.isFetching && !!shippedOrdersQuery.data) ||
+    (deliveredOrdersQuery.isFetching && !!deliveredOrdersQuery.data);
 
   return (
     <View style={styles.wrapper}>
@@ -211,7 +198,12 @@ const BuyerProfileScreen: React.FC = () => {
         style={styles.container}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            colors={['#007AFF']}
+            tintColor="#007AFF"
+          />
         }
       >
         {/* Profile Header */}
@@ -222,7 +214,8 @@ const BuyerProfileScreen: React.FC = () => {
             ) : (
               <View style={styles.avatarPlaceholder}>
                 <Text style={styles.avatarText}>
-                  {user?.firstName?.[0]}{user?.lastName?.[0]}
+                  {user?.firstName?.[0]}
+                  {user?.lastName?.[0]}
                 </Text>
               </View>
             )}
@@ -254,28 +247,23 @@ const BuyerProfileScreen: React.FC = () => {
           <QuickActionCard
             icon="credit-card-check-outline"
             label="Payments"
-            color="#FF9500"
             onPress={() => (navigation as any).navigate('PaymentsScreen')}
           />
           <QuickActionCard
             icon="gift-outline"
             label="Points"
             count={pointsBalance}
-            color="#34C759"
             onPress={() => (navigation as any).navigate('Points')}
           />
           <QuickActionCard
             icon="heart-outline"
             label="Following"
             count={followedStoresCount}
-            color="#FF2D55"
             onPress={() => (navigation as any).navigate('MyFollowedStores')}
           />
           <QuickActionCard
             icon="scale-balance"
             label="Disputes"
-            count="0"
-            color="#5856D6"
             onPress={() => (navigation as any).navigate('Disputes')}
           />
         </View>
@@ -294,29 +282,31 @@ const BuyerProfileScreen: React.FC = () => {
               icon="pending-actions"
               label="Unpaid"
               count={unpaidCount}
-              color="#FF3B30"
               onPress={() => (navigation as any).navigate('UnpaidOrders')}
             />
             <OrderStatusCard
               icon="schedule"
               label="Pending"
               count={orderCounts.pending}
-              color="#FF9500"
-              onPress={() => (navigation as any).navigate('BuyerOrders', { status: 'PENDING' })}
+              onPress={() =>
+                (navigation as any).navigate('BuyerOrders', { status: 'PENDING' })
+              }
             />
             <OrderStatusCard
               icon="local-shipping"
               label="Shipped"
               count={orderCounts.shipped}
-              color="#007AFF"
-              onPress={() => (navigation as any).navigate('BuyerOrders', { status: 'SHIPPED' })}
+              onPress={() =>
+                (navigation as any).navigate('BuyerOrders', { status: 'SHIPPED' })
+              }
             />
             <OrderStatusCard
               icon="rate-review"
               label="Review"
               count={orderCounts.review}
-              color="#34C759"
-              onPress={() => (navigation as any).navigate('BuyerOrders', { status: 'DELIVERED' })}
+              onPress={() =>
+                (navigation as any).navigate('BuyerOrders', { status: 'DELIVERED' })
+              }
             />
           </View>
 
@@ -328,8 +318,9 @@ const BuyerProfileScreen: React.FC = () => {
             >
               <Ionicons name="warning" size={20} color="#FF3B30" />
               <Text style={styles.unpaidAlertText}>
-                You have {unpaidCount} unpaid order{unpaidCount > 1 ? 's' : ''} (GHS{' '}
-                {unpaidAmount.toFixed(2)})
+                {`You have ${unpaidCount} unpaid order${
+                  unpaidCount > 1 ? 's' : ''
+                } (GHS ${unpaidAmount.toFixed(2)})`}
               </Text>
               <Ionicons name="chevron-forward" size={20} color="#FF3B30" />
             </TouchableOpacity>
@@ -344,7 +335,7 @@ const BuyerProfileScreen: React.FC = () => {
               onPress={() => (navigation as any).navigate('MyFollowedStores')}
             >
               <View style={styles.followLikeIconContainer}>
-                <FontAwesome5 name="store" size={24} color="#007AFF" />
+                <FontAwesome5 name="store" size={24} color="#000" />
               </View>
               <View style={styles.followLikeInfo}>
                 <Text style={styles.followLikeCount}>{followedStoresCount}</Text>
@@ -358,7 +349,7 @@ const BuyerProfileScreen: React.FC = () => {
               onPress={() => (navigation as any).navigate('LikedProducts')}
             >
               <View style={styles.followLikeIconContainer}>
-                <Ionicons name="heart" size={24} color="#FF2D55" />
+                <Ionicons name="heart" size={24} color="#000" />
               </View>
               <View style={styles.followLikeInfo}>
                 <Text style={styles.followLikeCount}>{likedCount}</Text>
@@ -368,15 +359,6 @@ const BuyerProfileScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
         </View>
-
-       
-        {/* Products You May Like Section */}
-
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color="#fff" />
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
 
         <View style={styles.bottomPadding} />
       </ScrollView>
@@ -449,10 +431,18 @@ const BuyerProfileScreen: React.FC = () => {
                 label="About Us"
                 onPress={() => handleSettingsItemPress('About')}
               />
+
               <SettingsMenuItem
                 icon="mail-outline"
                 label="Contact Support"
                 onPress={() => handleSettingsItemPress('ContactUs')}
+              />
+              <View style={styles.settingsDivider} />
+              <SettingsMenuItem
+                icon="log-out-outline"
+                label="Logout"
+                onPress={handleLogout}
+                color="#FF3B30"
               />
             </ScrollView>
           </Animated.View>
@@ -476,6 +466,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#F2F2F7',
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#8E8E93',
   },
   profileHeader: {
     backgroundColor: '#fff',
@@ -575,16 +570,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
+    position: 'relative',
   },
-  quickActionCount: {
-    fontSize: 16,
+  countBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF3B30',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  countBadgeText: {
+    color: '#fff',
+    fontSize: 10,
     fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 2,
+    textAlign: 'center',
   },
   quickActionLabel: {
     fontSize: 12,
     color: '#8E8E93',
+    textAlign: 'center',
   },
   section: {
     paddingHorizontal: 20,
@@ -631,12 +641,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
-  },
-  orderCount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 4,
+    position: 'relative',
   },
   orderLabel: {
     fontSize: 11,
@@ -678,7 +683,6 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#F2F2F7',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -695,61 +699,6 @@ const styles = StyleSheet.create({
   followLikeLabel: {
     fontSize: 14,
     color: '#8E8E93',
-  },
-  productCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginRight: 12,
-    width: 140,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  productImage: {
-    width: '100%',
-    height: 140,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-    backgroundColor: '#F2F2F7',
-  },
-  productName: {
-    fontSize: 13,
-    color: '#000',
-    marginHorizontal: 8,
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  productPrice: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#007AFF',
-    marginHorizontal: 8,
-    marginBottom: 12,
-  },
-  loader: {
-    marginVertical: 20,
-  },
-  logoutButton: {
-    backgroundColor: '#FF3B30',
-    marginHorizontal: 20,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    shadowColor: '#FF3B30',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  logoutText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
   },
   bottomPadding: {
     height: 40,

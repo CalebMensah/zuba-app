@@ -1,9 +1,9 @@
 // constants/colors.ts
 export const Colors = {
-  // Primary Brand Colors
-  primary: '#1E40AF', // Deep blue
-  primaryLight: '#3B82F6', // Bright blue
-  primaryDark: '#1E3A8A', // Darker blue
+  // Primary Brand Colors - Updated to lighter blue
+  primary: '#3B82F6', // Bright blue (previously primaryLight) #3B82F6
+  primaryLight: '#60A5FA', // Even lighter blue
+  primaryDark: '#2563EB', // Darker blue
   
   // Accent Colors
   accent: '#EF4444', // Red accent (from logo)
@@ -37,8 +37,8 @@ export const Colors = {
   textTertiary: '#9CA3AF',
   textLight: '#FFFFFF',
   
-  // Background Colors
-  background: '#FFFFFF',
+  // Background Colors - Updated with softer backgrounds
+  background: '#F5F7FA', // Soft light blue-gray
   backgroundSecondary: '#F9FAFB',
   backgroundTertiary: '#F3F4F6',
   
@@ -62,4 +62,55 @@ export const Colors = {
   // Disabled
   disabled: '#D1D5DB',
   disabledText: '#9CA3AF',
+};
+
+// Typography - Modern, Professional Font Families
+// Note: Make sure to load these fonts in your app using expo-font or similar
+export const Typography = {
+  // Font Families
+  regular: 'Inter-Regular', // Clean, modern sans-serif
+  medium: 'Inter-Medium',
+  semiBold: 'Inter-SemiBold',
+  bold: 'Inter-Bold',
+  extraBold: 'Inter-ExtraBold',
+  
+  // Alternative: If Inter is not available, use system fonts
+  // regular: 'System',
+  // medium: 'System',
+  // semiBold: 'System',
+  // bold: 'System',
+  // extraBold: 'System',
+  
+  // Font Sizes
+  xs: 11,
+  sm: 13,
+  base: 15,
+  lg: 17,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 30,
+  '4xl': 36,
+  
+  // Line Heights
+  lineHeight: {
+    tight: 1.2,
+    normal: 1.5,
+    relaxed: 1.75,
+  },
+  
+  // Letter Spacing
+  letterSpacing: {
+    tight: -0.5,
+    normal: 0,
+    wide: 0.5,
+  },
+};
+
+// If you want to use system default fonts without importing custom fonts:
+export const SystemTypography = {
+  regular: undefined, // Uses system default
+  medium: '500',
+  semiBold: '600',
+  bold: '700',
+  extraBold: '800',
 };

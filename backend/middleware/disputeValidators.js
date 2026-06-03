@@ -1,4 +1,4 @@
-import { body, param, query, validationResult } from 'express-validator';
+import { body, param, validationResult } from 'express-validator';
 
 // Validation middleware to check results
 export const validate = (req, res, next) => {
@@ -29,11 +29,8 @@ const VALID_DISPUTE_TYPES = [
   'OTHER'
 ];
 
-// Valid dispute statuses
-const VALID_DISPUTE_STATUSES = ['PENDING', 'RESOLVED', 'CANCELLED'];
-
-// Valid resolution statuses
-const VALID_RESOLUTION_STATUSES = ['RESOLVED', 'CANCELLED'];
+// Valid resolution outcomes
+const VALID_OUTCOMES = ['BUYER_WON', 'SELLER_WON'];
 
 // Sanitization helper
 const sanitizeString = (value) => {
@@ -41,8 +38,8 @@ const sanitizeString = (value) => {
   return value.trim().replace(/[<>]/g, '');
 };
 
-// Validation rules for requestRefund
-export const requestRefundValidation = [
+// ── POST /:orderId/open ───────────────────────────────────────────────────────
+export const openDisputeValidation = [
   param('orderId')
     .matches(CUID_REGEX)
     .withMessage('Invalid order ID format'),
@@ -50,32 +47,33 @@ export const requestRefundValidation = [
   body('reason')
     .trim()
     .notEmpty()
-    .withMessage('Refund reason is required')
+    .withMessage('Reason is required')
     .isLength({ min: 10, max: 2000 })
     .withMessage('Reason must be between 10 and 2000 characters')
     .customSanitizer(sanitizeString),
 
   body('type')
-    .optional()
     .trim()
+    .notEmpty()
+    .withMessage('Dispute type is required')
     .isIn(VALID_DISPUTE_TYPES)
-    .withMessage(`Invalid dispute type. Must be one of: ${VALID_DISPUTE_TYPES.join(', ')}`),
+    .withMessage(`Type must be one of: ${VALID_DISPUTE_TYPES.join(', ')}`),
 
   validate
 ];
 
-// Validation rules for resolveDispute
+// ── PATCH /:disputeId/resolve ─────────────────────────────────────────────────
 export const resolveDisputeValidation = [
   param('disputeId')
     .matches(CUID_REGEX)
     .withMessage('Invalid dispute ID format'),
 
-  body('status')
+  body('outcome')
     .trim()
     .notEmpty()
-    .withMessage('Status is required')
-    .isIn(VALID_RESOLUTION_STATUSES)
-    .withMessage(`Status must be one of: ${VALID_RESOLUTION_STATUSES.join(', ')}`),
+    .withMessage('Outcome is required')
+    .isIn(VALID_OUTCOMES)
+    .withMessage(`Outcome must be one of: ${VALID_OUTCOMES.join(', ')}`),
 
   body('resolution')
     .trim()
@@ -94,8 +92,8 @@ export const resolveDisputeValidation = [
   validate
 ];
 
-// Validation rules for getDisputeDetails
-export const getDisputeDetailsValidation = [
+// ── GET /:disputeId ───────────────────────────────────────────────────────────
+export const getDisputeValidation = [
   param('disputeId')
     .matches(CUID_REGEX)
     .withMessage('Invalid dispute ID format'),
@@ -103,82 +101,7 @@ export const getDisputeDetailsValidation = [
   validate
 ];
 
-// Validation rules for getUserDisputes
-export const getUserDisputesValidation = [
-  query('page')
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage('Page must be a positive integer')
-    .toInt(),
-
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 100 })
-    .withMessage('Limit must be between 1 and 100')
-    .toInt(),
-
-  query('status')
-    .optional()
-    .trim()
-    .isIn(VALID_DISPUTE_STATUSES)
-    .withMessage(`Invalid status. Must be one of: ${VALID_DISPUTE_STATUSES.join(', ')}`),
-
-  query('type')
-    .optional()
-    .trim()
-    .isIn(VALID_DISPUTE_TYPES)
-    .withMessage(`Invalid type. Must be one of: ${VALID_DISPUTE_TYPES.join(', ')}`),
-
-  validate
-];
-
-// Validation rules for getAllDisputes (admin)
-export const getAllDisputesValidation = [
-  query('page')
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage('Page must be a positive integer')
-    .toInt(),
-
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 100 })
-    .withMessage('Limit must be between 1 and 100')
-    .toInt(),
-
-  query('status')
-    .optional()
-    .trim()
-    .isIn(VALID_DISPUTE_STATUSES)
-    .withMessage(`Invalid status. Must be one of: ${VALID_DISPUTE_STATUSES.join(', ')}`),
-
-  query('type')
-    .optional()
-    .trim()
-    .isIn(VALID_DISPUTE_TYPES)
-    .withMessage(`Invalid type. Must be one of: ${VALID_DISPUTE_TYPES.join(', ')}`),
-
-  validate
-];
-
-// Validation rules for updateDispute
-export const updateDisputeValidation = [
-  param('disputeId')
-    .matches(CUID_REGEX)
-    .withMessage('Invalid dispute ID format'),
-
-  body('additionalInfo')
-    .trim()
-    .notEmpty()
-    .withMessage('Additional information is required')
-    .isLength({ min: 10, max: 2000 })
-    .withMessage('Additional information must be between 10 and 2000 characters')
-    .customSanitizer(sanitizeString),
-
-  validate
-];
-
-// Validation rules for cancelDispute
+// ── PATCH /:disputeId/cancel ──────────────────────────────────────────────────
 export const cancelDisputeValidation = [
   param('disputeId')
     .matches(CUID_REGEX)

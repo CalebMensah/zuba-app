@@ -92,7 +92,18 @@ export const useNotifications = () => {
       }
 
       if (data.data) {
-        setNotifications(data.data.notifications);
+        setNotifications(prev => {
+          // If requesting page 1 (refresh), replace; otherwise append.
+          if (page <= 1) return data.data!.notifications;
+          const next = [...prev, ...data.data!.notifications];
+          // Dedupe by id (prevents duplicates when API/cache overlaps)
+          const seen = new Set<string>();
+          return next.filter(n => {
+            if (seen.has(n.id)) return false;
+            seen.add(n.id);
+            return true;
+          });
+        });
         setPagination(data.data.pagination);
       }
     } catch (err: any) {

@@ -9,12 +9,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useDisputes, DisputeType } from '../../hooks/useDisputes';
-import { useOrders } from '../../hooks/useOrder';
+import { useOrder } from '../../hooks/useOrder';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 
 interface RouteParams {
@@ -70,44 +70,28 @@ const CreateDisputeScreen: React.FC = () => {
   const route = useRoute();
   const { orderId } = route.params as RouteParams;
 
-  const { loading: disputeLoading, error, requestRefund, clearError } = useDisputes();
-  const { getOrderById } = useOrders();
+  // TanStack Query hook for order data
+  const { data: order, isLoading, error, refetch } = useOrder(orderId);
 
-  const [order, setOrder] = useState<any>(null);
-  const [loadingOrder, setLoadingOrder] = useState(true);
+const { loading: disputeLoading, error: disputeError, openDispute, clearError } = useDisputes();
+
   const [selectedType, setSelectedType] = useState<DisputeType>('REFUND_REQUEST');
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState('');
 
   useEffect(() => {
-    loadOrder();
+    if (!orderId) {
+      Alert.alert('Error', 'Order ID not provided');
+      navigation.goBack();
+    }
   }, [orderId]);
 
   useEffect(() => {
-    if (error) {
-      Alert.alert('Error', error);
+    if (disputeError) {
+      Alert.alert('Error', disputeError);
       clearError();
     }
-  }, [error]);
-
-  const loadOrder = async () => {
-    try {
-      setLoadingOrder(true);
-      const orderData = await getOrderById(orderId);
-      if (orderData) {
-        setOrder(orderData);
-      } else {
-        Alert.alert('Error', 'Order not found', [
-          { text: 'OK', onPress: () => navigation.goBack() },
-        ]);
-      }
-    } catch (err) {
-      console.error('Error loading order:', err);
-      Alert.alert('Error', 'Failed to load order details');
-    } finally {
-      setLoadingOrder(false);
-    }
-  };
+  }, [disputeError]);
 
   const validateForm = (): boolean => {
     if (!reason.trim()) {
@@ -143,10 +127,10 @@ const CreateDisputeScreen: React.FC = () => {
           text: 'Submit',
           style: 'default',
           onPress: async () => {
-            const dispute = await requestRefund(orderId, {
-              reason: reason.trim(),
-              type: selectedType,
-            });
+          const dispute = await openDispute(orderId, {
+            reason: reason.trim(),
+            type: selectedType,
+          });
 
             if (dispute) {
               Alert.alert(
@@ -168,10 +152,7 @@ const CreateDisputeScreen: React.FC = () => {
 
   const DisputeTypeCard = ({ type }: { type: typeof DISPUTE_TYPES[0] }) => (
     <TouchableOpacity
-      style={[
-        styles.typeCard,
-        selectedType === type.value && styles.typeCardSelected,
-      ]}
+      style={[styles.typeCard, selectedType === type.value && styles.typeCardSelected]}
       onPress={() => setSelectedType(type.value)}
     >
       <View style={styles.typeCardHeader}>
@@ -205,20 +186,28 @@ const CreateDisputeScreen: React.FC = () => {
     </TouchableOpacity>
   );
 
-  if (loadingOrder) {
+  // Loading state - initial fetch only
+  if (isLoading && !order) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <LoadingSpinner size={40} color={Colors.primary} />
         <Text style={styles.loadingText}>Loading order details...</Text>
       </View>
     );
   }
 
-  if (!order) {
+  // Error state
+  if (error || !order) {
     return (
       <View style={styles.errorContainer}>
         <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
-        <Text style={styles.errorText}>Order not found</Text>
+        <Text style={styles.errorText}>
+          {error instanceof Error ? error.message : 'Order not found'}
+        </Text>
+        <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+          <Ionicons name="refresh" size={20} color={Colors.white} />
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -285,13 +274,16 @@ const CreateDisputeScreen: React.FC = () => {
           {order.items?.map((item: any, index: number) => (
             <View key={index} style={styles.itemCard}>
               <View style={styles.itemInfo}>
-                <Text style={styles.itemName}>{item.product?.name}</Text>
+                <Text style={styles.itemName}>
+                  {item.product?.name || item.name || item.productName || 'Item'}
+                </Text>
                 <Text style={styles.itemDetails}>
-                  Qty: {item.quantity} × {order.currency} {item.price.toFixed(2)}
+                  Qty: {item.quantity} × {order.currency}{' '}
+                  {(item.price || item.unitPrice || 0).toFixed(2)}
                 </Text>
               </View>
               <Text style={styles.itemTotal}>
-                {order.currency} {item.total.toFixed(2)}
+                {order.currency} {(item.total || item.price * item.quantity || 0).toFixed(2)}
               </Text>
             </View>
           ))}
@@ -349,11 +341,10 @@ const CreateDisputeScreen: React.FC = () => {
             <Text style={styles.noticeTitle}>Important Information</Text>
           </View>
           <Text style={styles.noticeText}>
-            • Your dispute will be reviewed by our team{'\n'}
-            • The seller will be notified and may respond{'\n'}
-            • Refunds typically take 5-10 business days{'\n'}
-            • You may be asked to provide additional evidence{'\n'}
-            • False claims may result in account suspension
+            • Your dispute will be reviewed by our team{'\n'}• The seller will be notified
+            and may respond{'\n'}• Refunds typically take 5-10 business days{'\n'}• You may
+            be asked to provide additional evidence{'\n'}• False claims may result in
+            account suspension
           </Text>
         </View>
       </ScrollView>
@@ -377,7 +368,7 @@ const CreateDisputeScreen: React.FC = () => {
           disabled={disputeLoading || !reason.trim()}
         >
           {disputeLoading ? (
-            <ActivityIndicator size="small" color={Colors.white} />
+            <LoadingSpinner size={20} color={Colors.white} />
           ) : (
             <>
               <Ionicons name="send" size={20} color={Colors.white} />
@@ -406,9 +397,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: Colors.backgroundSecondary,
+    gap: 12,
   },
   loadingText: {
-    marginTop: 16,
     fontSize: 16,
     color: Colors.textSecondary,
   },
@@ -418,12 +409,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: Colors.backgroundSecondary,
     padding: 32,
+    gap: 16,
   },
   errorText: {
-    marginTop: 16,
     fontSize: 18,
     fontWeight: '600',
     color: Colors.error,
+    textAlign: 'center',
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
   section: {
     padding: 16,
@@ -663,6 +669,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
     gap: 8,
+    minHeight: 52,
   },
   submitButtonDisabled: {
     backgroundColor: Colors.disabled,

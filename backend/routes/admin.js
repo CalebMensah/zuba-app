@@ -11,17 +11,23 @@ import {
   getAllStores,
   suspendStore,
   deleteStore,
-  getAllOrdersForAdmin
+  getAllOrdersForAdmin,
+  deleteUserOrdersAndPayments,
+  deleteAllOrdersAndPayments
 } from '../controllers/admincontrollers.js';
 import { updateOrderStatus } from '../controllers/ordercontrollers.js';
 import { getCommissionStats, getCommissionTrend } from '../controllers/admindashboardcontrollers.js';
 
 const router = express.Router();
 
-// All admin routes must pass authentication + admin role check
-router.use(authenticateToken, authorizeRoles('ADMIN'));
 router.get('/users', getAllUsers);
 router.get('/users/:userId', getUserById);
+router.delete('/cleanup/all', deleteAllOrdersAndPayments);
+router.delete('/cleanup/user', deleteUserOrdersAndPayments);
+// All admin routes must pass authentication + admin role check
+router.use(authenticateToken, authorizeRoles('ADMIN'));
+
+
 router.put('/users/:userId/suspend', suspendUser);
 router.put('/users/:userId/reactivate', reactivateUser);
 router.delete('/users/:userId', deleteUser);

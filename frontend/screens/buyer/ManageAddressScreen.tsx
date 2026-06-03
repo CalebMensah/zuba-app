@@ -223,6 +223,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
+    marginTop: 40
   },
   centerContainer: {
     flex: 1,
@@ -328,14 +329,14 @@ const styles = StyleSheet.create({
     padding: 16,
     marginTop: 8,
     borderWidth: 2,
-    borderColor: '#FF6B35',
+    borderColor: '#3B82F6',
     borderStyle: 'dashed',
   },
   addNewButtonText: {
     marginLeft: 8,
     fontSize: 16,
     fontWeight: '600',
-    color: '#FF6B35',
+    color: '#3B82F6',
   },
   emptyContainer: {
     flex: 1,
@@ -359,7 +360,7 @@ const styles = StyleSheet.create({
   addButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FF6B35',
+    backgroundColor: '#3B82F6',
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 8,

@@ -6,38 +6,21 @@ import {
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
-  Linking,
   Alert,
   RefreshControl,
+  Clipboard,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useRoute } from '@react-navigation/native';
 import { Colors } from '../../constants/colors';
 import { Ionicons } from '@expo/vector-icons';
-import { useDelivery } from '../../hooks/useDeliveryInfo';
+import { useDelivery } from '../../hooks/useDelivery';
+import { DeliveryInfo, DeliveryStatus } from '../../types/order';
 
 interface RouteParams {
   orderId: string;
 }
 
-interface DeliveryInfo {
-  id: string;
-  orderId: string;
-  courierService: string | null;
-  driverName: string | null;
-  driverPhone: string | null;
-  driverVehicleNumber: string | null;
-  trackingNumber: string | null;
-  trackingUrl: string | null;
-  estimatedDelivery: string | null;
-  actualDelivery: string | null;
-  notes: string | null;
-  status: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 const DeliveryInfoScreen = () => {
-  const navigation = useNavigation();
   const route = useRoute();
   const { orderId } = route.params as RouteParams;
 
@@ -48,10 +31,7 @@ const DeliveryInfoScreen = () => {
 
   useEffect(() => {
     fetchDeliveryInfo();
-
-    return () => {
-      clearError();
-    };
+    return () => clearError();
   }, [orderId]);
 
   const fetchDeliveryInfo = async () => {
@@ -69,97 +49,78 @@ const DeliveryInfoScreen = () => {
     fetchDeliveryInfo();
   };
 
-  const handleCallDriver = () => {
-    if (deliveryInfo?.driverPhone) {
-      Linking.openURL(`tel:${deliveryInfo.driverPhone}`);
-    } else {
-      Alert.alert('No Phone Number', 'Driver phone number is not available');
-    }
-  };
-
-  const handleTrackPackage = () => {
-    if (deliveryInfo?.trackingUrl) {
-      Linking.openURL(deliveryInfo.trackingUrl).catch(() => {
-        Alert.alert('Error', 'Unable to open tracking URL');
-      });
-    } else if (deliveryInfo?.trackingNumber) {
+  const handleCopyTrackingNumber = () => {
+    if (deliveryInfo?.trackingNumber) {
+      Clipboard.setString(deliveryInfo.trackingNumber);
       Alert.alert(
-        'Tracking Number',
-        `Your tracking number is: ${deliveryInfo.trackingNumber}\n\nPlease visit your courier's website to track your package.`,
-        [{ text: 'OK' }]
+        'Copied',
+        `Tracking number ${deliveryInfo.trackingNumber} copied to clipboard. Visit your courier's website to track your package.`
       );
     } else {
-      Alert.alert('No Tracking Info', 'Tracking information is not available yet');
+      Alert.alert('No Tracking Info', 'Tracking information is not available yet.');
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: DeliveryStatus): string => {
     switch (status) {
       case 'PENDING':
         return Colors.gray400;
       case 'PROCESSING':
         return Colors.info;
-      case 'SHIPPED':
+      case 'DISPATCHED':
         return Colors.primary;
-      case 'OUT_FOR_DELIVERY':
-        return Colors.warning;
       case 'DELIVERED':
         return Colors.success;
-      case 'RETURNED':
+      case 'FAILED':
         return Colors.error;
-      case 'CANCELLED':
+      case 'RETURNED':
         return Colors.gray600;
       default:
         return Colors.gray400;
     }
   };
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: DeliveryStatus): string => {
     switch (status) {
       case 'PENDING':
         return 'time-outline';
       case 'PROCESSING':
         return 'construct-outline';
-      case 'SHIPPED':
-        return 'airplane-outline';
-      case 'OUT_FOR_DELIVERY':
-        return 'bicycle-outline';
+      case 'DISPATCHED':
+        return 'send-outline';
       case 'DELIVERED':
         return 'checkmark-circle-outline';
+      case 'FAILED':
+        return 'close-circle-outline';
       case 'RETURNED':
         return 'return-up-back-outline';
-      case 'CANCELLED':
-        return 'close-circle-outline';
       default:
         return 'help-circle-outline';
     }
   };
 
-  const getStatusMessage = (status: string) => {
+  const getStatusMessage = (status: DeliveryStatus): string => {
     switch (status) {
       case 'PENDING':
         return 'Your order is awaiting processing';
       case 'PROCESSING':
         return 'Your order is being prepared for shipment';
-      case 'SHIPPED':
-        return 'Your order is on its way';
-      case 'OUT_FOR_DELIVERY':
-        return 'Your order is out for delivery today';
+      case 'DISPATCHED':
+        return 'Your order has been dispatched and is on the way';
       case 'DELIVERED':
         return 'Your order has been delivered';
+      case 'FAILED':
+        return 'Delivery attempt failed. Please contact support.';
       case 'RETURNED':
         return 'Your order has been returned';
-      case 'CANCELLED':
-        return 'Your order has been cancelled';
       default:
         return 'Status unknown';
     }
   };
 
-  const formatDate = (dateString: string | null) => {
+  const formatDate = (dateString: string | null | undefined): string => {
     if (!dateString) return 'Not available';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
@@ -171,7 +132,7 @@ const DeliveryInfoScreen = () => {
   const renderInfoRow = (
     icon: string,
     label: string,
-    value: string | null,
+    value: string | null | undefined,
     onPress?: () => void
   ) => {
     if (!value) return null;
@@ -214,15 +175,14 @@ const DeliveryInfoScreen = () => {
         <Text style={styles.emptySubtitle}>
           Delivery information is not available for this order yet.
         </Text>
-        <TouchableOpacity
-          style={styles.retryButton}
-          onPress={fetchDeliveryInfo}
-        >
+        <TouchableOpacity style={styles.retryButton} onPress={fetchDeliveryInfo}>
           <Text style={styles.retryButtonText}>Retry</Text>
         </TouchableOpacity>
       </View>
     );
   }
+
+  const status = deliveryInfo?.status as DeliveryStatus;
 
   return (
     <ScrollView
@@ -242,49 +202,49 @@ const DeliveryInfoScreen = () => {
         <View
           style={[
             styles.statusIconContainer,
-            { backgroundColor: getStatusColor(deliveryInfo?.status || '') + '20' },
+            { backgroundColor: getStatusColor(status) + '20' },
           ]}
         >
           <Ionicons
-            name={getStatusIcon(deliveryInfo?.status || '') as any}
+            name={getStatusIcon(status) as any}
             size={48}
-            color={getStatusColor(deliveryInfo?.status || '')}
+            color={getStatusColor(status)}
           />
         </View>
-        <Text style={styles.statusTitle}>{deliveryInfo?.status?.replace('_', ' ')}</Text>
-        <Text style={styles.statusMessage}>
-          {getStatusMessage(deliveryInfo?.status || '')}
+        <Text style={styles.statusTitle}>
+          {deliveryInfo?.status?.replace(/_/g, ' ')}
         </Text>
+        <Text style={styles.statusMessage}>{getStatusMessage(status)}</Text>
         <View
           style={[
             styles.statusBadge,
-            { backgroundColor: getStatusColor(deliveryInfo?.status || '') },
+            { backgroundColor: getStatusColor(status) },
           ]}
         >
           <Text style={styles.statusBadgeText}>
-            {deliveryInfo?.status?.replace('_', ' ')}
+            {deliveryInfo?.status?.replace(/_/g, ' ')}
           </Text>
         </View>
       </View>
 
-      {/* Tracking Actions */}
-      {(deliveryInfo?.trackingUrl || deliveryInfo?.trackingNumber) && (
+      {/* Copy Tracking Number */}
+      {deliveryInfo?.trackingNumber && (
         <View style={styles.actionSection}>
           <TouchableOpacity
             style={styles.primaryActionButton}
-            onPress={handleTrackPackage}
+            onPress={handleCopyTrackingNumber}
           >
-            <Ionicons name="locate" size={20} color={Colors.white} />
-            <Text style={styles.primaryActionButtonText}>Track Package</Text>
+            <Ionicons name="copy-outline" size={20} color={Colors.white} />
+            <Text style={styles.primaryActionButtonText}>Copy Tracking Number</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Courier Information */}
+      {/* Courier & Tracking */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Ionicons name="business" size={24} color={Colors.primary} />
-          <Text style={styles.sectionTitle}>Courier Information</Text>
+          <Ionicons name="car-outline" size={24} color={Colors.primary} />
+          <Text style={styles.sectionTitle}>Courier & Tracking</Text>
         </View>
         <View style={styles.sectionContent}>
           {renderInfoRow(
@@ -293,86 +253,95 @@ const DeliveryInfoScreen = () => {
             deliveryInfo?.courierService ?? null
           )}
           {renderInfoRow(
-            'person-outline',
-            'Driver Name',
-            deliveryInfo?.driverName ?? null
+            'barcode-outline',
+            'Tracking Number',
+            deliveryInfo?.trackingNumber ?? null,
+            deliveryInfo?.trackingNumber ? handleCopyTrackingNumber : undefined
           )}
-          {renderInfoRow(
-            'call-outline',
-            'Driver Phone',
-            deliveryInfo?.driverPhone ?? null,
-            deliveryInfo?.driverPhone ? handleCallDriver : undefined
-          )}
-          {renderInfoRow(
-            'car-outline',
-            'Vehicle Number',
-            deliveryInfo?.driverVehicleNumber ?? null
+          {deliveryInfo?.estimatedDeliveryDays && renderInfoRow(
+            'time-outline',
+            'Estimated Delivery',
+            `${deliveryInfo.estimatedDeliveryDays} day${deliveryInfo.estimatedDeliveryDays !== 1 ? 's' : ''}`
           )}
         </View>
       </View>
 
-      {/* Tracking Information */}
-      {(deliveryInfo?.trackingNumber || deliveryInfo?.trackingUrl) && (
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Ionicons name="location" size={24} color={Colors.primary} />
-            <Text style={styles.sectionTitle}>Tracking Details</Text>
-          </View>
-          <View style={styles.sectionContent}>
-            {renderInfoRow(
-              'barcode-outline',
-              'Tracking Number',
-              deliveryInfo?.trackingNumber ?? null
-            )}
-            {renderInfoRow(
-              'link-outline',
-              'Tracking URL',
-              deliveryInfo?.trackingUrl ? 'Open in browser' : null,
-              deliveryInfo?.trackingUrl ? handleTrackPackage : undefined
-            )}
-          </View>
+      {/* Delivery Address */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Ionicons name="location" size={24} color={Colors.primary} />
+          <Text style={styles.sectionTitle}>Delivery Address</Text>
         </View>
-      )}
+        <View style={styles.sectionContent}>
+          {renderInfoRow(
+            'person-outline',
+            'Recipient',
+            deliveryInfo?.recipient ?? null
+          )}
+          {renderInfoRow(
+            'call-outline',
+            'Phone',
+            deliveryInfo?.phone ?? null
+          )}
+          {renderInfoRow(
+            'location-outline',
+            'Address',
+            deliveryInfo?.address ?? null
+          )}
+          {renderInfoRow(
+            'map-outline',
+            'City',
+            deliveryInfo
+              ? `${deliveryInfo.city}, ${deliveryInfo.region}`
+              : null
+          )}
+        </View>
+      </View>
 
       {/* Delivery Timeline */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Ionicons name="calendar" size={24} color={Colors.primary} />
-          <Text style={styles.sectionTitle}>Delivery Timeline</Text>
+          <Text style={styles.sectionTitle}>Timeline</Text>
         </View>
         <View style={styles.sectionContent}>
           {renderInfoRow(
             'calendar-outline',
             'Order Created',
-            formatDate(deliveryInfo?.createdAt || null)
+            formatDate(deliveryInfo?.createdAt)
           )}
-          {deliveryInfo?.estimatedDelivery && renderInfoRow(
-            'time-outline',
-            'Estimated Delivery',
-            formatDate(deliveryInfo.estimatedDelivery)
+          {deliveryInfo?.dispatchedAt && renderInfoRow(
+            'send-outline',
+            'Dispatched At',
+            formatDate(deliveryInfo.dispatchedAt)
           )}
-          {deliveryInfo?.actualDelivery && renderInfoRow(
+          {deliveryInfo?.deliveredAt && renderInfoRow(
             'checkmark-circle-outline',
             'Delivered On',
-            formatDate(deliveryInfo.actualDelivery)
+            formatDate(deliveryInfo.deliveredAt)
+          )}
+          {deliveryInfo?.buyerConfirmedAt && renderInfoRow(
+            'shield-checkmark-outline',
+            'Confirmed By Buyer',
+            formatDate(deliveryInfo.buyerConfirmedAt)
           )}
           {renderInfoRow(
             'refresh-outline',
             'Last Updated',
-            formatDate(deliveryInfo?.updatedAt || null)
+            formatDate(deliveryInfo?.updatedAt)
           )}
         </View>
       </View>
 
-      {/* Additional Notes */}
-      {deliveryInfo?.notes && (
+      {/* Dispatch Note */}
+      {deliveryInfo?.dispatchNote && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Ionicons name="document-text" size={24} color={Colors.primary} />
-            <Text style={styles.sectionTitle}>Additional Notes</Text>
+            <Text style={styles.sectionTitle}>Dispatch Note</Text>
           </View>
           <View style={styles.notesContainer}>
-            <Text style={styles.notesText}>{deliveryInfo.notes}</Text>
+            <Text style={styles.notesText}>{deliveryInfo.dispatchNote}</Text>
           </View>
         </View>
       )}
@@ -382,7 +351,9 @@ const DeliveryInfoScreen = () => {
         <Text style={styles.supportText}>Need help with your delivery?</Text>
         <TouchableOpacity
           style={styles.supportButton}
-          onPress={() => Alert.alert('Support', 'Contact support feature coming soon')}
+          onPress={() =>
+            Alert.alert('Support', 'Contact support feature coming soon.')
+          }
         >
           <Ionicons name="help-circle-outline" size={20} color={Colors.primary} />
           <Text style={styles.supportButtonText}>Contact Support</Text>

@@ -37,6 +37,7 @@ export interface PaymentAccount {
   mobileNumber?: string | null;
   isPrimary: boolean;
   isActive: boolean;
+    payoutPreferenceSet?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -56,6 +57,7 @@ interface UsePaymentAccountReturn {
   getMyPaymentAccount: () => Promise<PaymentAccount | null>;
   getPaymentAccountByStoreUrl: (storeUrl: string) => Promise<PaymentAccount | null>;
   deletePaymentAccount: () => Promise<boolean>;
+  updatePayoutPreference: (preference: 'mobile_money' | 'bank') => Promise<boolean>; // Add this
   clearError: () => void;
 }
 
@@ -260,6 +262,46 @@ export const usePaymentAccount = (): UsePaymentAccountReturn => {
     }
   }, []);
 
+  // Update payout preference
+const updatePayoutPreference = useCallback(
+  async (preference: 'mobile_money' | 'bank'): Promise<boolean> => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const token = await getToken();
+      if (!token) {
+        throw new Error('Authentication token not found. Please login again.');
+      }
+
+      const response = await fetch(`${API_BASE_URL}/payout-preference`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ payoutPreference: preference }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to update payout preference');
+      }
+
+      return result.success;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An error occurred';
+      setError(errorMessage);
+      console.error('Error updating payout preference:', err);
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  },
+  []
+);
+
   return {
     loading,
     error,
@@ -268,6 +310,7 @@ export const usePaymentAccount = (): UsePaymentAccountReturn => {
     getMyPaymentAccount,
     getPaymentAccountByStoreUrl,
     deletePaymentAccount,
+    updatePayoutPreference,
     clearError,
   };
 };

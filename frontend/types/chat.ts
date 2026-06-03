@@ -51,8 +51,9 @@ export interface ChatMessage {
   sender: User;
 }
 
+// types/chat.types.ts
 export enum ChatRoomType {
-  ORDER = 'ORDER',
+  DIRECT = 'DIRECT',      
   PRODUCT_INQUIRY = 'PRODUCT_INQUIRY',
   GENERAL = 'GENERAL',
   SYSTEM = 'SYSTEM'

@@ -64,13 +64,8 @@ class ChatApiService {
     return response.data;
   }
 
-  async getOrCreateOrderChatRoom(orderId: string): Promise<ApiResponse<ChatRoom>> {
-    const response = await this.api.post(`/rooms/order/${orderId}`);
-    return response.data;
-  }
-
-  async getOrCreateProductChatRoom(productId: string): Promise<ApiResponse<ChatRoom>> {
-    const response = await this.api.post(`/rooms/product/${productId}`);
+async getOrCreateDirectChat(otherUserId: string): Promise<ApiResponse<ChatRoom>> {
+    const response = await this.api.post(`/rooms/direct/${otherUserId}`);
     return response.data;
   }
 

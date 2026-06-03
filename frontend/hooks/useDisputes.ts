@@ -1,11 +1,10 @@
-// hooks/useDisputes.ts
 import { useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 
-// Types
-export type DisputeType = 
+
+export type DisputeType =
   | 'REFUND_REQUEST'
   | 'ITEM_NOT_AS_DESCRIBED'
   | 'ITEM_NOT_RECEIVED'
@@ -13,7 +12,7 @@ export type DisputeType =
   | 'DAMAGED_ITEM'
   | 'OTHER';
 
-export type DisputeStatus = 'PENDING' | 'RESOLVED' | 'CANCELLED';
+type DisputeStatus = 'PENDING' | 'RESOLVED' | 'CANCELLED';
 
 export interface Dispute {
   id: string;
@@ -25,9 +24,11 @@ export interface Dispute {
   description: string;
   status: DisputeStatus;
   resolution?: string;
+  outcome?: 'BUYER_WON' | 'SELLER_WON';
+  resolvedBy?: string;
+  resolvedAt?: string;
   createdAt: string;
   updatedAt: string;
-  resolvedAt?: string;
   order?: {
     id: string;
     status: string;
@@ -47,12 +48,13 @@ export interface Dispute {
         email: string;
       };
     };
-    payment?: {
-      id: string;
-      amount: number;
-      status: string;
-      gatewayRef?: string;
-    };
+payment?: {
+  id: string;
+  amount: number;
+  status: string;
+  currency: string;
+  createdAt: string;
+}[];
     escrow?: {
       id: string;
       releaseStatus: string;
@@ -60,13 +62,13 @@ export interface Dispute {
   };
 }
 
-export interface CreateDisputeData {
+export interface OpenDisputeData {
   reason: string;
-  type?: DisputeType;
+  type: DisputeType;
 }
 
 export interface ResolveDisputeData {
-  status: 'RESOLVED' | 'CANCELLED';
+  outcome: 'BUYER_WON' | 'SELLER_WON';
   resolution: string;
   refundAmount?: number;
 }
@@ -86,25 +88,22 @@ interface ApiResponse<T> {
   message?: string;
   data?: T;
   error?: string;
-  requiresManualRefund?: boolean;
 }
+
 
 export const useDisputes = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Helper function to get token from AsyncStorage
   const getToken = async (): Promise<string | null> => {
     try {
-      const token = await AsyncStorage.getItem('token');
-      return token;
+      return await AsyncStorage.getItem('token');
     } catch (err) {
       console.error('Error retrieving token:', err);
       return null;
     }
   };
 
-  // Helper function to make authenticated API requests
   const makeRequest = async <T,>(
     endpoint: string,
     method: string = 'GET',
@@ -112,22 +111,19 @@ export const useDisputes = () => {
   ): Promise<ApiResponse<T>> => {
     try {
       const token = await getToken();
-      
+
       if (!token) {
         throw new Error('No authentication token found. Please login again.');
       }
 
       const headers: HeadersInit = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       };
 
-      const config: RequestInit = {
-        method,
-        headers,
-      };
+      const config: RequestInit = { method, headers };
 
-      if (body && (method === 'POST' || method === 'PATCH' || method === 'PUT')) {
+      if (body && ['POST', 'PATCH', 'PUT'].includes(method)) {
         config.body = JSON.stringify(body);
       }
 
@@ -144,69 +140,55 @@ export const useDisputes = () => {
     }
   };
 
-  // Request a refund (create dispute)
-  const requestRefund = useCallback(async (
+  const openDispute = useCallback(async (
     orderId: string,
-    disputeData: CreateDisputeData
+    disputeData: OpenDisputeData
   ): Promise<Dispute | null> => {
     setLoading(true);
     setError(null);
 
     try {
       const response = await makeRequest<Dispute>(
-        `/disputes/refund/${orderId}`,
+        `/disputes/${orderId}/open`,
         'POST',
         disputeData
       );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to request refund');
-      }
+
+      if (response.success && response.data) return response.data;
+      throw new Error(response.message || 'Failed to open dispute');
     } catch (err: any) {
       setError(err.message);
-      console.error('Request refund error:', err);
+      console.error('Open dispute error:', err);
       return null;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Resolve a dispute (admin only)
   const resolveDispute = useCallback(async (
     disputeId: string,
     resolutionData: ResolveDisputeData
-  ): Promise<{ dispute?: Dispute; requiresManualRefund?: boolean } | null> => {
+  ): Promise<boolean> => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await makeRequest<Dispute>(
-        `/disputes/${disputeId}/resolve`,
-        'POST',
-        resolutionData
-      );
-      
-      if (response.success) {
-        return {
-          dispute: response.data,
-          requiresManualRefund: response.requiresManualRefund || false
-        };
-      } else {
-        throw new Error(response.message || 'Failed to resolve dispute');
-      }
+      const response = await makeRequest<void>(`/disputes/${disputeId}/resolve`, 'POST', resolutionData);
+
+      if (response.success) return true;
+      throw new Error(response.message || 'Failed to resolve dispute');
     } catch (err: any) {
       setError(err.message);
       console.error('Resolve dispute error:', err);
-      return null;
+      return false;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Get dispute details by ID
-  const getDisputeById = useCallback(async (disputeId: string): Promise<Dispute | null> => {
+  const getDisputeById = useCallback(async (
+    disputeId: string
+  ): Promise<Dispute | null> => {
     setLoading(true);
     setError(null);
 
@@ -215,12 +197,9 @@ export const useDisputes = () => {
         `/disputes/${disputeId}`,
         'GET'
       );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch dispute');
-      }
+
+      if (response.success && response.data) return response.data;
+      throw new Error(response.message || 'Failed to fetch dispute');
     } catch (err: any) {
       setError(err.message);
       console.error('Get dispute by ID error:', err);
@@ -230,8 +209,7 @@ export const useDisputes = () => {
     }
   }, []);
 
-  // Get user's disputes (buyer or seller)
-  const getUserDisputes = useCallback(async (
+  const getMyDisputes = useCallback(async (
     page: number = 1,
     limit: number = 10,
     status?: DisputeStatus,
@@ -249,12 +227,11 @@ export const useDisputes = () => {
       });
 
       const response = await makeRequest<DisputesResponse>(
-        `/disputes/user/all?${queryParams.toString()}`,
+        `/disputes/me?${queryParams}`,
         'GET'
       );
 
       if (response.success && response.data) {
-        // Defensive check for pagination
         if (!response.data.pagination) {
           response.data.pagination = {
             total: response.data.disputes.length || 0,
@@ -264,138 +241,53 @@ export const useDisputes = () => {
           };
         }
         return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch disputes');
       }
+
+      throw new Error(response.message || 'Failed to fetch disputes');
     } catch (err: any) {
       setError(err.message);
-      console.error('Get user disputes error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [])
-
-  // Get all disputes (admin only)
-  const getAllDisputes = useCallback(async (
-    page: number = 1,
-    limit: number = 20,
-    status?: DisputeStatus,
-    type?: DisputeType
-  ): Promise<DisputesResponse | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const queryParams = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-        ...(status && { status }),
-        ...(type && { type }),
-      });
-
-      const response = await makeRequest<DisputesResponse>(
-        `/disputes/admin/all?${queryParams.toString()}`,
-        'GET'
-      );
-
-      if (response.success && response.data) {
-        // Defensive check for pagination
-        if (!response.data.pagination) {
-          response.data.pagination = {
-            total: response.data.disputes.length || 0,
-            page,
-            limit,
-            totalPages: 1
-          };
-        }
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch all disputes');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get all disputes error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [])
-
-  // Update a dispute with additional information
-  const updateDispute = useCallback(async (
-    disputeId: string,
-    additionalInfo: string
-  ): Promise<Dispute | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<Dispute>(
-        `/disputes/${disputeId}`,
-        'PATCH',
-        { additionalInfo }
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to update dispute');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Update dispute error:', err);
+      console.error('Get my disputes error:', err);
       return null;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Cancel a dispute
   const cancelDispute = useCallback(async (
     disputeId: string,
     reason?: string
-  ): Promise<Dispute | null> => {
+  ): Promise<boolean> => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await makeRequest<Dispute>(
-        `/disputes/${disputeId}/cancel`,
-        'POST',
-        { reason }
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to cancel dispute');
-      }
+      const response = await makeRequest<void>(`/disputes/${disputeId}/cancel`, 'PATCH');
+
+      if (response.success) return true;
+      throw new Error(response.message || 'Failed to cancel dispute');
     } catch (err: any) {
       setError(err.message);
       console.error('Cancel dispute error:', err);
-      return null;
+      return false;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Clear error
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
+  const clearError = useCallback(() => setError(null), []);
 
   return {
     loading,
     error,
-    requestRefund,
-    resolveDispute,
-    getDisputeById,
-    getUserDisputes,
-    getAllDisputes,
-    updateDispute,
-    cancelDispute,
     clearError,
+    // Buyer
+    openDispute,
+    cancelDispute,
+    // Shared
+    getDisputeById,
+    getMyDisputes,
+    // Admin
+    resolveDispute,
   };
 };
 

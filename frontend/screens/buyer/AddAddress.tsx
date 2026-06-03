@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,8 +10,12 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  SafeAreaView,
+  Dimensions,
 } from 'react-native';
+import { useAuth } from '../../context/AuthContext';
 import { useAddress } from '../../hooks/useAddress';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
 interface Address {
@@ -50,6 +54,37 @@ const GHANA_REGIONS = [
 ];
 
 export const AddAddressScreen = ({ navigation }: any) => {
+const { user, isLoading: authLoading } = useAuth();
+
+  useEffect(() => {
+    const fetchFullUser = async () => {
+      if (!user || fullUser || authLoading) return;
+      
+      try {
+        const token = await AsyncStorage.getItem('token');
+        if (!token) return;
+        
+        const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/auth/me`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        if (data.success && data.user && data.user.phone) {
+          setFullUser(data.user);
+        }
+      } catch (err) {
+        console.error('Failed to fetch full user:', err);
+      }
+    };
+
+    if (user && !user.phone) {
+      fetchFullUser();
+    }
+  }, [user, authLoading]);
   const [formData, setFormData] = useState({
     recipient: '',
     phone: '',
@@ -63,6 +98,21 @@ export const AddAddressScreen = ({ navigation }: any) => {
   });
   const [showRegionPicker, setShowRegionPicker] = useState(false);
   const { loading, error, createAddress } = useAddress();
+
+  const [fullUser, setFullUser] = useState(null);
+
+  const effectiveUser = fullUser || user;
+  const fullName = effectiveUser ? `${effectiveUser.firstName || ''} ${effectiveUser.lastName || ''}`.trim() : '';
+
+  useEffect(() => {
+    if (effectiveUser && !authLoading && fullName) {
+      setFormData(prev => ({
+        ...prev,
+        recipient: fullName,
+        phone: effectiveUser.phone || '',
+      }));
+    }
+  }, [effectiveUser, authLoading, fullName]);
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -120,12 +170,35 @@ export const AddAddressScreen = ({ navigation }: any) => {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.formContainer}>
+    <SafeAreaView style={{ flex: 1, position: 'relative' }}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+      >
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={true}
+        >
+{authLoading ? (
+    <ActivityIndicator size="large" color="#3B82F6" style={{ flex: 1 }} />
+  ) : user ? (
+    <View style={styles.userInfoContainer}>
+      <Text style={styles.userInfoTitle}>Using your account details:</Text>
+      <View style={styles.userInfoRow}>
+        <Ionicons name="person-outline" size={20} color="#3B82F6" />
+        <Text style={styles.userInfoName}>{fullName}</Text>
+      </View>
+      <View style={styles.userInfoRow}>
+        <Ionicons name="call-outline" size={20} color="#3B82F6" />
+      <Text style={styles.userInfoPhone}>{effectiveUser?.phone || 'No phone set'}</Text>
+      </View>
+      <Text style={styles.userInfoNote}>You can edit these details below if needed</Text>
+    </View>
+  ) : null}
+
+  <View style={styles.formContainer}>
           <View style={styles.inputGroup}>
             <Text style={styles.label}>
               Recipient Name <Text style={styles.required}>*</Text>
@@ -192,6 +265,7 @@ export const AddAddressScreen = ({ navigation }: any) => {
             <TouchableOpacity
               style={styles.pickerButton}
               onPress={() => setShowRegionPicker(!showRegionPicker)}
+              activeOpacity={0.7}
             >
               <Text
                 style={[
@@ -209,44 +283,53 @@ export const AddAddressScreen = ({ navigation }: any) => {
             </TouchableOpacity>
 
             {showRegionPicker && (
-              <View style={styles.pickerContainer}>
-                <ScrollView style={styles.pickerScroll}>
-                  {GHANA_REGIONS.map((region) => (
-                    <TouchableOpacity
-                      key={region}
-                      style={[
-                        styles.pickerItem,
-                        formData.region === region && styles.pickerItemSelected,
-                      ]}
-                      onPress={() => {
-                        handleInputChange('region', region);
-                        setShowRegionPicker(false);
-                      }}
-                    >
-                      <Text
+              <TouchableOpacity 
+                style={styles.pickerOverlay}
+                activeOpacity={1}
+                onPress={() => setShowRegionPicker(false)}
+              >
+                <View style={styles.pickerContainer}>
+                  <ScrollView 
+                    style={styles.pickerScroll}
+                    nestedScrollEnabled={false}
+                  >
+                    {GHANA_REGIONS.map((region) => (
+                      <TouchableOpacity
+                        key={region}
                         style={[
-                          styles.pickerItemText,
-                          formData.region === region &&
-                            styles.pickerItemTextSelected,
+                          styles.pickerItem,
+                          formData.region === region && styles.pickerItemSelected,
                         ]}
+                        onPress={() => {
+                          handleInputChange('region', region);
+                          setShowRegionPicker(false);
+                        }}
                       >
-                        {region}
-                      </Text>
-                      {formData.region === region && (
-                        <Ionicons
-                          name="checkmark"
-                          size={20}
-                          color="#FF6B35"
-                        />
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
+                        <Text
+                          style={[
+                            styles.pickerItemText,
+                            formData.region === region &&
+                              styles.pickerItemTextSelected,
+                          ]}
+                        >
+                          {region}
+                        </Text>
+                        {formData.region === region && (
+                          <Ionicons
+                            name="checkmark"
+                            size={20}
+                            color="#FF6B35"
+                          />
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </TouchableOpacity>
             )}
           </View>
 
-          <View style={styles.inputGroup}>
+            <View style={styles.inputGroup}>
             <Text style={styles.label}>Postal Code</Text>
             <TextInput
               style={styles.input}
@@ -256,24 +339,20 @@ export const AddAddressScreen = ({ navigation }: any) => {
             />
           </View>
 
-          <TouchableOpacity
-            style={styles.checkboxContainer}
-            onPress={() =>
-              handleInputChange('isDefault', !formData.isDefault)
-            }
-          >
-            <View
-              style={[
-                styles.checkbox,
-                formData.isDefault && styles.checkboxChecked,
-              ]}
+          <View style={styles.checkboxContainer}>
+            <TouchableOpacity
+              style={{ flex: 1 }}
+              onPress={() => handleInputChange('isDefault', !formData.isDefault)}
+              activeOpacity={0.7}
             >
-              {formData.isDefault && (
-                <Ionicons name="checkmark" size={16} color="#FFF" />
-              )}
-            </View>
-            <Text style={styles.checkboxLabel}>Set as default address</Text>
-          </TouchableOpacity>
+              <View style={[styles.checkbox, formData.isDefault && styles.checkboxChecked]}>
+                {formData.isDefault && (
+                  <Ionicons name="checkmark" size={16} color="#FFF" />
+                )}
+              </View>
+              <Text style={styles.checkboxLabel}>Set as default address</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
 
@@ -282,18 +361,22 @@ export const AddAddressScreen = ({ navigation }: any) => {
           style={styles.submitButton}
           onPress={handleSubmit}
           disabled={loading}
+          activeOpacity={0.8}
         >
           {loading ? (
-            <ActivityIndicator color="#FFF" />
+            <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
             <>
-              <Ionicons name="save-outline" size={20} color="#FFF" />
-              <Text style={styles.submitButtonText}>Save Address</Text>
+              <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
+              <Text style={styles.submitButtonText}>
+                {loading ? 'Adding...' : 'Add Address'}
+              </Text>
             </>
           )}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
+  </SafeAreaView>
   );
 };
 
@@ -301,6 +384,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
+    marginTop: 40
   },
   scrollContent: {
     flexGrow: 1,
@@ -349,16 +433,63 @@ const styles = StyleSheet.create({
   placeholderText: {
     color: '#9E9E9E',
   },
+  pickerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1,
+    justifyContent: 'flex-start',
+    paddingTop: 50, // Account for button height
+  },
   pickerContainer: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
     marginTop: 8,
-    maxHeight: 200,
+    marginHorizontal: 0,
+    maxHeight: Dimensions.get('window').height * 0.4,
   },
   pickerScroll: {
-    maxHeight: 200,
+    maxHeight: Dimensions.get('window').height * 0.4,
+  },
+  userInfoContainer: {
+    backgroundColor: '#E3F2FD',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#BBDEFB',
+  },
+  userInfoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1976D2',
+    marginBottom: 12,
+  },
+  userInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 12,
+  },
+  userInfoName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#212121',
+    flex: 1,
+  },
+  userInfoPhone: {
+    fontSize: 16,
+    color: '#212121',
+    flex: 1,
+  },
+  userInfoNote: {
+    fontSize: 14,
+    color: '#757575',
+    fontStyle: 'italic',
   },
   pickerItem: {
     flexDirection: 'row',
@@ -403,24 +534,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#424242',
   },
+
   footer: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#FFFFFF',
-    padding: 16,
+    backgroundColor: '#F5F5F5',
     borderTopWidth: 1,
     borderTopColor: '#E0E0E0',
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
   },
   submitButton: {
-    backgroundColor: '#FF6B35',
+    backgroundColor: '#3B82F6',
+    paddingVertical: 16,
+    borderRadius: 8,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 16,
-    borderRadius: 8,
     gap: 8,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   submitButtonText: {
     color: '#FFFFFF',

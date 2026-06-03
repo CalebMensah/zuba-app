@@ -1,5 +1,5 @@
 import { body, param, query, validationResult } from 'express-validator';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 // Validation error handler
 export const handleValidationErrors = (req, res, next) => {
@@ -92,7 +92,7 @@ export const verificationSubmitLimiter = rateLimit({
   skipSuccessfulRequests: false,
   keyGenerator: (req) => {
     // Rate limit by both IP and user ID for better protection
-    return `${req.ip}-${req.user?.userId || 'anonymous'}`;
+    return `${ipKeyGenerator(req)}-${req.user?.userId || 'anonymous'}`;
   }
 });
 

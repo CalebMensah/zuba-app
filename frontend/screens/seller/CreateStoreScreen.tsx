@@ -466,6 +466,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop:40,
   },
   scrollView: {
     flex: 1,
@@ -480,7 +481,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginBottom: 8,
   },
   subtitle: {

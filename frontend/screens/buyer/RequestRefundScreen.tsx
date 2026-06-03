@@ -6,15 +6,16 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useDisputes, DisputeType } from '../../hooks/useDisputes';
-import { useOrders } from '../../hooks/useOrder';
-import { Order, OrderItem } from '../../types/order';
+import { useOrder } from '../../hooks/useOrder';
+import { OrderItem } from '../../types/order';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 
 const disputeTypes: { label: string; value: DisputeType }[] = [
@@ -29,46 +30,22 @@ const disputeTypes: { label: string; value: DisputeType }[] = [
 export default function RequestRefundScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation();
+  const orderId = route.params?.orderId as string;
+
+  // TanStack Query hook for order data
+  const { data: order, isLoading, error, refetch } = useOrder(orderId);
+
   const { requestRefund, loading: disputeLoading, error: disputeError, clearError } = useDisputes();
-  const { getOrderById, loading: orderLoading } = useOrders();
-  
-  // Get orderId from route params
-  const orderId = route.params?.orderId as string ;
-  
-  const [order, setOrder] = useState<Order | null>(null);
-  const [fetchingOrder, setFetchingOrder] = useState(true);
+
   const [selectedType, setSelectedType] = useState<DisputeType>('REFUND_REQUEST');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetch order details using useOrders hook
   useEffect(() => {
-    const fetchOrderDetails = async () => {
-      if (!orderId) {
-        Alert.alert('Error', 'Order ID not provided');
-        navigation.goBack();
-        return;
-      }
-
-      try {
-        setFetchingOrder(true);
-        const orderData = await getOrderById(orderId);
-
-        if (orderData) {
-          setOrder(orderData);
-        } else {
-          throw new Error('Order not found');
-        }
-      } catch (err: any) {
-        Alert.alert('Error', err.message || 'Failed to load order details', [
-          { text: 'OK', onPress: () => navigation.goBack() },
-        ]);
-      } finally {
-        setFetchingOrder(false);
-      }
-    };
-
-    fetchOrderDetails();
+    if (!orderId) {
+      Alert.alert('Error', 'Order ID not provided');
+      navigation.goBack();
+    }
   }, [orderId]);
 
   useEffect(() => {
@@ -78,8 +55,10 @@ export default function RequestRefundScreen() {
     }
   }, [disputeError]);
 
-  const formatDate = (dateString: string) => {
+const formatDate = (dateString?: string) => {
+    if (!dateString) return 'N/A';
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Invalid Date';
     return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
@@ -96,10 +75,12 @@ export default function RequestRefundScreen() {
     }).format(amount);
   };
 
-  const getStatusColor = (status: string) => {
+const getStatusColor = (status?: string) => {
+    if (!status) return Colors.gray500;
     switch (status.toUpperCase()) {
       case 'SUCCESS':
       case 'DELIVERED':
+      case 'COMPLETED':
         return Colors.success;
       case 'PENDING':
         return Colors.warning;
@@ -118,7 +99,10 @@ export default function RequestRefundScreen() {
     }
 
     if (reason.trim().length < 20) {
-      Alert.alert('Invalid Input', 'Please provide a more detailed reason (at least 20 characters).');
+      Alert.alert(
+        'Invalid Input',
+        'Please provide a more detailed reason (at least 20 characters).'
+      );
       return;
     }
 
@@ -161,29 +145,47 @@ export default function RequestRefundScreen() {
     );
   };
 
+  // Loading state - initial fetch only
+  if (isLoading && !order) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <LoadingSpinner size={40} color={Colors.primary} />
+          <Text style={styles.loadingText}>Loading order details...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Error state
+  if (error || !order) {
+    console.log('Order error or no order:', error, order);
+    return (
+      <View style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+          <Text style={styles.errorText}>
+            {error instanceof Error ? error.message : 'Failed to load order details'}
+          </Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+            <Ionicons name="refresh" size={20} color={Colors.white} />
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      {fetchingOrder ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Loading order details...</Text>
-        </View>
-      ) : !order ? (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Failed to load order details</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => navigation.goBack()}>
-            <Text style={styles.retryButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Request Refund</Text>
@@ -203,7 +205,12 @@ export default function RequestRefundScreen() {
             <View style={styles.divider} />
             <View style={styles.row}>
               <Text style={styles.label}>Status:</Text>
-              <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(order.status)}20` }]}>
+              <View
+                style={[
+                  styles.statusBadge,
+                  { backgroundColor: `${getStatusColor(order.status)}20` },
+                ]}
+              >
                 <Text style={[styles.statusText, { color: getStatusColor(order.status) }]}>
                   {order.status}
                 </Text>
@@ -248,7 +255,9 @@ export default function RequestRefundScreen() {
                   {index > 0 && <View style={styles.divider} />}
                   <View style={styles.itemRow}>
                     <View style={styles.itemInfo}>
-                      <Text style={styles.itemName}>{item.name || item.productName || 'Item'}</Text>
+                      <Text style={styles.itemName}>
+                        {item.name || item.productName || item.product?.name || 'Item'}
+                      </Text>
                       <Text style={styles.itemQuantity}>Quantity: {item.quantity}</Text>
                     </View>
                     <Text style={styles.itemPrice}>
@@ -266,46 +275,87 @@ export default function RequestRefundScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Payment Details</Text>
             <View style={styles.card}>
-              <View style={styles.row}>
-                <Text style={styles.label}>Payment ID:</Text>
-                <Text style={styles.value}>{order.payment.id}</Text>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.row}>
-                <Text style={styles.label}>Method:</Text>
-                <Text style={styles.value}>
-                  {order.payment.method || order.payment.paymentMethod || order.paymentMethod || 'N/A'}
-                </Text>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.row}>
-                <Text style={styles.label}>Status:</Text>
-                <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(order.payment.status)}20` }]}>
-                  <Text style={[styles.statusText, { color: getStatusColor(order.payment.status) }]}>
-                    {order.payment.status}
-                  </Text>
+              {order.payment.map((payment, index) => (
+                <View key={payment.id || index}>
+                  {index > 0 && <View style={styles.divider} />}
+                  <View style={styles.row}>
+                    <Text style={styles.label}>Payment ID:</Text>
+                    <Text style={styles.value} numberOfLines={1}>{payment.id || 'N/A'}</Text>
+                  </View>
+                  <View style={styles.row}>
+                    <Text style={styles.label}>Gateway:</Text>
+                    <Text style={styles.value} numberOfLines={1}>{payment.gateway || 'N/A'}</Text>
+                  </View>
+                  <View style={styles.divider} />
+                  <View style={styles.row}>
+                    <Text style={styles.label}>Status:</Text>
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        { backgroundColor: `${getStatusColor(payment.status)}20` },
+                      ]}
+                    >
+                      <Text
+                        style={[styles.statusText, { color: getStatusColor(payment.status) }]}
+                      >
+                        {payment.status || 'Unknown'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.divider} />
+                  <View style={styles.row}>
+                    <Text style={styles.label}>Gateway Ref:</Text>
+                    <Text style={styles.value} numberOfLines={1}>{payment.gatewayRef || 'N/A'}</Text>
+                  </View>
+                  <View style={styles.divider} />
+                  <View style={styles.row}>
+                    <Text style={styles.label}>Amount:</Text>
+                    <Text style={styles.valueAmount}>
+                      {formatCurrency(
+                        Number(payment.amount || 0),
+                        payment.currency || order.currency || 'GHS'
+                      )}
+                    </Text>
+                  </View>
+                  <View style={styles.divider} />
+                  <View style={styles.row}>
+                    <Text style={styles.label}>Date:</Text>
+                    <Text style={styles.value}>
+                      {formatDate(payment.createdAt)}
+                    </Text>
+                  </View>
+                  {payment.metadata?.fees && (
+                    <View style={styles.divider} />
+                  )}
+                  {payment.metadata?.fees && (
+                    <>
+                      <Text style={[styles.label, { marginTop: 8, marginBottom: 4 }]}>Fees Breakdown:</Text>
+                      <View style={styles.row}>
+                        <Text style={styles.label}>Net Seller:</Text>
+                        <Text style={styles.value}>{formatCurrency(payment.metadata.fees.netSeller, order.currency)}</Text>
+                      </View>
+                      <View style={styles.row}>
+                        <Text style={styles.label}>Platform:</Text>
+                        <Text style={styles.value}>{formatCurrency(payment.metadata.fees.platformFee, order.currency)}</Text>
+                      </View>
+                      <View style={styles.row}>
+                        <Text style={styles.label}>Paystack:</Text>
+                        <Text style={styles.value}>{formatCurrency(payment.metadata.fees.paystackFee, order.currency)}</Text>
+                      </View>
+                    </>
+                  )}
                 </View>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.row}>
-                <Text style={styles.label}>Transaction Date:</Text>
-                <Text style={styles.value}>{formatDate(order.payment.transactionDate || order.payment.createdAt)}</Text>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.row}>
-                <Text style={styles.label}>Amount Paid:</Text>
-                <Text style={styles.valueAmount}>
-                  {formatCurrency(order.payment.amount, order.payment.currency || order.currency)}
-                </Text>
-              </View>
+              ))}
             </View>
           </View>
         )}
+        {/* Debug log */}
+        {__DEV__ && order && console.log('🔍 RequestRefund - Order Payments:', JSON.stringify(order.payment, null, 2))}
 
         {/* Refund Request Form */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Refund Request</Text>
-          
+
           {/* Dispute Type Selector */}
           <Text style={styles.inputLabel}>Reason Category *</Text>
           <View style={styles.typeSelector}>
@@ -343,31 +393,34 @@ export default function RequestRefundScreen() {
             textAlignVertical="top"
             maxLength={1000}
           />
-          <Text style={styles.charCount}>
-            {reason.length}/1000 characters
-          </Text>
+          <Text style={styles.charCount}>{reason.length}/1000 characters</Text>
         </View>
 
         {/* Important Notice */}
         <View style={styles.noticeCard}>
-          <Text style={styles.noticeTitle}>⚠️ Important Notice</Text>
+          <View style={styles.noticeHeader}>
+            <Ionicons name="warning" size={20} color={Colors.warning} />
+            <Text style={styles.noticeTitle}>Important Notice</Text>
+          </View>
           <Text style={styles.noticeText}>
-            • Your refund request will be reviewed within 48 hours{'\n'}
-            • The seller will be notified and may respond{'\n'}
-            • You'll receive updates via email and notifications{'\n'}
-            • Refunds are processed to the original payment method{'\n'}
-            • Processing time may take 5-10 business days
+            • Your refund request will be reviewed within 48 hours{'\n'}• The seller will be
+            notified and may respond{'\n'}• You'll receive updates via email and notifications
+            {'\n'}• Refunds are processed to the original payment method{'\n'}• Processing time
+            may take 5-10 business days
           </Text>
         </View>
 
-        {        /* Submit Button */}
+        {/* Submit Button */}
         <TouchableOpacity
-          style={[styles.submitButton, (submitting || disputeLoading || orderLoading) && styles.submitButtonDisabled]}
+          style={[
+            styles.submitButton,
+            (submitting || disputeLoading) && styles.submitButtonDisabled,
+          ]}
           onPress={handleSubmit}
-          disabled={submitting || disputeLoading || orderLoading}
+          disabled={submitting || disputeLoading}
         >
           {submitting || disputeLoading ? (
-            <ActivityIndicator color={Colors.white} />
+            <LoadingSpinner size={20} color={Colors.white} />
           ) : (
             <Text style={styles.submitButtonText}>Submit Refund Request</Text>
           )}
@@ -377,12 +430,11 @@ export default function RequestRefundScreen() {
         <TouchableOpacity
           style={styles.cancelButton}
           onPress={() => navigation.goBack()}
-          disabled={submitting || disputeLoading || orderLoading}
+          disabled={submitting || disputeLoading}
         >
           <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
-              </ScrollView>
-      )}
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -391,16 +443,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
-    marginTop:30,
+    marginTop: 30,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: Colors.backgroundSecondary,
+    gap: 12,
   },
   loadingText: {
-    marginTop: 16,
     fontSize: 16,
     color: Colors.textSecondary,
   },
@@ -410,14 +462,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: Colors.backgroundSecondary,
     padding: 24,
+    gap: 16,
   },
   errorText: {
     fontSize: 16,
     color: Colors.error,
     textAlign: 'center',
-    marginBottom: 20,
   },
   retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: Colors.primary,
     paddingHorizontal: 24,
     paddingVertical: 12,
@@ -589,11 +644,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.warning,
   },
+  noticeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
   noticeTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: Colors.gray900,
-    marginBottom: 8,
   },
   noticeText: {
     fontSize: 13,
@@ -612,6 +672,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
+    minHeight: 52,
   },
   submitButtonDisabled: {
     backgroundColor: Colors.disabled,

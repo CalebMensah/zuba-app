@@ -22,10 +22,12 @@ const ManagePayoutAccount: React.FC = () => {
     paymentAccount,
     getMyPaymentAccount,
     deletePaymentAccount,
+    updatePayoutPreference,
     clearError,
   } = usePaymentAccount();
 
   const [refreshing, setRefreshing] = useState(false);
+  const [updatingPreference, setUpdatingPreference] = useState(false);
 
   // Fetch payment account on screen focus
   useFocusEffect(
@@ -75,6 +77,36 @@ const ManagePayoutAccount: React.FC = () => {
     );
   };
 
+  const handleSetAsPreferred = async () => {
+    if (!paymentAccount) return;
+
+    Alert.alert(
+      'Set as Preferred',
+      `Set ${paymentAccount.accountType === 'bank' ? 'Bank Account' : 'Mobile Money'} as your preferred payout method?`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            setUpdatingPreference(true);
+            const success = await updatePayoutPreference(paymentAccount.accountType);
+            setUpdatingPreference(false);
+
+            if (success) {
+              Alert.alert('Success', 'Payout preference updated successfully');
+              await loadPaymentAccount();
+            } else if (error) {
+              Alert.alert('Error', error || 'Failed to update preference');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleAddAccount = () => {
     navigation.navigate('AddAccount' as never);
   };
@@ -98,7 +130,7 @@ const ManagePayoutAccount: React.FC = () => {
           </View>
           {account.isPrimary && (
             <View style={styles.primaryBadge}>
-              <Text style={styles.primaryBadgeText}>Default</Text>
+              <Text style={styles.primaryBadgeText}>Preferred</Text>
             </View>
           )}
         </View>
@@ -133,6 +165,25 @@ const ManagePayoutAccount: React.FC = () => {
             </>
           )}
         </View>
+
+        {/* Set as Preferred Button */}
+        {!account.isPrimary && (
+          <TouchableOpacity
+            style={styles.preferredButton}
+            onPress={handleSetAsPreferred}
+            disabled={updatingPreference}
+            activeOpacity={0.7}
+          >
+            {updatingPreference ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <>
+                <Ionicons name="star-outline" size={20} color={Colors.white} />
+                <Text style={styles.preferredButtonText}>Set as Preferred</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
 
         {/* Action Buttons */}
         <View style={styles.actionButtons}>
@@ -249,7 +300,7 @@ const ManagePayoutAccount: React.FC = () => {
           <>
             {renderAccountCard(paymentAccount)}
 
-            {/* Add Another Account Button (Optional - if you support multiple accounts later) */}
+            {/* Add Another Account Button */}
             <TouchableOpacity
               style={styles.addNewButton}
               onPress={handleAddAccount}
@@ -433,6 +484,21 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     flex: 2,
     textAlign: 'right',
+  },
+  preferredButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    backgroundColor: Colors.primary,
+    borderRadius: 8,
+    marginBottom: 12,
+    gap: 8,
+  },
+  preferredButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.white,
   },
   actionButtons: {
     flexDirection: 'row',

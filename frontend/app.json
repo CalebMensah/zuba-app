@@ -7,8 +7,10 @@
     "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "scheme": "zuba",
+    "redirectScheme": "zuba",
     "splash": {
-      "image": "./assets/splash-icon-1.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -18,9 +20,13 @@
     },
     "android": {
       "package": "com.zuba.app",
-      "googleServicesFile": "./android/app/google-services.json",
+      "permissions": [
+        "READ_PHONE_STATE",
+        "POST_NOTIFICATIONS"
+      ],
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -31,11 +37,31 @@
     },
     "extra": {
       "eas": {
-        "projectId": "b89b9fce-b2d9-4996-97cb-bfed37ebbec6"
+        "projectId": "e2defb8c-645f-43f4-802d-fc6ae0ab4648"
       }
     },
     "plugins": [
-      "expo-web-browser"
-    ]
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/logo.png",
+          "color": "#ffffff",
+          "sounds": [
+            "./assets/notification_sound.wav"
+          ],
+          "mode": "development"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "useLegacyPackaging": true
+          }
+        }
+      ],
+      "expo-font"
+    ],
+    "owner": "calmen0"
   }
 }

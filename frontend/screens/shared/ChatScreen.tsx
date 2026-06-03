@@ -50,7 +50,7 @@ const ChatScreen: React.FC = () => {
     storeLogo 
   } = route.params as RouteParams;
 
-  console.log('ChatScreen Route Params:', route.params);
+  const { user } = useAuth();
   
   const {
     messages,
@@ -64,10 +64,12 @@ const ChatScreen: React.FC = () => {
     startTyping,
     stopTyping,
     loadMoreMessages,
+    fetchMessages,
     hasMoreMessages
   } = useChatRoom({
     chatRoomId,
     autoJoin: true,
+    currentUserId: user?.id || '', 
     autoMarkAsRead: true
   });
 
@@ -85,8 +87,6 @@ const ChatScreen: React.FC = () => {
   
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
-  
-  const { user } = useAuth();
   const currentUserId = user?.id || '';
   const currentUserType = user?.role || 'buyer';
 
@@ -98,16 +98,15 @@ const ChatScreen: React.FC = () => {
     }
   }, [messages.length]);
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await loadMoreMessages();
-    } catch (error) {
-      console.error('Refresh error:', error);
-    } finally {
-      setRefreshing(false);
-    }
-  };
+
+const handleRefresh = async () => {
+  setRefreshing(true);
+  try {
+    await fetchMessages(chatRoomId);
+  } finally {
+    setRefreshing(false);
+  }
+};
 
   const handleTextChange = (text: string) => {
     setInputText(text);
@@ -220,12 +219,6 @@ const ChatScreen: React.FC = () => {
       setInputText('');
       setSelectedMedia([]);
       
-      setTimeout(async () => {
-        await loadMoreMessages();
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-      }, 300);
     } catch (error) {
       Alert.alert('Error', 'Failed to send message. Please try again.');
     }
@@ -294,7 +287,7 @@ const ChatScreen: React.FC = () => {
   };
 
   const renderMessage = ({ item, index }: { item: ChatMessageType; index: number }) => {
-    const isOwnMessage = item.senderId === currentUserId || item.senderId === user?.id;
+    const isOwnMessage = item.senderId === currentUserId;
     const showDateSeparator = index === 0 || !isSameDay(
       new Date(item.createdAt),
       new Date(messages[index - 1]?.createdAt)
@@ -509,7 +502,7 @@ const ChatScreen: React.FC = () => {
   };
 
   const renderMessageActionsModal = () => {
-    const isOwnMessage = selectedMessage?.senderId === currentUserId || selectedMessage?.senderId === user?.id;
+   const isOwnMessage = selectedMessage?.senderId === currentUserId;
 
     return (
       <Modal
@@ -813,7 +806,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F7FA',
-    marginTop: 30
+    marginTop: 30,
+    marginBottom: 50
   },
   header: {
     flexDirection: 'row',

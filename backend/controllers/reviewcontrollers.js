@@ -297,7 +297,7 @@ export const getProductReviews = asyncHandler(async (req, res) => {
   };
 
   // Cache for 30 minutes
-  await cache.setex(cacheKey, 1800, JSON.stringify(resultData));
+  await cache.set(cacheKey, 1800, JSON.stringify(resultData));
 
   res.status(200).json({
     success: true,
@@ -573,7 +573,7 @@ export const getSellerStoreReviews = asyncHandler(async (req, res) => {
   };
 
   // Cache for 15 minutes
-  await cache.setex(cacheKey, 900, JSON.stringify(resultData));
+  await cache.set(cacheKey, 900, JSON.stringify(resultData));
 
   res.status(200).json({
     success: true,
@@ -614,7 +614,7 @@ export const getProductReviewSummary = asyncHandler(async (req, res) => {
   }
 
   // Cache for 1 hour
-  await cache.setex(cacheKey, 3600, JSON.stringify(summary));
+  await cache.set(cacheKey, 3600, JSON.stringify(summary));
 
   res.status(200).json({
     success: true,
@@ -1053,7 +1053,7 @@ export const getPublicStoreReviews = asyncHandler(async (req, res) => {
   };
 
   // Cache for 15 minutes
-  await cache.setex(cacheKey, 900, JSON.stringify(result));
+  await cache.set(cacheKey, JSON.stringify(result),900);
 
   res.status(200).json({
     success: true,

@@ -3,11 +3,11 @@ import prisma from '../config/prisma.js';
 import { cache } from '../config/redis.js';
 import paystack from '../config/paystack.js';
 import crypto from 'crypto';
-import { processRefund } from '../utils/refundUtils.js';
 import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
 
 // Constants
+const AMOUNT_TOLERANCE = 0.10;
 const MAX_ORDERS_PER_CHECKOUT = 50;
 const ESCROW_HOLD_DAYS = 4;
 const POINTS_PER_CURRENCY_UNIT = 10;
@@ -16,10 +16,8 @@ const ALLOWED_CALLBACK_DOMAINS = [
   'https://yourdomain.com'
 ].filter(Boolean);
 
-// CORRECT - Separate collection and transfer fees
-const PAYSTACK_COLLECTION_PERCENT = 1.95;  // 1.95% when buyer pays platform
-const PAYSTACK_TRANSFER_MOBILE_MONEY = 1.00;  // GHS 1 when platform pays seller
-const PAYSTACK_TRANSFER_BANK = 8.00;  // GHS 8 when platform pays seller via bank
+// Fees imported from utils/fees.js
+import { PLATFORM_FEE_PERCENT, PAYSTACK_COLLECTION_PERCENT } from '../utils/fees.js';
 
 // Utility: Timing-safe string comparison
 function timingSafeCompare(a, b) {
@@ -47,15 +45,20 @@ function validateCallbackUrl(url) {
   }
 }
 
-// CORRECT - Collection fee (buyer pays this)
-function calculatePaystackCollectionFee(amount) {
-  const percentFee = amount * (PAYSTACK_COLLECTION_PERCENT / 100);
-  return parseFloat(percentFee.toFixed(2));
-}
-
-// CORRECT - Transfer fee (platform pays this later)
-function getTransferFee(payoutMethod = 'mobile_money') {
-  return payoutMethod === 'bank' ? PAYSTACK_TRANSFER_BANK : PAYSTACK_TRANSFER_MOBILE_MONEY;
+// Buyer pays: subtotal + platform 3% + paystack 1.95% on (subtotal + platform)
+function calculateFees(subtotal) {
+  const platformFee = subtotal * PLATFORM_FEE_PERCENT;
+  const taxableAmount = subtotal + platformFee;
+  const paystackFee = taxableAmount * (PAYSTACK_COLLECTION_PERCENT / 100);
+  const buyerTotal = subtotal + platformFee + paystackFee;
+  const netSellerPayout = subtotal * (1 - PLATFORM_FEE_PERCENT);  // Seller gets exactly 97%, platform absorbs transfer fees
+  
+  return {
+    platformFee: parseFloat(platformFee.toFixed(2)),
+    paystackFee: parseFloat(paystackFee.toFixed(2)),
+    buyerTotal: parseFloat(buyerTotal.toFixed(2)),
+    netSellerPayout: parseFloat(netSellerPayout.toFixed(2))
+  };
 }
 
 // Utility: Calculate order total from items
@@ -76,39 +79,34 @@ async function calculateOrderTotal(orderId) {
   };
 }
 
-// Utility: Calculate seller payout and commission for order items
+// Seller gets exactly 97% of subtotal (platform absorbs all transfer fees)
 async function calculateSellerPayouts(order) {
   const items = order.items || [];
-  const commissionRate = order.commissionRate || 0.03;
+  const subtotal = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const commissionRate = order.commissionRate || PLATFORM_FEE_PERCENT;
   
   const results = [];
   let totalCommission = 0;
-  let totalGrossPayout = 0;
 
   for (const item of items) {
     const itemSubtotal = item.price * item.quantity;
     const commission = parseFloat((itemSubtotal * commissionRate).toFixed(2));
-    const grossSellerPayout = parseFloat((itemSubtotal - commission).toFixed(2));
+    const sellerPayout = parseFloat((itemSubtotal - commission).toFixed(2));
     
     totalCommission += commission;
-    totalGrossPayout += grossSellerPayout;
     
     results.push({
       itemId: item.id,
-      grossSellerPayout,
+      sellerPayout,
       commission
     });
   }
 
-  // Get transfer fee
-  const transferFee = order.transferFee || getTransferFee(order.sellerPayoutPreference);
-  const netSellerPayout = parseFloat((totalGrossPayout - transferFee).toFixed(2));
+  const netSellerPayout = subtotal * (1 - commissionRate);  // Exact 97%
 
   return {
     items: results,
     totalCommission: parseFloat(totalCommission.toFixed(2)),
-    grossSellerPayout: totalGrossPayout,
-    transferFee,
     netSellerPayout
   };
 }
@@ -116,37 +114,60 @@ async function calculateSellerPayouts(order) {
 // Utility: Sanitize metadata
 function sanitizeMetadata(metadata) {
   const sanitized = {};
-  const allowedKeys = ['checkoutSessionId', 'orderIds', 'buyerId', 'sellerId', 'storeIds', 'orderCount'];  // ✅ Removed 'paymentMethod'
-  
+  const allowedKeys = ['checkoutSessionId', 'orderIds', 'buyerId', 'sellerId', 'storeIds', 'orderCount'];
+
   for (const key of allowedKeys) {
     if (metadata[key] !== undefined) {
       const value = metadata[key];
       sanitized[key] = Array.isArray(value) ? value.slice(0, MAX_ORDERS_PER_CHECKOUT) : String(value).slice(0, 255);
     }
   }
-  
+
   return sanitized;
 }
 
 export const createCheckoutSession = async (req, res) => {
   try {
-    const { orderIds, email, callbackUrl } = req.body;  // ✅ Removed paymentMethod
+    const { orderIds, callbackUrl } = req.body;
     const userId = req.user.userId;
 
+    // ✅ Fetch real user email from database
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true }
+    });
+    if (!user || !user.email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'User email not found. Please update your profile.' 
+      });
+    }
+    const realEmail = user.email.toLowerCase().trim();
+
+    console.log('👤 Using real buyer email:', realEmail);
+
+    // Validation
     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'Order IDs array is required and must not be empty.' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Order IDs array is required and must not be empty.' 
+      });
     }
     if (orderIds.length > MAX_ORDERS_PER_CHECKOUT) {
-      return res.status(400).json({ success: false, message: `Maximum ${MAX_ORDERS_PER_CHECKOUT} orders allowed per checkout.` });
+      return res.status(400).json({ 
+        success: false, 
+        message: `Maximum ${MAX_ORDERS_PER_CHECKOUT} orders allowed per checkout.` 
+      });
     }
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ success: false, message: 'Valid email is required.' });
-    }
-    if (callbackUrl && !validateCallbackUrl(callbackUrl)) {
-      return res.status(400).json({ success: false, message: 'Invalid callback URL. Must be from an allowed domain.' });
+    if (!realEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(realEmail)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid email is required.' 
+      });
     }
 
     const result = await prisma.$transaction(async (tx) => {
+      // Fetch orders
       const orders = await tx.order.findMany({
         where: { id: { in: orderIds }, buyerId: userId },
         include: { 
@@ -167,24 +188,42 @@ export const createCheckoutSession = async (req, res) => {
         }
       });
 
-      if (orders.length !== orderIds.length) throw new Error('One or more orders not found or unauthorized.');
+      if (orders.length !== orderIds.length) {
+        throw new Error('One or more orders not found or unauthorized.');
+      }
 
+      // Validate orders
       const invalidOrders = [];
       for (const order of orders) {
-        if (order.status !== 'PENDING' || order.paymentStatus !== 'PENDING') invalidOrders.push(order.id);
+        if (order.status !== 'PENDING' || order.paymentStatus !== 'PENDING') {
+          invalidOrders.push(order.id);
+        }
         const totalCheck = await calculateOrderTotal(order.id);
-        if (!totalCheck || !totalCheck.isValid) invalidOrders.push(order.id);
+        if (!totalCheck || !totalCheck.isValid) {
+          invalidOrders.push(order.id);
+        }
       }
-      if (invalidOrders.length > 0) throw new Error(`Invalid orders: ${invalidOrders.join(', ')}`);
+      if (invalidOrders.length > 0) {
+        throw new Error(`Invalid orders: ${invalidOrders.join(', ')}`);
+      }
 
-      const existingPayments = await tx.payment.findMany({ where: { orderId: { in: orderIds }, status: 'PENDING' } });
-      if (existingPayments.length > 0) throw new Error('One or more orders already have pending payments.');
+      // Check for existing pending payments
+      const existingPayments = await tx.payment.findMany({ 
+        where: { orderId: { in: orderIds }, status: 'PENDING' } 
+      });
+      if (existingPayments.length > 0) {
+        throw new Error('One or more orders already have pending payments.');
+      }
 
+      // Calculate new fees: subtotal + 3% platform + 1.95% paystack on (subtotal+platform)
       const subtotal = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-      const paystackCollectionFee = calculatePaystackCollectionFee(subtotal);  // ✅ Use subtotal
-      const buyerTotalAmount = parseFloat((subtotal + paystackCollectionFee).toFixed(2));  // ✅ Use paystackCollectionFee
+      const fees = calculateFees(subtotal);
+      const buyerTotalAmount = fees.buyerTotal;
 
+      // Generate checkout session ID
       const checkoutSessionId = `cs_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+      
+      // Prepare metadata
       const metadata = sanitizeMetadata({
         checkoutSessionId,
         orderIds,
@@ -193,48 +232,88 @@ export const createCheckoutSession = async (req, res) => {
         orderCount: orders.length
       });
 
-      const response = await paystack.transaction.initialize({
-        email,
-        amount: Math.round(buyerTotalAmount * 100),
-        currency: orders[0].currency || 'GHS',
-        reference: `zuba_multi_${checkoutSessionId}`,
-        callback_url: callbackUrl || `${process.env.FRONTEND_URL}/payment/success?session=${checkoutSessionId}`,
-        metadata
+      // ✅ Use the callback URL from request or construct deep link
+      const finalCallbackUrl = `zuba://payment/success?session=${checkoutSessionId}`;
+
+      console.log('💳 Initializing Paystack transaction:', {
+        email: realEmail,
+        amount: buyerTotalAmount,
+        amountInKobo: Math.round(buyerTotalAmount * 100),
+        orderCount: orders.length,
+        checkoutSessionId,
+        callbackUrl: finalCallbackUrl
       });
 
-      if (!response.data) throw new Error('Failed to initialize Paystack transaction');
+      // Initialize Paystack transaction with REAL email
+      const response = await paystack.transaction.initialize({
+        email: realEmail,  // ✅ Use real email from database
+        amount: Math.round(buyerTotalAmount * 100), // Convert to pesewas/kobo
+        currency: 'GHS',
+        callback_url: finalCallbackUrl,
+        metadata: {
+          ...metadata,
+          buyerEmail: realEmail  // Include in metadata too
+        }
+      });
 
+      if (!response.data) {
+        throw new Error('Failed to initialize Paystack transaction');
+      }
+
+      console.log('✅ Paystack transaction initialized:', {
+        reference: response.data.reference,
+        authorizationUrl: response.data.authorization_url
+      });
+
+      // ✅ Create payment records - ONE per order with correct amounts
       const payments = await Promise.all(orders.map(async (order) => {
-        const transferFee = getTransferFee(order.store.user.payoutPreference);  // ✅ Inside loop
-        
+        // Proportional fees per order
+        const orderProportion = order.totalAmount / subtotal;
+        const orderFees = {
+          platformFee: fees.platformFee * orderProportion,
+          paystackFee: fees.paystackFee * orderProportion,
+          buyerTotal: fees.buyerTotal * orderProportion,
+          netSeller: fees.netSellerPayout * orderProportion
+        };
+
+        console.log(`💰 Creating payment for order ${order.id}:`, {
+          orderAmount: order.totalAmount,
+          platformFee: orderFees.platformFee,
+          paystackFee: orderFees.paystackFee,
+          buyerTotal: orderFees.buyerTotal,
+          netSellerPayout: orderFees.netSeller
+        });
+
         const payment = await tx.payment.create({
           data: {
             orderId: order.id,
-            amount: buyerTotalAmount,
+            amount: orderFees.buyerTotal,
             currency: order.currency || 'GHS',
             gateway: 'paystack',
             gatewayRef: response.data.reference,
             gatewayStatus: 'pending',
             status: 'PENDING',
-            metadata: { 
-              ...metadata, 
-              authorizationUrl: response.data.authorization_url, 
-              multiStore: true,
-              paystackCollectionFee,
+            metadata: {
+              ...metadata,
+              authorizationUrl: response.data.authorization_url,
+              multiStore: orders.length > 1,
+              fees: orderFees,
               orderSubtotal: order.totalAmount,
-              transferFee
+              totalBuyerAmount: buyerTotalAmount,
+              orderProportion
             }
           }
         });
 
+        // Update order with payment info
         await tx.order.update({
           where: { id: order.id },
           data: { 
             paymentId: payment.id, 
             checkoutSession: checkoutSessionId, 
-            paystackFee: paystackCollectionFee, 
-            sellerPayoutPreference: order.store.user.payoutPreference, 
-            transferFee  
+            paystackFee: orderFees.paystackFee,
+            platformFee: orderFees.platformFee,
+            sellerPayoutPreference: order.store.user.payoutPreference
           }
         });
 
@@ -247,12 +326,13 @@ export const createCheckoutSession = async (req, res) => {
         reference: response.data.reference, 
         totalAmount: buyerTotalAmount,
         subtotal,
-        paystackCollectionFee, 
+        paystackFee: fees.paystackFee, 
         orders, 
         payments 
       };
     });
 
+    // Clear cache
     for (const order of result.orders) {
       await cache.del(`order:${order.id}:user:${userId}`);
       await cache.del(`order:${order.id}:user:${order.store.userId}`);
@@ -260,20 +340,26 @@ export const createCheckoutSession = async (req, res) => {
       await cache.del(`store:${order.storeId}:orders`);
     }
 
+    console.log('✅ Checkout session created successfully:', {
+      reference: result.reference,
+      totalAmount: result.totalAmount,
+      orderCount: result.orders.length
+    });
+
     res.status(200).json({
       success: true,
       message: 'Checkout session created successfully.',
       data: {
         checkoutSessionId: result.checkoutSessionId,
         authorizationUrl: result.authorizationUrl,
-        reference: result.reference,
+        reference: result.reference, // ✅ This is the Paystack reference
         orderSubtotal: result.subtotal,
-        paystackCollectionFee: result.paystackCollectionFee,  // ✅ Correct property name
+        paystackFee: result.paystackFee,  
         totalAmount: result.totalAmount,
         orderCount: result.orders.length,
         breakdown: {
           subtotal: result.subtotal,
-          collectionFee: result.paystackCollectionFee,
+          collectionFee: result.paystackFee,
           buyerTotal: result.totalAmount
         },
         orders: result.orders.map(o => ({ 
@@ -282,23 +368,47 @@ export const createCheckoutSession = async (req, res) => {
           storeName: o.store.name, 
           amount: o.totalAmount 
         })),
-        payments: result.payments.map(p => ({ paymentId: p.id, orderId: p.orderId }))
+        payments: result.payments.map(p => ({ 
+          paymentId: p.id, 
+          orderId: p.orderId,
+          amount: p.amount,
+          gatewayRef: p.gatewayRef
+        }))
       }
     });
   } catch (error) {
-    console.error('Error creating checkout session:', error);
-    const message = ['Invalid orders', 'not found', 'pending payments'].some(msg => error.message.includes(msg)) ? error.message : 'Failed to create checkout session';
-    res.status(500).json({ success: false, message });
+    console.error('❌ Error creating checkout session:', error);
+    const message = ['Invalid orders', 'not found', 'pending payments'].some(msg => 
+      error.message.includes(msg)
+    ) ? error.message : 'Failed to create checkout session';
+    
+    res.status(500).json({ 
+      success: false, 
+      message,
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
+
 export const initiatePayment = async (req, res) => {
   try {
-    const { orderId, email, amount, currency = 'GHS' } = req.body; 
-    const userId = req.user.userId;
+    const { orderId, amount, currency = 'GHS' } = req.body;
+  const userId = req.user.userId;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true }
+    });
+    if (!user || !user.email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'User email not found. Please update your profile.' 
+      });
+    }
+    const realEmail = user.email.toLowerCase().trim();
 
-    if (!orderId || !email || !amount) return res.status(400).json({ success: false, message: 'Order ID, email, and amount are required.' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, message: 'Valid email is required.' });
+    if (!orderId || !realEmail || !amount) return res.status(400).json({ success: false, message: 'Order ID, email, and amount are required.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(realEmail)) return res.status(400).json({ success: false, message: 'Valid email is required.' });
     if (amount <= 0 || amount > 10000000) return res.status(400).json({ success: false, message: 'Invalid payment amount.' });
 
     const result = await prisma.$transaction(async (tx) => {
@@ -334,25 +444,28 @@ export const initiatePayment = async (req, res) => {
       const existingPayment = await tx.payment.findFirst({ where: { orderId, status: 'PENDING' } });
       if (existingPayment) throw new Error('A pending payment already exists for this order.');
 
-      const paystackCollectionFee = calculatePaystackCollectionFee(order.totalAmount);
-      const buyerTotalAmount = parseFloat((order.totalAmount + paystackCollectionFee).toFixed(2));  // ✅ Define buyerTotalAmount
-      const transferFee = getTransferFee(order.store.user.payoutPreference);
+      const fees = calculateFees(order.totalAmount);
+      const buyerTotalAmount = fees.buyerTotal;
 
       const checkoutSessionId = `cs_single_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
-      const metadata = sanitizeMetadata({ 
-        orderId, 
-        buyerId: userId, 
-        sellerId: order.store.userId, 
-        checkoutSessionId
+      const metadata = sanitizeMetadata({
+        orderId,
+        buyerId: userId,
+        sellerId: order.store.userId,
+        checkoutSessionId,
+        platformFee: fees.platformFee,
+        netSellerPayout: fees.netSellerPayout
       });
 
       const response = await paystack.transaction.initialize({
-        email,
+        email: realEmail,
         amount: Math.round(buyerTotalAmount * 100),
         currency,
-        reference: `zuba_${orderId}_${Date.now()}`,
-        callback_url: `${process.env.FRONTEND_URL}/payment/success?session=${checkoutSessionId}&orderId=${orderId}`,
-        metadata
+        callback_url: `zuba://payment/success?session=${checkoutSessionId}&orderId=${orderId}`,
+        metadata: {
+          ...metadata,
+          buyerEmail: realEmail
+        }
       });
 
       if (!response.data) throw new Error('Failed to initialize Paystack transaction');
@@ -366,13 +479,12 @@ export const initiatePayment = async (req, res) => {
           gatewayRef: response.data.reference,
           gatewayStatus: 'pending',
           status: 'PENDING',
-          metadata: { 
-            ...metadata, 
-            authorizationUrl: response.data.authorization_url, 
+          metadata: {
+            ...metadata,
+            authorizationUrl: response.data.authorization_url,
             createdAt: new Date().toISOString(),
-            paystackCollectionFee,
+            paystackFee: fees.paystackFee,
             orderSubtotal: order.totalAmount,
-            transferFee
           }
         }
       });
@@ -382,9 +494,8 @@ export const initiatePayment = async (req, res) => {
         data: { 
           paymentId: payment.id, 
           checkoutSession: checkoutSessionId, 
-          paystackFee: paystackCollectionFee,
-          sellerPayoutPreference: order.store.user.payoutPreference,  // ✅ Add seller payout preference
-          transferFee
+          paystackFee: fees.paystackFee,
+          sellerPayoutPreference: order.store.user.payoutPreference, 
         } 
       });
 
@@ -394,7 +505,7 @@ export const initiatePayment = async (req, res) => {
         checkoutSessionId, 
         authorizationUrl: response.data.authorization_url, 
         reference: response.data.reference,
-        paystackCollectionFee,
+        paystackFee: fees.paystackFee,
         buyerTotalAmount
       };
     });
@@ -411,11 +522,11 @@ export const initiatePayment = async (req, res) => {
         reference: result.reference,
         paymentId: result.payment.id,
         orderSubtotal: result.order.totalAmount,
-        paystackCollectionFee: result.paystackCollectionFee,  // ✅ Correct property name
+        paystackFee: result.paystackFee,
         totalAmount: result.buyerTotalAmount,
         breakdown: {
           subtotal: result.order.totalAmount,
-          collectionFee: result.paystackCollectionFee,
+          collectionFee: result.paystackFee,
           buyerTotal: result.buyerTotalAmount
         }
       }
@@ -430,18 +541,19 @@ export const initiatePayment = async (req, res) => {
 export const handlePaystackWebhook = async (req, res) => {
   try {
     const { event, data } = req.body;
+    console.log('Webhook received:', { event, reference: data?.reference, metadata: data?.metadata });
 
     function verifyPaystackSignature(req) {
       const signature = req.headers['x-paystack-signature'];
       if (!signature) return false;
 
       const payload = req.rawBody || JSON.stringify(req.body);
-      
+
       const hash = crypto
         .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY)
         .update(payload)
         .digest('hex');
-      
+
       return timingSafeCompare(hash, signature);
     }
 
@@ -472,7 +584,15 @@ async function handleSuccessfulCharge(data) {
   const { reference, amount: gatewayAmountKobo, metadata } = data;
   const { orderId, checkoutSessionId, orderIds } = metadata;
 
-  const isMultiStore = orderIds && Array.isArray(orderIds);
+  // Find payments using the helper function that checks both custom and Paystack refs
+  const payments = await findPaymentsByPaystackRef(reference);
+
+  if (payments.length === 0) {
+    console.log(`Webhook: Payment not found for reference ${reference}`);
+    return;
+  }
+
+  const isMultiStore = payments.length > 1 || (orderIds && Array.isArray(orderIds));
 
   if (isMultiStore) {
     await handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, checkoutSessionId, data);
@@ -481,10 +601,50 @@ async function handleSuccessfulCharge(data) {
   }
 }
 
+// Helper function to find payments by Paystack reference
+async function findPaymentsByPaystackRef(paystackRef) {
+  return await prisma.payment.findMany({
+    where: { gatewayRef: paystackRef }, // Now using Paystack reference directly
+    include: {
+      order: {
+        include: {
+          store: { include: { user: true } },
+          buyer: true,
+          items: { include: { product: true } }
+        }
+      }
+    }
+  });
+}
+
 async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, gatewayData) {
   try {
     await prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.findFirst({
+      // Lock the payment row to prevent race conditions
+      const payment = await tx.$queryRaw`
+        SELECT * FROM "Payment" 
+        WHERE "gatewayRef" = ${reference} 
+        FOR UPDATE
+      `;
+
+      if (!payment || payment.length === 0) {
+        console.log(`Webhook: Payment not found for reference ${reference}`);
+        return;
+      }
+
+      const paymentRecord = payment[0];
+    
+    if (paymentRecord.status === 'SUCCESS') {
+      console.log(`Webhook: Duplicate success - skipping`);
+      return;
+    }
+    
+    if (paymentRecord.status === 'FAILED') {
+      console.log(` WEBHOOK RETRY: Recovering FAILED payment`);
+    }
+
+      // Fetch full payment with relations
+      const fullPayment = await tx.payment.findFirst({
         where: { gatewayRef: reference },
         include: { 
           order: { 
@@ -497,95 +657,89 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
         }
       });
 
-      if (!payment) {
-        console.log(`Webhook: Payment not found for reference ${reference}`);
-        return;
-      }
-
-      if (payment.status === 'SUCCESS') {
-        console.log(`Webhook: Duplicate success event for reference ${reference}`);
-        return;
-      }
-
-      // Verify amount (buyer pays subtotal + Paystack collection fee)
-      const gatewayAmount = gatewayAmountKobo / 100;
-      const paystackCollectionFee = payment.metadata?.paystackCollectionFee || payment.order.paystackFee || 0;
-      const expectedTotal = parseFloat((payment.order.totalAmount + paystackCollectionFee).toFixed(2));
-
-      if (Math.abs(gatewayAmount - expectedTotal) > 0.01) {
-        console.error(`Amount mismatch for order ${orderId}. Expected: ${expectedTotal}, Got: ${gatewayAmount}`);
-        
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: {
-            gatewayStatus: 'failed',
-            status: 'FAILED',
-            metadata: { 
-              ...payment.metadata, 
-              error: 'Amount mismatch',
-              expected: expectedTotal,
-              received: gatewayAmount
+      if (!fullPayment) return;
+      const gatewayAmount = parseFloat((gatewayAmountKobo / 100).toFixed(2))
+      
+        const expectedTotal = fullPayment.amount;
+      if (Math.abs(gatewayAmount - expectedTotal) > AMOUNT_TOLERANCE) {
+        if (paymentRecord.status === 'FAILED') {
+          console.log(`WEBHOOK OVERRIDE: Recovering FAILED payment `);
+        } else {
+          await tx.payment.update({
+            where: { id: fullPayment.id },
+            data: {
+              gatewayStatus: 'failed',
+              status: 'FAILED',
+              metadata: { 
+                ...fullPayment.metadata, 
+                error: 'Amount mismatch',
+                expected: expectedTotal,
+                received: gatewayAmount,
+                tolerance: AMOUNT_TOLERANCE
+              }
             }
-          }
-        });
-        return;
+          });
+          console.log(` Payment marked FAILED due to amount mismatch`);
+          return;
+        }
+      } else {
+        console.log(`Amount validation PASSED`);
       }
 
-      // Calculate seller payouts and commission
-      const payoutCalculation = await calculateSellerPayouts(payment.order);
+      const payoutCalculation = await calculateSellerPayouts(fullPayment.order);
 
       // Update payment status
       await tx.payment.update({
-        where: { id: payment.id },
+        where: { id: fullPayment.id },
         data: {
           gatewayStatus: 'success',
           status: 'SUCCESS',
           metadata: { 
-            ...payment.metadata, 
+            ...fullPayment.metadata, 
             gateway_response: gatewayData,
             processedAt: new Date().toISOString()
           }
         }
       });
 
-      // Update order with commission total and paidAt
+      // Update order
       await tx.order.update({
         where: { id: orderId },
         data: {
-          status: 'CONFIRMED',
+          status: 'PAID',
           paymentStatus: 'SUCCESS',
           commissionTotal: payoutCalculation.totalCommission,
           paidAt: new Date()
         }
       });
 
-  
+      // Update order items with seller payout
       for (const itemCalc of payoutCalculation.items) {
         await tx.orderItem.update({
           where: { id: itemCalc.itemId },
           data: {
-            sellerPayout: itemCalc.grossSellerPayout 
+            sellerPayout: itemCalc.sellerPayout
           }
         });
       }
 
-      // Create escrow with NET payout (after transfer fee)
+      // Create escrow
       const escrowReleaseDate = new Date();
       escrowReleaseDate.setDate(escrowReleaseDate.getDate() + ESCROW_HOLD_DAYS);
 
       const escrow = await tx.escrow.create({
         data: {
-          paymentId: payment.id,
+          paymentId: fullPayment.id,
           orderId,
-          amountHeld: payoutCalculation.netSellerPayout, 
-          currency: payment.currency,
+          amountHeld: payoutCalculation.netSellerPayout,
+          currency: fullPayment.currency,
           releaseDate: escrowReleaseDate,
-          releaseStatus: 'PENDING'
+          releaseStatus: 'HELD'
         }
       });
 
       await tx.payment.update({
-        where: { id: payment.id },
+        where: { id: fullPayment.id },
         data: { escrowId: escrow.id }
       });
 
@@ -594,22 +748,33 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
         data: { escrowId: escrow.id }
       });
 
-      // Award points based on subtotal only (not including Paystack fee)
-      const pointsToAward = Math.floor(payment.order.totalAmount / POINTS_PER_CURRENCY_UNIT);
+
+      // Award points
+      const pointsToAward = Math.floor(fullPayment.order.totalAmount / POINTS_PER_CURRENCY_UNIT);
+      
       if (pointsToAward > 0) {
-        await tx.user.update({
-          where: { id: payment.order.buyerId },
-          data: {
-            points: { increment: pointsToAward }
-          }
-        });
+        try {
+          await tx.user.update({
+            where: { id: fullPayment.order.buyerId },
+            data: {
+              points: { increment: pointsToAward }
+            }
+          });
+          
+          // Invalidate points cache
+          await cache.del(`user:${fullPayment.order.buyerId}:points`);
+        } catch (pointsError) {
+          console.error(`Failed to award points to user ${fullPayment.order.buyerId}:`, pointsError);
+        }
+      } else {
+        console.log(`No points to award for order ${orderId} (amount: ${fullPayment.order.totalAmount})`);
       }
 
       // Send notifications (non-blocking)
       setImmediate(async () => {
         try {
           await sendNotification(
-            payment.order.buyerId,
+            fullPayment.order.buyerId,
             'Payment Successful',
             `Your payment for order #${orderId} was successful.`,
             'payment',
@@ -617,8 +782,8 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
           );
 
           await sendEmailNotification({
-            to: payment.order.buyer.email,
-            toName: payment.order.buyer.firstName,
+            to: fullPayment.order.buyer.email,
+            toName: fullPayment.order.buyer.firstName,
             subject: 'Payment Successful',
             template: 'generic',
             templateData: {
@@ -630,7 +795,7 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
           });
 
           await sendNotification(
-            payment.order.store.userId,
+            fullPayment.order.store.userId,
             'New Order Confirmed',
             `You have a new confirmed order #${orderId}.`,
             'order_confirmed',
@@ -638,13 +803,13 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
           );
 
           await sendEmailNotification({
-            to: payment.order.store.user.email,
-            toName: payment.order.store.user.firstName,
+            to: fullPayment.order.store.user.email,
+            toName: fullPayment.order.store.user.firstName,
             subject: 'New Order Confirmed',
             template: 'generic',
             templateData: {
               title: 'New Order Confirmed',
-              message: `You have a new confirmed order #${orderId}. Net payout: ${payoutCalculation.netSellerPayout.toFixed(2)} ${payment.currency}`,
+              message: `You have a new confirmed order #${orderId}. Net payout: ${payoutCalculation.netSellerPayout.toFixed(2)} ${fullPayment.currency}`,
               ctaText: 'View Order',
               ctaUrl: `${process.env.FRONTEND_URL}/seller/orders/${orderId}`
             }
@@ -693,6 +858,14 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
 async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, checkoutSessionId, gatewayData) {
   try {
     await prisma.$transaction(async (tx) => {
+      // Lock all payment rows to prevent race conditions
+      await tx.$executeRaw`
+        SELECT * FROM "Payment" 
+        WHERE "gatewayRef" = ${reference} 
+        AND "orderId" = ANY(${orderIds}::text[])
+        FOR UPDATE
+      `;
+
       const payments = await tx.payment.findMany({
         where: { 
           gatewayRef: reference,
@@ -710,23 +883,25 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
       });
 
       if (payments.length === 0) {
-        console.log(`Webhook: No payments found for reference ${reference}`);
+        console.log(`Webhook: No payments found for reference `);
         return;
       }
 
       const successfulPayments = payments.filter(p => p.status === 'SUCCESS');
       if (successfulPayments.length === payments.length) {
-        console.log(`Webhook: All payments already processed for reference ${reference}`);
+        console.log(`Webhook: All payments already processed for reference `);
         return;
       }
 
-      // Verify total amount (buyer pays subtotal + Paystack collection fee)
+      // Verify total amount
       const gatewayAmount = gatewayAmountKobo / 100;
-      const paystackCollectionFee = payments[0].metadata?.paystackCollectionFee || 0;  // ✅ Get from first payment
-      const orderSubtotals = payments.reduce((sum, p) => sum + p.order.totalAmount, 0);  // ✅ Sum all orders
-      const expectedTotal = parseFloat((orderSubtotals + paystackCollectionFee).toFixed(2));  // ✅ Correct calculation
+      const paystackFee = payments[0].metadata?.paystackFee || 0;
+      const orderSubtotals = payments.reduce((sum, p) => sum + p.order.totalAmount, 0);
+                const expectedTotal = parseFloat(
+            payments.reduce((sum, p) => sum + p.amount, 0).toFixed(2)
+              );
 
-      if (Math.abs(gatewayAmount - expectedTotal) > 0.01) {
+      if (Math.abs(gatewayAmount - expectedTotal) > AMOUNT_TOLERANCE) {
         console.error(`Amount mismatch for checkout session ${checkoutSessionId}. Expected: ${expectedTotal}, Got: ${gatewayAmount}`);
         
         for (const payment of payments) {
@@ -755,7 +930,7 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
 
       for (const payment of payments) {
         if (payment.status !== 'SUCCESS') {
-          // Calculate seller payouts and commission for this order
+          // Calculate seller payouts
           const payoutCalculation = await calculateSellerPayouts(payment.order);
 
           // Update payment
@@ -772,28 +947,28 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
             }
           });
 
-          // Update order with commission total
+          // Update order
           await tx.order.update({
             where: { id: payment.orderId },
             data: {
-              status: 'CONFIRMED',
+              status: 'PAID',
               paymentStatus: 'SUCCESS',
               commissionTotal: payoutCalculation.totalCommission,
               paidAt: new Date()
             }
           });
 
-          // Update each order item with GROSS seller payout
+          // Update order items
           for (const itemCalc of payoutCalculation.items) {
             await tx.orderItem.update({
               where: { id: itemCalc.itemId },
               data: {
-                sellerPayout: itemCalc.grossSellerPayout  
+                sellerPayout: itemCalc.sellerPayout
               }
-            });
+});
           }
 
-          // Create escrow with NET payout
+          // Create escrow
           const escrowReleaseDate = new Date();
           escrowReleaseDate.setDate(escrowReleaseDate.getDate() + ESCROW_HOLD_DAYS);
 
@@ -801,10 +976,10 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
             data: {
               paymentId: payment.id,
               orderId: payment.orderId,
-              amountHeld: payoutCalculation.netSellerPayout,  // ✅ Net amount
+              amountHeld: payoutCalculation.netSellerPayout,
               currency: payment.currency,
               releaseDate: escrowReleaseDate,
-              releaseStatus: 'PENDING'
+              releaseStatus: 'HELD'
             }
           });
 
@@ -818,11 +993,10 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
             data: { escrowId: escrow.id }
           });
 
-          // Accumulate subtotal for points (not including fees)
           newlyProcessedSubtotal += payment.order.totalAmount;
           buyerId = payment.order.buyerId;
 
-          // Send seller notifications (non-blocking)
+          // Send seller notifications
           setImmediate(async () => {
             try {
               await sendNotification(
@@ -854,20 +1028,35 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
         }
       }
 
-      // Award points once for the buyer based on subtotals only (not including Paystack fee)
+
+      // Award points
       if (buyerId && newlyProcessedSubtotal > 0) {
         const pointsToAward = Math.floor(newlyProcessedSubtotal / POINTS_PER_CURRENCY_UNIT);
+        console.log(`Awarding ${pointsToAward} points to buyer ${buyerId} for multi-store payment (subtotal: ${newlyProcessedSubtotal})`);
+        
         if (pointsToAward > 0) {
-          await tx.user.update({
-            where: { id: buyerId },
-            data: {
-              points: { increment: pointsToAward }
-            }
-          });
+          try {
+            await tx.user.update({
+              where: { id: buyerId },
+              data: {
+                points: { increment: pointsToAward }
+              }
+            });
+            console.log(`Successfully awarded ${pointsToAward} points to user ${buyerId} for multi-store payment`);
+            
+            // Invalidate points cache
+            await cache.del(`user:${buyerId}:points`);
+            console.log(`Invalidated points cache for user ${buyerId}`);
+          } catch (pointsError) {
+            console.error(`Failed to award points to user ${buyerId}:`, pointsError);
+            // Don't fail the entire transaction for points error
+          }
+        } else {
+          console.log(`No points to award for multi-store payment (subtotal: ${newlyProcessedSubtotal})`);
         }
       }
 
-      // Send consolidated buyer notification (non-blocking)
+      // Send buyer notification
       if (buyerId) {
         const buyerPayment = payments[0];
         setImmediate(async () => {
@@ -887,7 +1076,7 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
               template: 'generic',
               templateData: {
                 title: 'Payment Successful',
-                message: `Your payment for ${payments.length} order(s) was successful. Subtotal: ${orderSubtotals.toFixed(2)} ${payments[0].currency} + Fee: ${paystackCollectionFee.toFixed(2)} ${payments[0].currency}`,  // ✅ Fixed variable name
+                message: `Your payment for ${payments.length} order(s) was successful. Subtotal: ${orderSubtotals.toFixed(2)} ${payments[0].currency} + Fee: ${paystackFee.toFixed(2)} ${payments[0].currency}`,
                 ctaText: 'View Orders',
                 ctaUrl: `${process.env.FRONTEND_URL}/orders`
               }
@@ -1394,8 +1583,9 @@ export const getUserPayments = async (req, res) => {
 };
 
 export const verifyPayment = async (req, res) => {
+  const { reference } = req.params;
+  
   try {
-    const { reference } = req.params;
     const userId = req.user.userId;
 
     if (!reference || typeof reference !== 'string') {
@@ -1404,7 +1594,6 @@ export const verifyPayment = async (req, res) => {
         message: 'Valid reference is required.'
       });
     }
-
     const verification = await paystack.transaction.verify(reference);
 
     if (!verification.data) {
@@ -1413,8 +1602,7 @@ export const verifyPayment = async (req, res) => {
         message: 'Payment verification failed.'
       });
     }
-
-    const payments = await prisma.payment.findMany({
+    let payments = await prisma.payment.findMany({
       where: { gatewayRef: reference },
       include: {
         order: {
@@ -1426,13 +1614,55 @@ export const verifyPayment = async (req, res) => {
       }
     });
 
+    // If not found with the given reference, try searching by checkout session
+    if (payments.length === 0 && verification.data.metadata?.checkoutSessionId) {
+      console.log('No payment found with reference, searching by checkoutSessionId:', 
+        verification.data.metadata.checkoutSessionId);
+      
+      const orders = await prisma.order.findMany({
+        where: { 
+          checkoutSession: verification.data.metadata.checkoutSessionId 
+        }
+      });
+      
+      if (orders.length > 0) {
+        const orderIds = orders.map(o => o.id);
+        payments = await prisma.payment.findMany({
+          where: { orderId: { in: orderIds } },
+          include: {
+            order: {
+              include: {
+                buyer: true,
+                store: { include: { user: true } }
+              }
+            }
+          }
+        });
+        
+        //Update the gatewayRef to Paystack's reference
+        if (payments.length > 0) {
+          await prisma.payment.updateMany({
+            where: { id: { in: payments.map(p => p.id) } },
+            data: { gatewayRef: verification.data.reference }
+          });
+        }
+      }
+    }
+
     if (payments.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Payment record not found.'
+        message: 'Payment record not found.',
+        debug: {
+          searchedReference: reference,
+          paystackReference: verification.data.reference,
+          paystackStatus: verification.data.status,
+          metadata: verification.data.metadata
+        }
       });
     }
 
+    // Step 3: Authorization check
     const isAuthorized = payments.some(p => p.order.buyerId === userId);
     if (!isAuthorized) {
       return res.status(403).json({
@@ -1441,6 +1671,159 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
+    // Step 4: Process payment based on Paystack status
+    const paystackStatus = verification.data.status;
+    const needsUpdate = payments.some(p => p.status === 'PENDING');
+
+    if (needsUpdate) {
+      if (paystackStatus === 'success') {
+        await handleSuccessfulCharge(verification.data);
+      } else if (paystackStatus === 'failed' || paystackStatus === 'abandoned') {
+        await handleFailedCharge(verification.data);
+      } else {
+        await handleFailedCharge(verification.data);
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } else {
+      console.log(' Payment already processed. Current status:', payments[0].status);
+    }
+
+    // Step 5: Fetch updated payment records
+    const updatedPayments = await prisma.payment.findMany({
+      where: { 
+        OR: [
+          { gatewayRef: reference },
+          { gatewayRef: verification.data.reference }
+        ]
+      },
+      include: {
+        order: {
+          include: {
+            buyer: {
+              select: {
+                id: true,
+                firstName: true,
+                email: true
+              }
+            },
+            store: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    email: true
+                  }
+                }
+              }
+            },
+            items: {
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    images: true
+                  }
+                }
+              }
+            }
+          }
+        },
+        escrow: true
+      }
+    });
+
+       // Step 6: Send notifications based on final status
+    const finalStatus = updatedPayments[0]?.status;
+    
+    if (finalStatus === 'SUCCESS') {
+      for (const payment of updatedPayments) {
+          setImmediate(async () => {
+            try {
+              await sendNotification(
+                payment.order.buyerId,
+                'Payment Successful',
+                updatedPayments.length > 1
+                  ? `Your payment for ${updatedPayments.length} orders was successful.`
+                  : `Your payment for order #${payment.orderId} was successful.`,
+                'payment',
+                { orderId: payment.orderId }
+              );
+
+              await sendEmailNotification({
+                to: payment.order.buyer.email,
+                toName: payment.order.buyer.firstName,
+                subject: 'Payment Successful',
+                template: 'generic',
+                templateData: {
+                  title: 'Payment Successful',
+                  message: updatedPayments.length > 1
+                    ? `Your payment for ${updatedPayments.length} orders was successful.`
+                    : `Your payment for order #${payment.orderId} was successful.`,
+                  ctaText: 'View Order',
+                  ctaUrl: `${process.env.FRONTEND_URL}/orders/${payment.orderId}`
+                }
+              });
+
+              // Seller new order notification
+              await sendNotification(
+                payment.order.store.userId,
+                'New Order Confirmed',
+                `You have a new confirmed order #${payment.orderId}.`,
+                'order_confirmed',
+                { orderId: payment.orderId }
+              );
+
+              await sendEmailNotification({
+                to: payment.order.store.user.email,
+                toName: payment.order.store.user.firstName,
+                subject: 'New Order Confirmed',
+                template: 'generic',
+                templateData: {
+                  title: 'New Order Confirmed',
+                  message: `You have a new confirmed order #${payment.orderId}.`,
+                  ctaText: 'View Order',
+                  ctaUrl: `${process.env.FRONTEND_URL}/seller/orders/${payment.orderId}`
+                }
+              });
+            } catch (error) {
+              console.error('Error sending success notifications:', error);
+            }
+          });
+        }
+    } else if (finalStatus === 'FAILED') {
+      // Failure notifications
+      for (const payment of updatedPayments) {
+        setImmediate(async () => {
+          try {
+            await sendNotification(
+              payment.order.buyerId,
+              'Payment Failed',
+              `Your payment for order #${payment.orderId} failed. Please try again.`,
+              'payment_failed',
+              { orderId: payment.orderId }
+            );
+            await sendEmailNotification({
+              to: payment.order.buyer.email,
+              toName: payment.order.buyer.firstName,
+              subject: 'Payment Failed',
+              template: 'generic',
+              templateData: {
+                title: 'Payment Failed',
+                message: `Your payment for order #${payment.orderId} failed. Please try again.`,
+                ctaText: 'Retry Payment',
+                ctaUrl: `${process.env.FRONTEND_URL}/checkout`
+              }
+            });
+          } catch (error) {
+            console.error('Error sending failure notifications:', error);
+          }
+        });
+      }
+    }
+
+    // Step 7: Sanitize and return data
     const sanitizedGatewayData = {
       status: verification.data.status,
       amount: verification.data.amount,
@@ -1449,23 +1832,31 @@ export const verifyPayment = async (req, res) => {
       paid_at: verification.data.paid_at,
     };
 
+    console.log(`✅ VERIFY COMPLETE [${reference}]: Final status=${updatedPayments[0]?.status}, payments=${updatedPayments.length}`);
+    
     res.status(200).json({
       success: true,
       data: {
-        payments: payments.map(p => ({
+        payments: updatedPayments.map(p => ({
           ...p,
           metadata: {
             ...p.metadata,
             gateway_response: undefined
           }
         })),
-        gatewayData: sanitizedGatewayData,
-        isMultiStore: payments.length > 1
+        gatewayData: {
+          status: verification.data.status,
+          amount: verification.data.amount,
+          currency: verification.data.currency,
+          reference: verification.data.reference,
+          paid_at: verification.data.paid_at,
+        },
+        isMultiStore: updatedPayments.length > 1
       }
     });
 
   } catch (error) {
-    console.error('Error verifying payment:', error);
+    console.error('❌ Error verifying payment:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to verify payment'
@@ -1775,6 +2166,96 @@ export const getAllPayments = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch payments'
+    });
+  }
+};
+
+export const markPaymentAsFailed = async (req, res) => {
+  try {
+    const { reference } = req.params;
+    const userId = req.user.userId;
+
+    if (!reference || typeof reference !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid reference is required.'
+      });
+    }
+
+    const payments = await prisma.payment.findMany({
+      where: { gatewayRef: reference },
+      include: {
+        order: {
+          select: {
+            buyerId: true,
+            storeId: true,
+            status: true
+          }
+        }
+      }
+    });
+
+    if (payments.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found.'
+      });
+    }
+
+    // Verify user authorization
+    const isAuthorized = payments.some(p => p.order.buyerId === userId);
+    if (!isAuthorized) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized to modify this payment.'
+      });
+    }
+
+    // Update all payments with this reference to FAILED
+    await prisma.$transaction(async (tx) => {
+      for (const payment of payments) {
+        if (payment.status === 'PENDING') {
+          // Update payment status
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: 'FAILED',
+              gatewayStatus: 'cancelled',
+              metadata: {
+                ...payment.metadata,
+                cancelledAt: new Date().toISOString(),
+                cancelledBy: 'user'
+              }
+            }
+          });
+
+          // Update order payment status and order status
+          await tx.order.update({
+            where: { id: payment.orderId },
+            data: { 
+              paymentStatus: 'FAILED',
+              status: 'PENDING_PAYMENT'
+            }
+          });
+        }
+      }
+    });
+
+    // Clear caches
+    for (const payment of payments) {
+      await cache.del(`order:${payment.orderId}:user:${userId}`);
+      await cache.del(`user:${userId}:orders`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment marked as failed successfully.'
+    });
+  } catch (error) {
+    console.error('Error marking payment as failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update payment status'
     });
   }
 };

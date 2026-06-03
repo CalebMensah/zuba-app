@@ -1,0 +1,2 @@
+export const PLATFORM_FEE_PERCENT = 0.03;
+export const PAYSTACK_COLLECTION_PERCENT = 1.95;

@@ -1,47 +1,42 @@
 // hooks/useChatRoom.ts
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useChat } from './useChat';
+import { useChatContext } from '../context/ChatContext';
 import { SendMessageParams } from '../types/chat';
 
 interface UseChatRoomOptions {
   chatRoomId: string;
   autoJoin?: boolean;
   autoMarkAsRead?: boolean;
+  currentUserId?: string;
 }
 
 interface UseChatRoomReturn {
-  // State from main hook
-  messages: ReturnType<typeof useChat>['messages'];
-  typingUsers: ReturnType<typeof useChat>['typingUsers'];
-  onlineUsers: ReturnType<typeof useChat>['onlineUsers'];
+  messages: ReturnType<typeof useChatContext>['messages'];
+  typingUsers: ReturnType<typeof useChatContext>['typingUsers'];
+  onlineUsers: ReturnType<typeof useChatContext>['onlineUsers'];
   isLoading: boolean;
   error: string | null;
-  
-  // Actions
   sendMessage: (content: string, media?: SendMessageParams['media']) => Promise<void>;
   replyToMessage: (messageId: string, content: string) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   startTyping: () => void;
   stopTyping: () => void;
+  fetchMessages: (chatRoomId: string) => Promise<void>;
   loadMoreMessages: () => Promise<void>;
   hasMoreMessages: boolean;
 }
 
-export const useChatRoom = (
-  options: UseChatRoomOptions
-): UseChatRoomReturn => {
+export const useChatRoom = (options: UseChatRoomOptions): UseChatRoomReturn => {
   const { chatRoomId, autoJoin = true, autoMarkAsRead = true } = options;
-  
-  const chat = useChat({
-    apiUrl: process.env.EXPO_PUBLIC_API_URL,      // For REST API: https://...ngrok.../api
-    socketUrl: process.env.EXPO_PUBLIC_SOCKET_URL, // For Socket.IO: https://...ngrok...
-    autoConnect: true
-  });
+
+  // ✅ consume shared context instead of creating a new useChat instance
+  const chat = useChatContext();
 
   const [isTyping, setIsTyping] = useState(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Join room on mount, leave on unmount
   useEffect(() => {
     if (autoJoin && chatRoomId && chat.isConnected) {
       chat.joinRoom(chatRoomId);
@@ -55,10 +50,11 @@ export const useChatRoom = (
     };
   }, [chatRoomId, autoJoin, chat.isConnected]);
 
+  // Auto mark messages as read using currentUserId from context
   useEffect(() => {
     if (autoMarkAsRead && chatRoomId && chat.messages.length > 0) {
       const unreadMessageIds = chat.messages
-        .filter(msg => !msg.isRead && msg.senderId !== chat.currentRoom?.participants[0]?.userId)
+        .filter(msg => !msg.isRead && msg.senderId !== chat.currentUserId) // ✅ correct user check
         .map(msg => msg.id);
 
       if (unreadMessageIds.length > 0) {
@@ -71,30 +67,16 @@ export const useChatRoom = (
     content: string,
     media?: SendMessageParams['media']
   ) => {
-    await chat.sendMessage({
-      chatRoomId,
-      content,
-      media
-    });
+    await chat.sendMessage({ chatRoomId, content, media });
   }, [chat, chatRoomId]);
 
-  /**
-   * Reply to a message
-   */
   const replyToMessage = useCallback(async (
     messageId: string,
     content: string
   ) => {
-    await chat.sendMessage({
-      chatRoomId,
-      content,
-      repliedToId: messageId
-    });
+    await chat.sendMessage({ chatRoomId, content, repliedToId: messageId });
   }, [chat, chatRoomId]);
 
-  /**
-   * Edit a message
-   */
   const editMessage = useCallback(async (
     messageId: string,
     content: string
@@ -102,15 +84,12 @@ export const useChatRoom = (
     await chat.editMessage(messageId, content);
   }, [chat]);
 
-  /**
-   * Delete a message
-   */
   const deleteMessage = useCallback(async (messageId: string) => {
     await chat.deleteMessage(messageId);
   }, [chat]);
 
   /**
-   * Start typing indicator
+   * Typing indicator with 3-second auto-stop debounce
    */
   const startTyping = useCallback(() => {
     if (!isTyping) {
@@ -118,20 +97,15 @@ export const useChatRoom = (
       chat.sendTypingIndicator(chatRoomId, true);
     }
 
-    // Clear existing timeout
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
 
-    // Auto-stop typing after 3 seconds
     typingTimeoutRef.current = setTimeout(() => {
       stopTyping();
     }, 3000);
   }, [isTyping, chat, chatRoomId]);
 
-  /**
-   * Stop typing indicator
-   */
   const stopTyping = useCallback(() => {
     if (isTyping) {
       setIsTyping(false);
@@ -144,9 +118,6 @@ export const useChatRoom = (
     }
   }, [isTyping, chat, chatRoomId]);
 
-  /**
-   * Load more messages
-   */
   const loadMoreMessages = useCallback(async () => {
     await chat.loadMoreMessages();
   }, [chat]);
@@ -164,6 +135,7 @@ export const useChatRoom = (
     startTyping,
     stopTyping,
     loadMoreMessages,
+    fetchMessages: (id: string) => chat.fetchMessages(id),
     hasMoreMessages: chat.hasMoreMessages
   };
 };

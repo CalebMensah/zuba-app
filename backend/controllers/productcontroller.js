@@ -1,5 +1,4 @@
 import prisma from '../config/prisma.js';
-import { PrismaClient } from '@prisma/client';
 import slugify from 'slugify';
 import { uploadToCloudinary, uploadMultipleToCloudinary, deleteMultipleFromCloudinary, uploadPresets } from '../config/cloudinary.js';
 import { cache } from '../config/redis.js';
@@ -18,8 +17,6 @@ export const createProduct = async (req, res) => {
       tags = [],
       sizes = [],
       color = [],
-      weight,
-      sellerNote,
       moq
     } = req.body;
 
@@ -90,9 +87,7 @@ export const createProduct = async (req, res) => {
         category: category || null,
         tags: Array.isArray(tags) ? tags : [],
         sizes: Array.isArray(sizes) ? sizes : [],
-        color: Array.isArray(color) ? color : [], // Handle color as array
-        weight: weight ? parseFloat(weight) : null,
-        sellerNote: sellerNote || null,
+        color: Array.isArray(color) ? color : [],
         moq: moq ? parseInt(moq) : null,
         url: finalUrl,
         isActive: true
@@ -107,7 +102,7 @@ export const createProduct = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Product created successfully.',
-       product
+      data: product
     });
   } catch (error) {
     console.error('Error creating product:', error);
@@ -132,8 +127,6 @@ export const updateProduct = async (req, res) => {
       tags,
       sizes,
       color,
-      weight,
-      sellerNote,
       moq,
       isActive
     } = req.body;
@@ -189,9 +182,7 @@ export const updateProduct = async (req, res) => {
     if (category !== undefined) updateData.category = category;
     if (tags !== undefined) updateData.tags = Array.isArray(tags) ? tags : (typeof tags === 'string' ? [tags] : []);
     if (sizes !== undefined) updateData.sizes = Array.isArray(sizes) ? sizes : (typeof sizes === 'string' ? [sizes] : []);
-    if (color !== undefined) updateData.color = Array.isArray(color) ? color : (typeof color === 'string' ? [color] : []); // Handle color as array
-    if (weight !== undefined) updateData.weight = parseFloat(weight);
-    if (sellerNote !== undefined) updateData.sellerNote = sellerNote;
+    if (color !== undefined) updateData.color = Array.isArray(color) ? color : (typeof color === 'string' ? [color] : []);
     if (moq !== undefined) updateData.moq = parseInt(moq);
     if (isActive !== undefined) updateData.isActive = true
 
@@ -246,7 +237,7 @@ export const updateProduct = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Product updated successfully.',
-       updatedProduct
+      data: updatedProduct
     });
   } catch (error) {
     console.error('Error updating product:', error);
@@ -263,7 +254,7 @@ export const getSellerProductByIdForPublicUse = async (req, res) => {
   try {
     const { productUrl } = req.params; // Get the product's URL slug from the route parameters
 
-    const cacheKey = `product:public:url:${productUrl}`; // Different cache key for public access
+    const cacheKey = `product:public:v2:url:${productUrl}`; // Versioned cache key for public access
 
     // Try to get from cache first
     const cachedProduct = await cache.get(cacheKey);
@@ -277,17 +268,18 @@ export const getSellerProductByIdForPublicUse = async (req, res) => {
 
     const product = await prisma.product.findFirst({
       where: {
-        url: productUrl, // Use the 'url' field
-        isActive: true,  // Only return active products
+        url: productUrl,
+        isActive: true, 
+        isDeleted: false
       },
       include: {
-        store: { // Include store information for the product
+        store: {
           select: {
             id: true,
             name: true,
-            url: true, // Store's URL slug
+            url: true,
             logo: true,
-            // ... other relevant store fields you want to expose
+            userId: true,
           }
         }
       }
@@ -364,7 +356,8 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
     // Build the Prisma 'where' clause dynamically based on query parameters
     const whereClause = {
       storeId, // Filter products by the specific store ID
-      isActive: true, // Only fetch active products
+      isActive: true,
+      isDeleted: false
     };
 
     if (search) {
@@ -418,10 +411,8 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
       orderByClause[sortBy] = 'desc'; // Default sort order
     }
 
-    // Construct the cache key based on store URL and filters/pagination
     const cacheKey = `products:store:${storeUrl}:page:${pageNum}:limit:${limitNum}:search:${search}:category:${category}:minPrice:${minPrice}:maxPrice:${maxPrice}:tags:${tagArray.join(',')}:sizes:${sizeArray.join(',')}:color:${colorArray.join(',')}::sortBy:${sortBy}:sortOrder:${sortOrder}`;
 
-    // Try to get results from cache first
     const cachedResult = await cache.get(cacheKey);
     if (cachedResult) {
       return res.status(200).json({
@@ -431,20 +422,18 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
       });
     }
 
-    // Fetch products from the database
     const products = await prisma.product.findMany({
       where: whereClause,
       orderBy: orderByClause,
       skip: offset,
       take: limitNum,
       include: {
-        store: { // Include store information (relevant for the specific store)
+        store: {
           select: {
             id: true,
             name: true,
             url: true,
             logo: true,
-            // ... other relevant store fields you want to expose
           }
         }
       }
@@ -463,7 +452,7 @@ export const getAllSellerProductsForPublicUse = async (req, res) => {
         pages: Math.ceil(total / limitNum)
       },
       filters: {
-        storeUrl, // Include the store URL in the response
+        storeUrl,
         search,
         category,
         minPrice: minPrice !== undefined && minPrice !== '' ? parseFloat(minPrice) : undefined, // Send parsed number or undefined
@@ -512,7 +501,7 @@ export const getUserProducts = async (req, res) => {
       });
     }
 
-    const storeId = userStore.id; // Get the store ID
+    const storeId = userStore.id;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
@@ -665,7 +654,8 @@ export const getAllProducts = async (req, res) => {
 
     // Build the Prisma 'where' clause dynamically based on query parameters
     const whereClause = {
-      isActive: true, // Only fetch active products
+      isActive: true,
+      isDeleted: false
     };
 
     // Add search filter (name or description)
@@ -746,11 +736,11 @@ export const getAllProducts = async (req, res) => {
       skip: offset,
       take: limitNum,
       include: {
-        store: { // Include store information for each product
+        store: {
           select: {
             id: true,
             name: true,
-            url: true, // Store's URL slug
+            url: true, 
             logo: true,
             region: true,
             location: true
@@ -818,6 +808,7 @@ export const getTopSellingProducts = async (req, res) => {
     // Build where clause
     const whereClause = {
       isActive: true,
+      isDeleted: false
     };
 
     if (category) {
@@ -919,7 +910,8 @@ export const getRecommendedProducts = async (req, res) => {
     const currentProduct = await prisma.product.findFirst({
       where: {
         url: productUrl,
-        isActive: true
+        isActive: true,
+        isDeleted: false
       },
       select: {
         id: true,
@@ -1089,6 +1081,7 @@ export const getProductsYouMayLike = async (req, res) => {
     // Build where clause
     const whereClause = {
       isActive: true,
+      isDeleted: false
     };
 
     if (category) {
@@ -1248,7 +1241,8 @@ export const getTrendingProducts = async (req, res) => {
       isActive: true,
       createdAt: {
         gte: dateThreshold
-      }
+      },
+      isDeleted: false
     };
 
     if (category) {
@@ -1300,3 +1294,210 @@ export const getTrendingProducts = async (req, res) => {
     });
   }
 };
+
+// Restore a soft-deleted product
+export const restoreProduct = async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const userId = req.user.userId;
+
+    // Get user's store
+    const userStore = await prisma.store.findFirst({
+      where: { userId }
+    });
+
+    if (!userStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Store not found. User must have an active store.'
+      });
+    }
+
+    const storeId = userStore.id;
+
+    // Ensure product belongs to store AND is deleted
+    const product = await prisma.product.findFirst({
+      where: {
+        id: productId,
+        storeId,
+        isDeleted: true
+      }
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Deleted product not found or does not belong to your store.'
+      });
+    }
+
+    // Restore product
+    const restoredProduct = await prisma.product.update({
+      where: { id: productId },
+      data: {
+        isDeleted: false,
+        deletedAt: null
+      }
+    });
+
+    // Invalidate caches
+    await Promise.all([
+      cache.del(`store:slug:${userStore.url}`),
+      cache.del(`user:${userId}:store`),
+      cache.del(`product:url:${product.url}`),
+      cache.del(`store:${storeId}:products`),
+      cache.del(`seller:${userId}:products`),
+      cache.del(`marketplace:products`)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Product restored successfully.',
+      product: restoredProduct
+    });
+  } catch (error) {
+    console.error('Error restoring product:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+// Soft delete a product (with active order protection)
+export const softDeleteProduct = async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const userId = req.user.userId;
+
+    // Get user's store
+    const userStore = await prisma.store.findFirst({
+      where: { userId }
+    });
+
+    if (!userStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Store not found.'
+      });
+    }
+
+    const storeId = userStore.id;
+
+    // Find product
+    const product = await prisma.product.findFirst({
+      where: {
+        id: productId,
+        storeId,
+        isDeleted: false
+      }
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found or already deleted.'
+      });
+    }
+
+    // Check for active orders
+    const activeOrderCount = await prisma.orderItem.count({
+      where: {
+        productId,
+        order: {
+          status: {
+            in: ['PENDING', 'PAID', 'CONFIRMED', 'PROCESSING', 'SHIPPED']
+          }
+        }
+      }
+    });
+
+    if (activeOrderCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Cannot delete product with active orders.'
+      });
+    }
+
+    // Soft delete
+    await prisma.product.update({
+      where: { id: productId },
+      data: {
+        isDeleted: true,
+        deletedAt: new Date()
+      }
+    });
+
+    // Invalidate caches
+    await Promise.all([
+      cache.del(`store:slug:${userStore.url}`),
+      cache.del(`user:${userId}:store`),
+      cache.del(`product:url:${product.url}`),
+      cache.del(`store:${storeId}:products`),
+      cache.del(`seller:${userId}:products`),
+      cache.del(`marketplace:products`)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Product moved to trash. It will be permanently deleted after 30 days.'
+    });
+  } catch (error) {
+    console.error('Error soft deleting product:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// List all deleted products for a seller
+export const listDeletedProducts = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Get user's store
+    const userStore = await prisma.store.findFirst({
+      where: { userId }
+    });
+
+    if (!userStore) {
+      return res.status(400).json({
+        success: false,
+        message: 'Store not found.'
+      });
+    }
+
+    const deletedProducts = await prisma.product.findMany({
+      where: {
+        storeId: userStore.id,
+        isDeleted: true
+      },
+      orderBy: {
+        deletedAt: 'desc'
+      },
+      select: {
+        id: true,
+        name: true,
+        price: true,
+        images: true,
+        deletedAt: true,
+        createdAt: true
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      products: deletedProducts
+    });
+  } catch (error) {
+    console.error('Error fetching deleted products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+

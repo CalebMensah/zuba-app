@@ -5,278 +5,258 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
   Modal,
   TextInput,
   ScrollView,
-  RefreshControl
+  RefreshControl,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
+import { useDelivery } from '../../hooks/useDelivery';
+import { Colors } from '../../constants/colors';
+import { DeliveryStatus } from '../../types/order';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
+const ManageDeliveriesScreen = () => {
+  const {
+    loading,
+    error,
+    getAllSellerDeliveries,
+    updateDeliveryInfo,
+    clearError,
+  } = useDelivery();
 
-const ManageDeliveryInfo = () => {
-  const navigation = useNavigation();
-  const [deliveries, setDeliveries] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [deliveries, setDeliveries] = useState<any[]>([]);
+  const [pagination, setPagination] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // Edit modal state
   const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedDelivery, setSelectedDelivery] = useState(null);
+  const [selectedDelivery, setSelectedDelivery] = useState<any>(null);
   const [editFormData, setEditFormData] = useState({
     courierService: '',
-    driverName: '',
-    driverPhone: '',
-    driverVehicleNumber: '',
     trackingNumber: '',
-    trackingUrl: '',
-    estimatedDelivery: '',
-    notes: ''
+    estimatedDeliveryDays: '',
+    dispatchNote: '',
+    status: '' as DeliveryStatus | '',
   });
+  const [saveLoading, setSaveLoading] = useState(false);
 
   useEffect(() => {
     fetchDeliveries();
+    return () => clearError();
   }, []);
 
-  const fetchDeliveries = async () => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      const response = await axios.get(`${API_URL}/orders/seller`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+  const fetchDeliveries = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
 
-      if (response.data.success) {
-        const ordersWithDelivery = response.data.data.orders.filter(
-          order => order.deliveryInfo && 
-          (order.deliveryInfo.courierService || order.deliveryInfo.driverName)
-        );
-        setDeliveries(ordersWithDelivery);
-      }
-    } catch (error) {
-      console.error('Error fetching deliveries:', error);
-      Alert.alert('Error', 'Failed to fetch delivery information');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    const result = await getAllSellerDeliveries({ page: 1, limit: 50 });
+
+    if (result) {
+      setDeliveries(result.deliveries);
+      setPagination(result.pagination);
     }
+
+    setInitialLoading(false);
+    setRefreshing(false);
   };
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchDeliveries();
-  };
+  const onRefresh = () => fetchDeliveries(true);
 
-  const handleMarkAsDelivered = async (orderId) => {
-    Alert.alert(
-      'Mark as Delivered',
-      'Are you sure you want to mark this order as delivered?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            try {
-              const token = await AsyncStorage.getItem('token');
-              const response = await axios.patch(
-                `${API_URL}/delivery/${orderId}/status`,
-                { status: 'DELIVERED' },
-                { headers: { Authorization: `Bearer ${token}` } }
-              );
-
-              if (response.data.success) {
-                Alert.alert('Success', 'Order marked as delivered');
-                fetchDeliveries();
-              }
-            } catch (error) {
-              console.error('Error marking as delivered:', error);
-              Alert.alert('Error', error.response?.data?.message || 'Failed to update status');
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const handleDelete = async (orderId) => {
-    Alert.alert(
-      'Delete Courier Assignment',
-      'Are you sure you want to remove the courier assignment for this order?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const token = await AsyncStorage.getItem('token');
-              const response = await axios.delete(
-                `${API_URL}/delivery/${orderId}/courier`,
-                { headers: { Authorization: `Bearer ${token}` } }
-              );
-
-              if (response.data.success) {
-                Alert.alert('Success', 'Courier assignment removed');
-                fetchDeliveries();
-              }
-            } catch (error) {
-              console.error('Error deleting courier:', error);
-              Alert.alert('Error', error.response?.data?.message || 'Failed to delete');
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const openEditModal = (delivery) => {
+  const openEditModal = (delivery: any) => {
     setSelectedDelivery(delivery);
     setEditFormData({
-      courierService: delivery.deliveryInfo.courierService || '',
-      driverName: delivery.deliveryInfo.driverName || '',
-      driverPhone: delivery.deliveryInfo.driverPhone || '',
-      driverVehicleNumber: delivery.deliveryInfo.driverVehicleNumber || '',
-      trackingNumber: delivery.deliveryInfo.trackingNumber || '',
-      trackingUrl: delivery.deliveryInfo.trackingUrl || '',
-      estimatedDelivery: delivery.deliveryInfo.estimatedDelivery || '',
-      notes: delivery.deliveryInfo.notes || ''
+      courierService: delivery.courierService || '',
+      trackingNumber: delivery.trackingNumber || '',
+      estimatedDeliveryDays: delivery.estimatedDeliveryDays
+        ? String(delivery.estimatedDeliveryDays)
+        : '',
+      dispatchNote: delivery.dispatchNote || '',
+      status: delivery.status || '',
     });
     setEditModalVisible(true);
   };
 
   const handleSaveEdit = async () => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      const response = await axios.patch(
-        `${API_URL}/delivery/${selectedDelivery.id}/courier`,
-        editFormData,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+    if (!selectedDelivery) return;
 
-      if (response.data.success) {
-        Alert.alert('Success', 'Delivery information updated');
-        setEditModalVisible(false);
-        fetchDeliveries();
-      }
-    } catch (error) {
-      console.error('Error updating delivery:', error);
-      Alert.alert('Error', error.response?.data?.message || 'Failed to update');
+    if (!editFormData.courierService.trim()) {
+      Alert.alert('Validation Error', 'Courier service is required.');
+      return;
+    }
+
+    if (
+      editFormData.estimatedDeliveryDays.trim() &&
+      (isNaN(parseInt(editFormData.estimatedDeliveryDays)) ||
+        parseInt(editFormData.estimatedDeliveryDays) < 1)
+    ) {
+      Alert.alert('Validation Error', 'Estimated delivery days must be a positive number.');
+      return;
+    }
+
+    setSaveLoading(true);
+
+    const result = await updateDeliveryInfo({
+      orderId: selectedDelivery.order.id,
+      courierService: editFormData.courierService,
+      trackingNumber: editFormData.trackingNumber || undefined,
+      estimatedDeliveryDays: editFormData.estimatedDeliveryDays
+        ? parseInt(editFormData.estimatedDeliveryDays)
+        : undefined,
+      dispatchNote: editFormData.dispatchNote || undefined,
+      status: editFormData.status || undefined,
+    });
+
+    setSaveLoading(false);
+
+    if (result) {
+      // Update local state to avoid full refetch
+      setDeliveries(prev =>
+        prev.map(d =>
+          d.order.id === selectedDelivery.order.id
+            ? { ...d, ...result }
+            : d
+        )
+      );
+      setEditModalVisible(false);
+      Alert.alert('Success', 'Delivery information updated.');
+    } else if (error) {
+      Alert.alert('Error', error);
     }
   };
 
-  const getStatusColor = (status) => {
-    const colors = {
+  const getStatusColor = (status: DeliveryStatus): string => {
+    const colors: Record<DeliveryStatus, string> = {
       PENDING: '#FFA500',
       PROCESSING: '#2196F3',
-      SHIPPED: '#9C27B0',
-      OUT_FOR_DELIVERY: '#FF9800',
+      DISPATCHED: '#9C27B0',
       DELIVERED: '#4CAF50',
-      RETURNED: '#F44336',
-      CANCELLED: '#757575'
+      FAILED: '#F44336',
+      RETURNED: '#757575',
     };
     return colors[status] || '#757575';
   };
 
-  const renderDeliveryCard = ({ item }) => (
+  const EDITABLE_STATUSES: DeliveryStatus[] = [
+    'PENDING',
+    'PROCESSING',
+    'DISPATCHED',
+    'FAILED',
+    'RETURNED',
+  ];
+
+  const renderDeliveryCard = ({ item }: { item: any }) => (
     <View style={styles.card}>
+      {/* Card Header */}
       <View style={styles.cardHeader}>
         <View>
-          <Text style={styles.orderId}>Order #{item.id.slice(-8)}</Text>
+          <Text style={styles.orderId}>
+            Order #{item.order?.orderNumber || item.order?.id?.slice(-8)}
+          </Text>
           <View style={styles.statusBadge}>
-            <View 
+            <View
               style={[
-                styles.statusDot, 
-                { backgroundColor: getStatusColor(item.deliveryInfo.status) }
-              ]} 
+                styles.statusDot,
+                { backgroundColor: getStatusColor(item.status) },
+              ]}
             />
-            <Text style={styles.statusText}>{item.deliveryInfo.status}</Text>
+            <Text style={styles.statusText}>{item.status}</Text>
           </View>
         </View>
-        <Text style={styles.orderAmount}>GHS {item.totalAmount.toFixed(2)}</Text>
+        <Text style={styles.orderAmount}>
+          GHS {item.order?.totalAmount?.toFixed(2) ?? '—'}
+        </Text>
       </View>
 
       <View style={styles.divider} />
 
+      {/* Delivery Info */}
       <View style={styles.infoSection}>
         <View style={styles.infoRow}>
-          <Icon name="truck-delivery" size={20} color="#666" />
+          <Ionicons name="car-outline" size={20} color="#666" />
           <View style={styles.infoContent}>
             <Text style={styles.infoLabel}>Courier Service</Text>
-            <Text style={styles.infoValue}>{item.deliveryInfo.courierService}</Text>
-          </View>
-        </View>
-
-        <View style={styles.infoRow}>
-          <Icon name="account" size={20} color="#666" />
-          <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Driver</Text>
-            <Text style={styles.infoValue}>{item.deliveryInfo.driverName}</Text>
-          </View>
-        </View>
-
-        {item.deliveryInfo.driverPhone && (
-          <View style={styles.infoRow}>
-            <Icon name="phone" size={20} color="#666" />
-            <View style={styles.infoContent}>
-              <Text style={styles.infoLabel}>Driver Phone</Text>
-              <Text style={styles.infoValue}>{item.deliveryInfo.driverPhone}</Text>
-            </View>
-          </View>
-        )}
-
-        <View style={styles.infoRow}>
-          <Icon name="car" size={20} color="#666" />
-          <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Vehicle Number</Text>
-            <Text style={styles.infoValue}>{item.deliveryInfo.driverVehicleNumber}</Text>
-          </View>
-        </View>
-
-        {item.deliveryInfo.trackingNumber && (
-          <View style={styles.infoRow}>
-            <Icon name="package-variant" size={20} color="#666" />
-            <View style={styles.infoContent}>
-              <Text style={styles.infoLabel}>Tracking Number</Text>
-              <Text style={styles.infoValue}>{item.deliveryInfo.trackingNumber}</Text>
-            </View>
-          </View>
-        )}
-
-        <View style={styles.infoRow}>
-          <Icon name="map-marker" size={20} color="#666" />
-          <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Delivery Address</Text>
             <Text style={styles.infoValue}>
-              {item.deliveryInfo.address}, {item.deliveryInfo.city}
+              {item.courierService || '—'}
             </Text>
           </View>
         </View>
+
+        {item.trackingNumber && (
+          <View style={styles.infoRow}>
+            <Ionicons name="cube-outline" size={20} color="#666" />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoLabel}>Tracking Number</Text>
+              <Text style={styles.infoValue}>{item.trackingNumber}</Text>
+            </View>
+          </View>
+        )}
+
+        {item.estimatedDeliveryDays && (
+          <View style={styles.infoRow}>
+            <Ionicons name="time-outline" size={20} color="#666" />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoLabel}>Estimated Delivery</Text>
+              <Text style={styles.infoValue}>
+                {item.estimatedDeliveryDays} day
+                {item.estimatedDeliveryDays !== 1 ? 's' : ''}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {item.dispatchedAt && (
+          <View style={styles.infoRow}>
+            <Ionicons name="checkmark-circle-outline" size={20} color="#666" />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoLabel}>Dispatched At</Text>
+              <Text style={styles.infoValue}>
+                {new Date(item.dispatchedAt).toLocaleDateString()}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.infoRow}>
+          <Ionicons name="location-outline" size={20} color="#666" />
+          <View style={styles.infoContent}>
+            <Text style={styles.infoLabel}>Delivery Address</Text>
+            <Text style={styles.infoValue}>
+              {item.address}, {item.city}
+            </Text>
+          </View>
+        </View>
+
+        {item.dispatchNote && (
+          <View style={styles.infoRow}>
+            <Ionicons name="document-text-outline" size={20} color="#666" />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoLabel}>Dispatch Note</Text>
+              <Text style={styles.infoValue}>{item.dispatchNote}</Text>
+            </View>
+          </View>
+        )}
       </View>
 
-      <View style={styles.actionButtons}>
-        <TouchableOpacity
-          style={[styles.actionButton, styles.deliveredButton]}
-          onPress={() => handleMarkAsDelivered(item.id)}
-          disabled={item.deliveryInfo.status === 'DELIVERED'}
-        >
-          <Icon name="check-circle" size={20} color="#fff" />
-          <Text style={styles.actionButtonText}>Mark Delivered</Text>
-        </TouchableOpacity>
+      {/* Buyer Info */}
+      {item.order?.buyer && (
+        <View style={styles.buyerRow}>
+          <Ionicons name="person-outline" size={16} color="#999" />
+          <Text style={styles.buyerText}>
+            {item.order.buyer.firstName} {item.order.buyer.lastName}
+          </Text>
+        </View>
+      )}
 
+      {/* Actions */}
+      <View style={styles.actionButtons}>
         <TouchableOpacity
           style={[styles.actionButton, styles.editButton]}
           onPress={() => openEditModal(item)}
         >
-          <Icon name="pencil" size={20} color="#2196F3" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.actionButton, styles.deleteButton]}
-          onPress={() => handleDelete(item.id)}
-        >
-          <Icon name="delete" size={20} color="#F44336" />
+          <Ionicons name="pencil" size={16} color={Colors.primary} />
+          <Text style={styles.editButtonText}>Edit</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -286,7 +266,7 @@ const ManageDeliveryInfo = () => {
     <Modal
       visible={editModalVisible}
       animationType="slide"
-      transparent={true}
+      transparent
       onRequestClose={() => setEditModalVisible(false)}
     >
       <View style={styles.modalOverlay}>
@@ -294,49 +274,23 @@ const ManageDeliveryInfo = () => {
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Edit Delivery Info</Text>
             <TouchableOpacity onPress={() => setEditModalVisible(false)}>
-              <Icon name="close" size={24} color="#333" />
+              <Ionicons name="close" size={24} color="#333" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.modalScroll}>
+          <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Courier Service *</Text>
+              <Text style={styles.inputLabel}>
+                Courier Service <Text style={styles.required}>*</Text>
+              </Text>
               <TextInput
                 style={styles.input}
                 value={editFormData.courierService}
-                onChangeText={(text) => setEditFormData({...editFormData, courierService: text})}
-                placeholder="e.g., DHL, FedEx"
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Driver Name *</Text>
-              <TextInput
-                style={styles.input}
-                value={editFormData.driverName}
-                onChangeText={(text) => setEditFormData({...editFormData, driverName: text})}
-                placeholder="Driver's full name"
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Driver Phone</Text>
-              <TextInput
-                style={styles.input}
-                value={editFormData.driverPhone}
-                onChangeText={(text) => setEditFormData({...editFormData, driverPhone: text})}
-                placeholder="Driver's phone number"
-                keyboardType="phone-pad"
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Vehicle Number *</Text>
-              <TextInput
-                style={styles.input}
-                value={editFormData.driverVehicleNumber}
-                onChangeText={(text) => setEditFormData({...editFormData, driverVehicleNumber: text})}
-                placeholder="License plate number"
+                onChangeText={text =>
+                  setEditFormData(prev => ({ ...prev, courierService: text }))
+                }
+                placeholder="e.g., DHL, GIG Logistics"
+                placeholderTextColor={Colors.textTertiary}
               />
             </View>
 
@@ -345,39 +299,83 @@ const ManageDeliveryInfo = () => {
               <TextInput
                 style={styles.input}
                 value={editFormData.trackingNumber}
-                onChangeText={(text) => setEditFormData({...editFormData, trackingNumber: text})}
+                onChangeText={text =>
+                  setEditFormData(prev => ({ ...prev, trackingNumber: text }))
+                }
                 placeholder="Package tracking number"
+                placeholderTextColor={Colors.textTertiary}
               />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Tracking URL</Text>
+              <Text style={styles.inputLabel}>Estimated Delivery Days</Text>
               <TextInput
                 style={styles.input}
-                value={editFormData.trackingUrl}
-                onChangeText={(text) => setEditFormData({...editFormData, trackingUrl: text})}
-                placeholder="https://..."
-                keyboardType="url"
+                value={editFormData.estimatedDeliveryDays}
+                onChangeText={text =>
+                  setEditFormData(prev => ({ ...prev, estimatedDeliveryDays: text }))
+                }
+                placeholder="e.g., 3"
+                placeholderTextColor={Colors.textTertiary}
+                keyboardType="numeric"
               />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Notes</Text>
+              <Text style={styles.inputLabel}>Status</Text>
+              <View style={styles.statusOptions}>
+                {EDITABLE_STATUSES.map(s => (
+                  <TouchableOpacity
+                    key={s}
+                    style={[
+                      styles.statusOption,
+                      editFormData.status === s && {
+                        backgroundColor: getStatusColor(s),
+                        borderColor: getStatusColor(s),
+                      },
+                    ]}
+                    onPress={() =>
+                      setEditFormData(prev => ({ ...prev, status: s }))
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.statusOptionText,
+                        editFormData.status === s && styles.statusOptionTextActive,
+                      ]}
+                    >
+                      {s}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Dispatch Note</Text>
               <TextInput
                 style={[styles.input, styles.textArea]}
-                value={editFormData.notes}
-                onChangeText={(text) => setEditFormData({...editFormData, notes: text})}
-                placeholder="Additional delivery notes"
+                value={editFormData.dispatchNote}
+                onChangeText={text =>
+                  setEditFormData(prev => ({ ...prev, dispatchNote: text }))
+                }
+                placeholder="Additional dispatch notes"
+                placeholderTextColor={Colors.textTertiary}
                 multiline
                 numberOfLines={4}
               />
             </View>
 
             <TouchableOpacity
-              style={styles.saveButton}
+              style={[styles.saveButton, saveLoading && styles.saveButtonDisabled]}
               onPress={handleSaveEdit}
+              disabled={saveLoading}
             >
-              <Text style={styles.saveButtonText}>Save Changes</Text>
+              {saveLoading ? (
+                <LoadingSpinner size={20} color={Colors.white} />
+              ) : (
+                <Text style={styles.saveButtonText}>Save Changes</Text>
+              )}
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -385,10 +383,27 @@ const ManageDeliveryInfo = () => {
     </Modal>
   );
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <LoadingSpinner size={40} color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading deliveries...</Text>
+      </View>
+    );
+  }
+
+  if (error && deliveries.length === 0) {
+    return (
+      <View style={styles.centerContainer}>
+        <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+        <Text style={styles.errorText}>Failed to load deliveries</Text>
+        <TouchableOpacity
+          style={styles.retryButton}
+          onPress={() => fetchDeliveries()}
+        >
+          <Ionicons name="refresh" size={20} color={Colors.white} />
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -397,25 +412,32 @@ const ManageDeliveryInfo = () => {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Manage Deliveries</Text>
-        <Text style={styles.headerSubtitle}>{deliveries.length} active deliveries</Text>
+        <Text style={styles.headerSubtitle}>
+          {pagination?.totalCount ?? deliveries.length} deliveries
+        </Text>
       </View>
 
       {deliveries.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Icon name="truck-delivery-outline" size={80} color="#ccc" />
+          <Ionicons name="car-outline" size={80} color="#ccc" />
           <Text style={styles.emptyTitle}>No Deliveries Yet</Text>
           <Text style={styles.emptyText}>
-            Courier assignments will appear here once you assign them to orders
+            Deliveries will appear here once you ship an order.
           </Text>
         </View>
       ) : (
         <FlatList
           data={deliveries}
           renderItem={renderDeliveryCard}
-          keyExtractor={(item) => item.id}
+          keyExtractor={item => item.id}
           contentContainerStyle={styles.listContainer}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[Colors.primary]}
+              tintColor={Colors.primary}
+            />
           }
         />
       )}
@@ -428,36 +450,61 @@ const ManageDeliveryInfo = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5'
+    backgroundColor: '#f5f5f5',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5'
+    backgroundColor: '#f5f5f5',
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  errorText: {
+    fontSize: 16,
+    color: Colors.error,
+    marginTop: 12,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  retryButtonText: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '600',
   },
   header: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.white,
     padding: 20,
     paddingTop: 50,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0'
+    borderBottomColor: '#e0e0e0',
   },
   headerTitle: {
     fontSize: 28,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 5
+    marginBottom: 5,
   },
   headerSubtitle: {
     fontSize: 14,
-    color: '#666'
+    color: '#666',
   },
   listContainer: {
-    padding: 15
+    padding: 15,
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.white,
     borderRadius: 12,
     padding: 16,
     marginBottom: 15,
@@ -465,19 +512,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 3
+    elevation: 3,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 12
+    marginBottom: 12,
   },
   orderId: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 6
+    marginBottom: 6,
   },
   statusBadge: {
     flexDirection: 'row',
@@ -485,112 +532,117 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12
+    borderRadius: 12,
+    alignSelf: 'flex-start',
   },
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginRight: 6
+    marginRight: 6,
   },
   statusText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#333'
+    color: '#333',
   },
   orderAmount: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#007AFF'
+    color: Colors.primary,
   },
   divider: {
     height: 1,
     backgroundColor: '#e0e0e0',
-    marginVertical: 12
+    marginVertical: 12,
   },
   infoSection: {
-    marginBottom: 12
+    marginBottom: 8,
   },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginBottom: 12
+    marginBottom: 12,
   },
   infoContent: {
     flex: 1,
-    marginLeft: 12
+    marginLeft: 12,
   },
   infoLabel: {
     fontSize: 12,
     color: '#999',
-    marginBottom: 2
+    marginBottom: 2,
   },
   infoValue: {
     fontSize: 14,
     color: '#333',
-    fontWeight: '500'
+    fontWeight: '500',
+  },
+  buyerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 12,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  buyerText: {
+    fontSize: 13,
+    color: '#666',
   },
   actionButtons: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 8
+    justifyContent: 'flex-end',
+    marginTop: 4,
   },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     borderRadius: 8,
-    gap: 6
-  },
-  deliveredButton: {
-    flex: 1,
-    backgroundColor: '#4CAF50'
+    gap: 6,
   },
   editButton: {
     backgroundColor: '#E3F2FD',
-    paddingHorizontal: 16
   },
-  deleteButton: {
-    backgroundColor: '#FFEBEE',
-    paddingHorizontal: 16
-  },
-  actionButtonText: {
-    color: '#fff',
+  editButtonText: {
+    color: Colors.primary,
+    fontSize: 14,
     fontWeight: '600',
-    fontSize: 14
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 40
+    padding: 40,
   },
   emptyTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
     marginTop: 20,
-    marginBottom: 10
+    marginBottom: 10,
   },
   emptyText: {
     fontSize: 14,
     color: '#666',
     textAlign: 'center',
-    lineHeight: 20
+    lineHeight: 20,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end'
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.white,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '90%',
-    paddingBottom: 20
+    paddingBottom: 30,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -598,24 +650,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0'
+    borderBottomColor: '#e0e0e0',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333'
+    color: '#333',
   },
   modalScroll: {
-    padding: 20
+    padding: 20,
   },
   inputGroup: {
-    marginBottom: 16
+    marginBottom: 16,
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 8
+    marginBottom: 8,
+  },
+  required: {
+    color: Colors.error,
   },
   input: {
     borderWidth: 1,
@@ -624,24 +679,50 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    backgroundColor: '#fafafa'
+    color: Colors.textPrimary,
+    backgroundColor: '#fafafa',
   },
   textArea: {
     height: 100,
-    textAlignVertical: 'top'
+    textAlignVertical: 'top',
+  },
+  statusOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  statusOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fafafa',
+  },
+  statusOptionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+  },
+  statusOptionTextActive: {
+    color: Colors.white,
   },
   saveButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: Colors.primary,
     paddingVertical: 14,
     borderRadius: 8,
     alignItems: 'center',
-    marginTop: 10
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  saveButtonDisabled: {
+    opacity: 0.6,
   },
   saveButtonText: {
-    color: '#fff',
+    color: Colors.white,
     fontSize: 16,
-    fontWeight: '600'
-  }
+    fontWeight: '600',
+  },
 });
 
-export default ManageDeliveryInfo;
+export default ManageDeliveriesScreen;

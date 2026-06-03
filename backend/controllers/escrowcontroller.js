@@ -3,17 +3,17 @@ import { cache } from '../config/redis.js';
 import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
 import { transferFundsToSeller } from '../utils/transferUtils.js';
+import { PLATFORM_FEE_PERCENT } from '../utils/fees.js';
 
-// Helper function to sanitize error messages in production
+const AMOUNT_TOLERANCE = 0.10;
+
 const sanitizeError = (error) => {
   if (process.env.NODE_ENV === 'production') {
-    console.error('Error:', error);
     return 'Internal server error';
   }
   return error.message;
 };
 
-// Helper function to invalidate escrow-related caches
 const invalidateEscrowCaches = async (orderId, buyerId, sellerId, storeId) => {
   const cacheKeys = [
     `order:${orderId}:user:${buyerId}`,
@@ -23,245 +23,242 @@ const invalidateEscrowCaches = async (orderId, buyerId, sellerId, storeId) => {
     `store:${storeId}:balance`,
     `escrow:${orderId}`
   ];
-
   await Promise.allSettled(cacheKeys.map(key => cache.del(key)));
 };
 
-export const processEscrowRelease = async () => {
-  try {
-    const now = new Date();
+const validateEscrowIntegrity = (escrowAmountHeld, paymentAmount) => {
+  const expectedEscrow = parseFloat((paymentAmount * (1 - PLATFORM_FEE_PERCENT)).toFixed(2));
+  return Math.abs(escrowAmountHeld - expectedEscrow) <= AMOUNT_TOLERANCE;
+};
 
-    // Find all escrows pending release where release date has passed
-    const escrowsToRelease = await prisma.escrow.findMany({
-      where: {
-        releaseDate: { lte: now },
-        releaseStatus: 'PENDING'
-      },
-      include: {
-        payment: {
-          include: {
-            order: {
-              include: {
-                store: { 
-                  include: { 
-                    user: { 
-                      select: { 
-                        id: true, 
-                        email: true, 
-                        firstName: true 
-                      } 
-                    } 
-                  } 
-                },
-                buyer: { 
-                  select: { 
-                    id: true, 
-                    firstName: true 
-                  } 
+export const processEscrowRelease = async () => {
+  const now = new Date();
+
+  const escrowsToRelease = await prisma.escrow.findMany({
+    where: {
+      releaseDate: { lte: now },
+      releaseStatus: 'HELD'
+    },
+    include: {
+      payment: {
+        include: {
+          order: {
+            include: {
+              store: {
+                include: {
+                  user: { select: { id: true, email: true, firstName: true } }
                 }
+              },
+              buyer: { select: { id: true, firstName: true } },
+              deliveryInfo: {
+                include: { deliveryProofs: true }
               }
             }
           }
         }
       }
-    });
+    }
+  });
 
-    console.log(`[Escrow Release] Found ${escrowsToRelease.length} escrows pending release.`);
+  const results = {
+    processed: 0,
+    succeeded: 0,
+    failed: 0,
+    errors: []
+  };
 
-    const results = {
-      processed: 0,
-      succeeded: 0,
-      failed: 0,
-      errors: []
-    };
+  for (const escrow of escrowsToRelease) {
+    const order = escrow.payment.order;
 
-    for (const escrow of escrowsToRelease) {
-      const order = escrow.payment.order;
-      const seller = order.store.user;
+    results.processed++;
 
-      results.processed++;
+    try {
+      // Block if active dispute exists
+      const activeDispute = await prisma.dispute.findFirst({
+        where: { orderId: order.id, status: 'PENDING' }
+      });
 
-      try {
-        // Validate order status
-        const validStatuses = ['DELIVERED', 'COMPLETED', 'SHIPPED', 'OUT_FOR_DELIVERY'];
-        if (!validStatuses.includes(order.status)) {
-          console.warn(`[Escrow Release] Order ${order.id} has invalid status: ${order.status}. Skipping.`);
-          await prisma.escrow.update({
-            where: { id: escrow.id },
-            data: {
-              releaseStatus: 'FAILED',
-              releaseReason: `Invalid order status: ${order.status}`,
-              updatedAt: new Date()
-            }
-          });
-          results.failed++;
-          continue;
-        }
-
-        // Determine release type
-        const isDelivered = ['DELIVERED', 'COMPLETED'].includes(order.status);
-        const releaseReason = isDelivered ? 'buyer_confirmed' : 'auto_timer_expired';
-        const releasedBy = isDelivered ? 'buyer_confirmation' : 'auto_timer';
-
-        // Get seller payment account
-        const sellerPaymentAccount = await prisma.paymentAccount.findUnique({
-          where: { storeId: order.storeId }
+      if (activeDispute) {
+        await prisma.escrow.update({
+          where: { id: escrow.id },
+          data: { releaseStatus: 'DISPUTED', releaseReason: 'Active dispute exists' }
         });
+        results.failed++;
+        continue;
+      }
 
-        if (!sellerPaymentAccount || !sellerPaymentAccount.paystackRecipientCode) {
-          console.error(`[Escrow Release] No payment account for store ${order.storeId} (escrow ${escrow.id})`);
-          await prisma.escrow.update({
-            where: { id: escrow.id },
-            data: {
-              releaseStatus: 'FAILED',
-              releaseReason: 'No seller payment account configured',
-              updatedAt: new Date()
-            }
-          });
-          results.failed++;
-          results.errors.push({ escrowId: escrow.id, orderId: order.id, error: 'No payment account' });
-          continue;
-        }
-
-        // Validate amounts
-        const commission = order.commissionTotal || 0;
-        const amountToTransfer = escrow.amountHeld - commission;
-
-        if (amountToTransfer <= 0) {
-          console.error(`[Escrow Release] Invalid amount: escrow=${escrow.amountHeld}, commission=${commission} for order ${order.id}`);
-          await prisma.escrow.update({
-            where: { id: escrow.id },
-            data: {
-              releaseStatus: 'FAILED',
-              releaseReason: 'Invalid amount after commission deduction',
-              updatedAt: new Date()
-            }
-          });
-          results.failed++;
-          results.errors.push({ escrowId: escrow.id, orderId: order.id, error: 'Invalid amount' });
-          continue;
-        }
-
-        // Security: Verify escrow amount matches payment amount
-        if (Math.abs(escrow.amountHeld - escrow.payment.amount) > 0.01) {
-          console.error(`[Escrow Release] Amount mismatch: escrow=${escrow.amountHeld}, payment=${escrow.payment.amount} for order ${order.id}`);
-          await prisma.escrow.update({
-            where: { id: escrow.id },
-            data: {
-              releaseStatus: 'FAILED',
-              releaseReason: 'Escrow/payment amount mismatch - manual review required',
-              updatedAt: new Date()
-            }
-          });
-          results.failed++;
-          results.errors.push({ escrowId: escrow.id, orderId: order.id, error: 'Amount mismatch' });
-          continue;
-        }
-
-        // Transfer funds to seller
-        const transferResult = await transferFundsToSeller({
-          amount: amountToTransfer,
-          currency: escrow.currency,
-          recipientCode: sellerPaymentAccount.paystackRecipientCode,
-          orderId: order.id,
-          reason: `Order #${order.id} Escrow Release - ${releaseReason}`
+      // Delivery record must exist
+      if (!order.deliveryInfo) {
+        await prisma.escrow.update({
+          where: { id: escrow.id },
+          data: { releaseStatus: 'FAILED', releaseReason: 'Missing delivery record' }
         });
+        results.failed++;
+        continue;
+      }
 
-        if (transferResult.success) {
-          const nowDate = new Date();
+      // At least one delivery proof required unless order is already COMPLETED
+      const hasDeliveryProof = order.deliveryInfo.deliveryProofs?.length > 0;
+      if (!hasDeliveryProof && !['DELIVERED', 'COMPLETED'].includes(order.status)) {
+        await prisma.escrow.update({
+          where: { id: escrow.id },
+          data: { releaseStatus: 'FAILED', releaseReason: 'No delivery proof for auto release' }
+        });
+        results.failed++;
+        continue;
+      }
 
-          // Update escrow and order in transaction
-          await prisma.$transaction([
-            prisma.escrow.update({
-              where: { id: escrow.id },
-              data: {
-                releasedAt: nowDate,
-                releasedTo: releasedBy,
-                releaseStatus: 'RELEASED',
-                releaseReason,
-                updatedAt: nowDate
-              }
-            }),
-            // Only update to COMPLETED if currently DELIVERED
-            ...(order.status === 'DELIVERED' ? [
-              prisma.order.update({
-                where: { id: order.id },
-                data: { status: 'COMPLETED' }
-              })
-            ] : [])
-          ]);
-
-          // Send notifications (non-blocking)
-          setImmediate(async () => {
-            try {
-              const sellerName = seller.firstName || 'Seller';
-              await Promise.allSettled([
-                sendNotification(
-                  seller.id,
-                  'Funds Released',
-                  `Funds for order #${order.id} (${amountToTransfer} ${escrow.currency}) have been released to your account.`,
-                  'ESCROW_RELEASED',
-                  { orderId: order.id, amount: amountToTransfer }
-                ),
-                sendEmailNotification({
-                  to: seller.email,
-                  toName: sellerName,
-                  subject: 'Funds Released',
-                  template: 'generic',
-                  templateData: {
-                    title: 'Funds Released',
-                    message: `Funds for order #${order.id} (${amountToTransfer} ${escrow.currency}) have been released to your account. Commission deducted: ${commission} ${escrow.currency}.`,
-                    ctaText: 'View Order',
-                    ctaUrl: `${process.env.FRONTEND_URL}/orders/${order.id}`
-                  }
-                })
-              ]);
-            } catch (notificationError) {
-              console.error(`[Escrow Release] Notification error for order ${order.id}:`, notificationError);
-            }
-          });
-
-          // Invalidate caches
-          await invalidateEscrowCaches(order.id, order.buyerId, seller.id, order.storeId);
-
-          results.succeeded++;
-          console.log(`[Escrow Release] Successfully released escrow for order ${order.id} (${releaseReason})`);
-        } else {
-          console.error(`[Escrow Release] Transfer failed for escrow ${escrow.id} (order ${order.id}):`, transferResult.error);
-          await prisma.escrow.update({
-            where: { id: escrow.id },
-            data: {
-              releaseStatus: 'FAILED',
-              releaseReason: `Transfer failed - ${transferResult.error}`,
-              updatedAt: new Date()
-            }
-          });
-          results.failed++;
-          results.errors.push({ escrowId: escrow.id, orderId: order.id, error: transferResult.error });
-        }
-
-      } catch (escrowError) {
-        console.error(`[Escrow Release] Error processing escrow ${escrow.id} for order ${order.id}:`, escrowError);
+      // Order must be in a valid state for release
+      const validStatuses = ['DELIVERED', 'COMPLETED', 'SHIPPED'];
+      if (!validStatuses.includes(order.status)) {
         await prisma.escrow.update({
           where: { id: escrow.id },
           data: {
             releaseStatus: 'FAILED',
-            releaseReason: `Internal error - ${escrowError.message}`,
-            updatedAt: new Date()
+            releaseReason: `Invalid order status for release: ${order.status}`
           }
         });
         results.failed++;
-        results.errors.push({ escrowId: escrow.id, orderId: order.id, error: escrowError.message });
+        continue;
       }
+
+      // Seller payment account required
+      const sellerPaymentAccount = await prisma.paymentAccount.findUnique({
+        where: { storeId: order.storeId }
+      });
+
+      if (!sellerPaymentAccount?.paystackRecipientCode) {
+        await prisma.escrow.update({
+          where: { id: escrow.id },
+          data: { releaseStatus: 'FAILED', releaseReason: 'No seller payment account configured' }
+        });
+        results.failed++;
+        continue;
+      }
+
+        const expectedEscrow = parseFloat((order.totalAmount * (1 - PLATFORM_FEE_PERCENT)).toFixed(2));
+        if (Math.abs(escrow.amountHeld - expectedEscrow) > AMOUNT_TOLERANCE) {
+          await prisma.escrow.update({
+            where: { id: escrow.id },
+            data: { releaseStatus: 'FAILED', releaseReason: 'Escrow integrity check failed' }
+          });
+          results.failed++;
+          continue;
+        }
+
+      const amountToTransfer = escrow.amountHeld;
+
+      if (amountToTransfer <= 0) {
+        await prisma.escrow.update({
+          where: { id: escrow.id },
+          data: { releaseStatus: 'FAILED', releaseReason: 'Invalid transfer amount' }
+        });
+        results.failed++;
+        continue;
+      }
+
+      const isDelivered = ['DELIVERED', 'COMPLETED'].includes(order.status);
+      const releaseReason = isDelivered ? 'buyer_confirmed' : 'auto_timer_expired';
+      const releasedBy = isDelivered ? 'buyer_confirmation' : 'auto_timer';
+
+      const transferResult = await transferFundsToSeller({
+        amount: amountToTransfer,
+        currency: escrow.currency,
+        recipientCode: sellerPaymentAccount.paystackRecipientCode,
+        orderId: order.id,
+        reason: `Order #${order.id} Escrow Release - ${releaseReason}`
+      });
+
+      if (!transferResult.success) {
+        await prisma.escrow.update({
+          where: { id: escrow.id },
+          data: {
+            releaseStatus: 'FAILED',
+            releaseReason: `Transfer failed: ${transferResult.error}`
+          }
+        });
+        results.failed++;
+        continue;
+      }
+
+      const releaseNow = new Date();
+
+      await prisma.$transaction([
+        prisma.escrow.update({
+          where: { id: escrow.id },
+          data: {
+            releasedAt: releaseNow,
+            releasedTo: releasedBy,
+            releaseStatus: 'RELEASED',
+            releaseReason,
+            updatedAt: releaseNow
+          }
+        }),
+        prisma.deliveryInfo.update({
+          where: { orderId: order.id },
+          data: {
+            status: 'DELIVERED',
+            deliveredAt: releaseNow,
+            autoReleasedAt: releaseNow
+          }
+        }),
+        ...(order.status === 'DELIVERED'
+          ? [prisma.order.update({
+              where: { id: order.id },
+              data: { status: 'COMPLETED' }
+            })]
+          : [])
+      ]);
+
+      results.succeeded++;
+
+      // Notify seller (non-blocking, non-critical)
+      setImmediate(async () => {
+        try {
+          await Promise.allSettled([
+            sendNotification(
+              order.store.user.id,
+              'Funds Released',
+              `Funds for order #${order.id} have been released to your account.`,
+              'ESCROW_RELEASED',
+              { orderId: order.id, amount: amountToTransfer }
+            ),
+            sendEmailNotification({
+              to: order.store.user.email,
+              toName: order.store.user.firstName,
+              subject: 'Funds Released',
+              template: 'generic',
+              templateData: {
+                title: 'Funds Released',
+                message: `GHS ${amountToTransfer.toFixed(2)} for order #${order.id} has been released to your account.`,
+                ctaText: 'View Payouts',
+                ctaUrl: `${process.env.FRONTEND_URL}/seller/payouts`
+              }
+            })
+          ]);
+        } catch (_) {
+          // Notification failure must not affect release result
+        }
+      });
+
+    } catch (err) {
+      await prisma.escrow.update({
+        where: { id: escrow.id },
+        data: {
+          releaseStatus: 'FAILED',
+          releaseReason: 'Internal processing error'
+        }
+      });
+      results.failed++;
+      results.errors.push({
+        escrowId: escrow.id,
+        orderId: order.id,
+        error: process.env.NODE_ENV === 'production' ? 'Internal error' : err.message
+      });
     }
-
-    console.log(`[Escrow Release] Completed: ${results.succeeded} succeeded, ${results.failed} failed out of ${results.processed} processed`);
-    return results;
-
-  } catch (error) {
-    console.error('[Escrow Release] Fatal error in processEscrowRelease:', error);
-    throw error;
   }
+
+  return results;
 };
 
 export const confirmOrderReceived = async (req, res) => {
@@ -269,113 +266,88 @@ export const confirmOrderReceived = async (req, res) => {
     const buyerId = req.user.userId;
     const { orderId } = req.params;
 
-    // Fetch order with all necessary relations
+    if (!orderId || typeof orderId !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid order ID.' });
+    }
+
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
         payment: true,
         escrow: true,
-        store: { 
-          include: { 
-            user: { 
-              select: { 
-                id: true, 
-                email: true, 
-                firstName: true 
-              } 
-            } 
-          } 
+        deliveryInfo: {
+          include: { deliveryProofs: true }
         },
-        buyer: { 
-          select: { 
-            id: true, 
-            firstName: true, 
-            email: true 
-          } 
-        }
+        store: {
+          include: {
+            user: { select: { id: true, email: true, firstName: true } }
+          }
+        },
+        buyer: { select: { id: true, firstName: true, email: true } }
       }
     });
 
-    // Validate order exists
     if (!order) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Order not found.' 
-      });
+      return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    // Verify buyer authorization
     if (order.buyerId !== buyerId) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Unauthorized to confirm this order.' 
-      });
+      return res.status(403).json({ success: false, message: 'Unauthorized action.' });
     }
 
-    // Validate order status
-    if (order.status !== 'DELIVERED') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Order must be in DELIVERED status to confirm receipt.' 
-      });
-    }
-
-    // Validate escrow exists and is pending
-    if (!order.escrow) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'No escrow record found for this order.' 
-      });
-    }
-
-    if (order.escrow.releaseStatus !== 'PENDING') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Escrow is not pending. Current status: ${order.escrow.releaseStatus}` 
-      });
-    }
-
-    // Validate payment was successful
-    if (!order.payment || order.payment.status !== 'SUCCESS') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Payment was not successful for this order.' 
-      });
-    }
-
-    // Get seller payment account
-    const sellerPaymentAccount = await prisma.paymentAccount.findUnique({ 
-      where: { storeId: order.storeId } 
+    // Block if active dispute
+    const activeDispute = await prisma.dispute.findFirst({
+      where: { orderId: order.id, status: 'PENDING' }
     });
 
-    if (!sellerPaymentAccount || !sellerPaymentAccount.paystackRecipientCode) {
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Seller payment account is not configured. Please contact support.' 
+    if (activeDispute) {
+      return res.status(409).json({
+        success: false,
+        message: 'Order has an active dispute. Confirmation is blocked.'
       });
     }
 
-    // Calculate transfer amount
-    const commission = order.commissionTotal || 0;
-    const amountToTransfer = order.escrow.amountHeld - commission;
+    if (!order.escrow) {
+      return res.status(404).json({ success: false, message: 'No escrow record found for this order.' });
+    }
+
+    if (order.escrow.releaseStatus !== 'HELD') {
+      return res.status(400).json({
+        success: false,
+        message: 'Escrow is not in a releasable state.'
+      });
+    }
+
+    if (order.escrow.releasedAt) {
+      return res.status(409).json({ success: false, message: 'Escrow already released.' });
+    }
+
+    const successfulPayment = order.payment?.find(p => p.status === 'SUCCESS');
+    if (!successfulPayment) {
+      return res.status(400).json({ success: false, message: 'No successful payment found for this order.' });
+    }
+      const expectedEscrow = parseFloat((order.totalAmount * (1 - PLATFORM_FEE_PERCENT)).toFixed(2));
+      if (Math.abs(order.escrow.amountHeld - expectedEscrow) > AMOUNT_TOLERANCE) {
+        return res.status(500).json({ success: false, message: 'Escrow integrity check failed.' });
+      }
+
+      const sellerPaymentAccount = await prisma.paymentAccount.findUnique({
+        where: { storeId: order.storeId }
+      });
+
+    if (!sellerPaymentAccount?.paystackRecipientCode) {
+      return res.status(500).json({
+        success: false,
+        message: 'Seller payment account not configured.'
+      });
+    }
+
+    const amountToTransfer = order.escrow.amountHeld;
 
     if (amountToTransfer <= 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid amount after commission deduction.' 
-      });
+      return res.status(400).json({ success: false, message: 'Invalid payout amount.' });
     }
 
-    // Security: Verify escrow amount matches payment amount
-    if (Math.abs(order.escrow.amountHeld - order.payment.amount) > 0.01) {
-      console.error(`Amount mismatch for order ${orderId}: escrow=${order.escrow.amountHeld}, payment=${order.payment.amount}`);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Escrow amount mismatch detected. Please contact support.' 
-      });
-    }
-
-    // Transfer funds to seller
     const transferResult = await transferFundsToSeller({
       amount: amountToTransfer,
       currency: order.escrow.currency,
@@ -385,87 +357,92 @@ export const confirmOrderReceived = async (req, res) => {
     });
 
     if (!transferResult.success) {
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to transfer funds. Please try again later.', 
-        error: process.env.NODE_ENV === 'production' ? undefined : transferResult.error 
+      return res.status(500).json({
+        success: false,
+        message: 'Transfer failed. Please try again.',
+        error: process.env.NODE_ENV === 'production' ? undefined : transferResult.error
       });
     }
 
-    const nowDate = new Date();
+    const now = new Date();
 
-    // Update order and escrow in transaction
     const [updatedOrder, updatedEscrow] = await prisma.$transaction([
-      prisma.order.update({ 
-        where: { id: orderId }, 
-        data: { status: 'COMPLETED' } 
+      prisma.order.update({
+        where: { id: orderId },
+        data: { status: 'COMPLETED' }
       }),
       prisma.escrow.update({
         where: { id: order.escrow.id },
         data: {
-          releasedAt: nowDate,
+          releasedAt: now,
           releasedTo: 'buyer_confirmation',
           releaseStatus: 'RELEASED',
           releaseReason: 'buyer_confirmed',
-          updatedAt: nowDate
+          updatedAt: now
+        }
+      }),
+      prisma.deliveryInfo.update({
+        where: { orderId },
+        data: {
+          status: 'DELIVERED',
+          deliveredAt: now,
+          buyerConfirmedAt: now
         }
       })
     ]);
 
-    // Send notifications (non-blocking)
     setImmediate(async () => {
       try {
-        const sellerName = order.store.user.firstName || 'Seller';
         await Promise.allSettled([
           sendNotification(
-            order.store.userId,
-            'Funds Released - Order Confirmed',
-            `Funds for order #${order.id} (${amountToTransfer} ${order.escrow.currency}) have been released after buyer confirmation.`,
+            order.store.user.id,
+            'Funds Released',
+            `Funds for order #${order.id} have been released to your account.`,
             'ESCROW_RELEASED',
             { orderId: order.id, amount: amountToTransfer }
           ),
           sendEmailNotification({
             to: order.store.user.email,
-            toName: sellerName,
-            subject: 'Funds Released - Order Confirmed',
+            toName: order.store.user.firstName,
+            subject: 'Funds Released',
             template: 'generic',
             templateData: {
               title: 'Funds Released',
-              message: `Funds for order #${order.id} (${amountToTransfer} ${order.escrow.currency}) have been released to your account after buyer confirmation. Commission deducted: ${commission} ${order.escrow.currency}.`,
+              message: `GHS ${amountToTransfer.toFixed(2)} for order #${order.id} has been released to your account.`,
               ctaText: 'View Order',
-              ctaUrl: `${process.env.FRONTEND_URL}/orders/${order.id}`
+              ctaUrl: `${process.env.FRONTEND_URL}/seller/orders/${order.id}`
             }
-          })
+          }),
+          sendNotification(
+            buyerId,
+            'Order Completed',
+            `Your order #${order.id} has been marked as completed.`,
+            'order_confirmed',
+            { orderId: order.id }
+          )
         ]);
-      } catch (notificationError) {
-        console.error('Error sending escrow release notifications:', notificationError);
+      } catch (_) {
       }
     });
 
-    // Invalidate caches
-    await invalidateEscrowCaches(orderId, buyerId, order.store.userId, order.storeId);
+    await invalidateEscrowCaches(orderId, buyerId, order.store.user.id, order.storeId);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Order confirmed and funds released to seller.',
-      data: { 
-        order: updatedOrder, 
-        escrow: updatedEscrow, 
-        transfer: { 
-          code: transferResult.transferCode, 
+      message: 'Order confirmed and funds released.',
+      data: {
+        order: updatedOrder,
+        escrow: updatedEscrow,
+        transfer: {
           reference: transferResult.transferReference,
           amount: amountToTransfer,
           currency: order.escrow.currency
-        } 
+        }
       }
     });
 
   } catch (error) {
-    console.error('Error confirming order received:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: sanitizeError(error)
-    });
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };
 
@@ -474,37 +451,24 @@ export const getEscrowDetails = async (req, res) => {
     const { escrowId } = req.params;
     const userId = req.user.userId;
 
+    if (!escrowId || typeof escrowId !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid escrow ID.' });
+    }
+
     const escrow = await prisma.escrow.findUnique({
       where: { id: escrowId },
       include: {
         payment: {
-          select: {
-            id: true,
-            amount: true,
-            status: true,
-            gatewayRef: true
-          }
+          select: { id: true, amount: true, status: true, gatewayRef: true }
         },
         order: {
           include: {
-            buyer: { 
-              select: { 
-                id: true, 
-                firstName: true, 
-                email: true 
-              } 
-            },
-            store: { 
+            buyer: { select: { id: true, firstName: true, email: true } },
+            store: {
               select: {
                 id: true,
                 name: true,
-                user: { 
-                  select: { 
-                    id: true, 
-                    firstName: true, 
-                    email: true 
-                  } 
-                } 
+                user: { select: { id: true, firstName: true, email: true } }
               }
             }
           }
@@ -513,52 +477,38 @@ export const getEscrowDetails = async (req, res) => {
     });
 
     if (!escrow) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Escrow record not found.' 
-      });
+      return res.status(404).json({ success: false, message: 'Escrow record not found.' });
     }
 
-    // Check authorization
     const isBuyer = escrow.order.buyerId === userId;
     const isSeller = escrow.order.store.user.id === userId;
 
     if (!isBuyer && !isSeller) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Unauthorized to view this escrow record.' 
-      });
+      return res.status(403).json({ success: false, message: 'Unauthorized to view this escrow record.' });
     }
 
-    // Prepare response data (hide sensitive info from buyers)
     const commission = escrow.order.commissionTotal || 0;
-    const responseData = {
-      id: escrow.id,
-      currency: escrow.currency,
-      releaseStatus: escrow.releaseStatus,
-      releaseReason: escrow.releaseReason,
-      releasedAt: escrow.releasedAt,
-      releaseDate: escrow.releaseDate,
-      orderId: escrow.orderId,
-      totalHeld: escrow.amountHeld,
-      // Only show breakdown to seller
-      ...(isSeller && {
-        amountToSeller: escrow.amountHeld - commission,
-        commission: commission
-      })
-    };
 
-    res.status(200).json({ 
-      success: true, 
-      data: responseData 
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: escrow.id,
+        currency: escrow.currency,
+        releaseStatus: escrow.releaseStatus,
+        releaseReason: escrow.releaseReason,
+        releasedAt: escrow.releasedAt,
+        releaseDate: escrow.releaseDate,
+        orderId: escrow.orderId,
+        totalHeld: escrow.amountHeld,
+        ...(isSeller && {
+          amountToSeller: escrow.amountHeld,
+          commission
+        })
+      }
     });
 
   } catch (error) {
-    console.error('Error fetching escrow details:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: sanitizeError(error)
-    });
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };
 
@@ -567,139 +517,122 @@ export const getOrderEscrowStatus = async (req, res) => {
     const { orderId } = req.params;
     const userId = req.user.userId;
 
+    if (!orderId || typeof orderId !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid order ID.' });
+    }
+
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      include: { 
-        escrow: true, 
-        buyer: { select: { id: true } }, 
-        store: { select: { userId: true } } 
+      include: {
+        escrow: true,
+        buyer: { select: { id: true } },
+        store: { select: { userId: true } }
       }
     });
 
     if (!order) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Order not found.' 
-      });
+      return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    // Check authorization
     const isBuyer = order.buyerId === userId;
     const isSeller = order.store.userId === userId;
 
     if (!isBuyer && !isSeller) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Unauthorized to view this order escrow status.' 
-      });
+      return res.status(403).json({ success: false, message: 'Unauthorized to view this order escrow status.' });
     }
 
     if (!order.escrow) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'No escrow record found for this order.' 
-      });
+      return res.status(404).json({ success: false, message: 'No escrow record found for this order.' });
     }
 
     const commission = order.commissionTotal || 0;
-    const responseData = {
-      escrow: {
-        id: order.escrow.id,
-        currency: order.escrow.currency,
-        releaseStatus: order.escrow.releaseStatus,
-        releaseReason: order.escrow.releaseReason,
-        releasedAt: order.escrow.releasedAt,
-        releaseDate: order.escrow.releaseDate,
-        totalHeld: order.escrow.amountHeld,
-        // Only show breakdown to seller
-        ...(isSeller && {
-          amountToSeller: order.escrow.amountHeld - commission,
-          commission: commission
-        })
-      },
-      canConfirmReceipt: isBuyer && order.status === 'DELIVERED' && order.escrow.releaseStatus === 'PENDING'
-    };
 
-    res.status(200).json({ 
-      success: true, 
-      data: responseData 
-    });
-
-  } catch (error) {
-    console.error('Error fetching order escrow status:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: sanitizeError(error)
-    });
-  }
-};
-
-export const getPendingEscrows = async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const [escrows, total] = await Promise.all([
-      prisma.escrow.findMany({
-        where: {
-          releaseStatus: 'PENDING'
-        },
-        include: {
-          order: {
-            select: {
-              id: true,
-              orderNumber: true,
-              status: true,
-              buyerId: true,
-              storeId: true,
-              commissionTotal: true,
-              buyer: { 
-                select: { 
-                  id: true, 
-                  firstName: true, 
-                  email: true 
-                } 
-              },
-              store: { 
-                select: { 
-                  id: true, 
-                  name: true 
-                } 
-              }
-            }
-          },
-          payment: {
-            select: {
-              id: true,
-              amount: true,
-              currency: true,
-              status: true
-            }
-          }
-        },
-        orderBy: { releaseDate: 'asc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.escrow.count({ where: { releaseStatus: 'PENDING' } })
-    ]);
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      data: escrows,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / parseInt(limit))
+      data: {
+        escrow: {
+          id: order.escrow.id,
+          currency: order.escrow.currency,
+          releaseStatus: order.escrow.releaseStatus,
+          releaseReason: order.escrow.releaseReason,
+          releasedAt: order.escrow.releasedAt,
+          releaseDate: order.escrow.releaseDate,
+          totalHeld: order.escrow.amountHeld,
+          ...(isSeller && {
+            amountToSeller: order.escrow.amountHeld,
+            commission
+          })
+        },
+        canConfirmReceipt:
+          isBuyer &&
+          ['SHIPPED', 'DELIVERED'].includes(order.status) &&
+          order.escrow.releaseStatus === 'HELD'
       }
     });
 
   } catch (error) {
-    console.error('Error fetching pending escrows:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
+  }
+};
+
+// ── GET /escrow/pending (admin only)
+
+export const getPendingEscrows = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Admin guard
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true }
     });
+
+    if (!user || user.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Unauthorized. Admin access required.' });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const [escrows, total] = await Promise.all([
+      prisma.escrow.findMany({
+        where: { releaseStatus: 'HELD' },
+        include: {
+          order: {
+            select: {
+              id: true,
+              status: true,
+              buyerId: true,
+              storeId: true,
+              commissionTotal: true,
+              buyer: { select: { id: true, firstName: true, email: true } },
+              store: { select: { id: true, name: true } }
+            }
+          },
+          payment: {
+            select: { id: true, amount: true, currency: true, status: true }
+          }
+        },
+        orderBy: { releaseDate: 'asc' },
+        skip,
+        take: limit
+      }),
+      prisma.escrow.count({ where: { releaseStatus: 'HELD' } })
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: escrows,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };

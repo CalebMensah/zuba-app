@@ -15,12 +15,12 @@ import {
   Image,
 } from 'react-native';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
+import { CommonActions, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../types/navigation';
 import { useAuth } from '../../context/AuthContext';
 import { authAPI, LoginData } from '../../services/api';
 import { Colors } from '../../constants/colors';
-import { useGoogleLogin } from '../../hooks/useGoogle';
 
 type LoginScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 
@@ -29,8 +29,7 @@ interface Props {
 }
 
 const LoginScreen: React.FC<Props> = ({ navigation }) => {
-  const { login } = useAuth();
-  const { signInWithGoogle, isLoading: googleLoading, error: googleError } = useGoogleLogin();
+  const { login, loginAsGuest } = useAuth();
   const [formData, setFormData] = useState<LoginData>({
     email: '',
     password: '',
@@ -66,7 +65,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
       });
 
       if (response.success) {
-        await login(response.token, response.user);
+        await login(response.accessToken, response.refreshToken, response.user);
         // Navigation will be handled by RootNavigator based on role
       }
     } catch (error: any) {
@@ -219,6 +218,25 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                 <Text style={styles.signupLink}>Sign Up</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Continue as Guest */}
+            <TouchableOpacity
+              style={styles.guestButton}
+              onPress={async () => {
+                await loginAsGuest();
+                navigation.dispatch(
+                  CommonActions.reset({
+                    index: 0,
+                    routes: [{ name: 'MarketPlace' as any }],
+                  })
+                );
+              }}
+
+              disabled={loading}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.guestButtonText}>Continue as Guest</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Footer */}
@@ -415,6 +433,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.primary,
     fontWeight: '700',
+  },
+  guestButton: {
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.backgroundSecondary,
+    marginTop: 16,
+    marginBottom: 24,
+  },
+  guestButtonDisabled: {
+    opacity: 0.6,
+  },
+  guestButtonText: {
+    color: Colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   footer: {
     marginTop: 'auto',

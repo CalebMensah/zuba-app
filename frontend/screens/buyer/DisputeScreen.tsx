@@ -16,13 +16,17 @@ import { Colors } from '../../constants/colors';
 
 const DisputesScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { loading, error, getUserDisputes, clearError } = useDisputes();
+  const { loading, error, getMyDisputes: getUserDisputes, clearError } = useDisputes();
 
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [selectedStatus, setSelectedStatus] = useState<DisputeStatus | 'ALL'>('ALL');
+
+  // DisputeStatus in this app is: 'OPEN' | 'RESOLVED' | 'CANCELLED'
+  // (Buyer UI previously used 'PENDING' which doesn't exist in the type.)
+  type StatusFilterValue = DisputeStatus | 'ALL';
   const [stats, setStats] = useState({
     pending: 0,
     resolved: 0,
@@ -57,7 +61,7 @@ const DisputesScreen: React.FC = () => {
         // Calculate stats
         const allDisputes = await getUserDisputes(1, 1000);
         if (allDisputes) {
-          const pending = allDisputes.disputes.filter((d) => d.status === 'PENDING').length;
+          const pending = allDisputes.disputes.filter((d) => d.status === 'OPEN').length;
           const resolved = allDisputes.disputes.filter((d) => d.status === 'RESOLVED').length;
           const cancelled = allDisputes.disputes.filter((d) => d.status === 'CANCELLED').length;
           setStats({ pending, resolved, cancelled });
@@ -106,7 +110,7 @@ const DisputesScreen: React.FC = () => {
 
   const getStatusColor = (status: DisputeStatus) => {
     switch (status) {
-      case 'PENDING':
+      case 'OPEN':
         return Colors.warning;
       case 'RESOLVED':
         return Colors.success;
@@ -119,7 +123,7 @@ const DisputesScreen: React.FC = () => {
 
   const getStatusBgColor = (status: DisputeStatus) => {
     switch (status) {
-      case 'PENDING':
+      case 'OPEN':
         return Colors.warningLight;
       case 'RESOLVED':
         return Colors.successLight;
@@ -268,7 +272,7 @@ const DisputesScreen: React.FC = () => {
       {/* Status Filters */}
       <View style={styles.filtersContainer}>
         <StatusFilter status="ALL" label="All" count={stats.pending + stats.resolved + stats.cancelled} />
-        <StatusFilter status="PENDING" label="Pending" count={stats.pending} />
+        <StatusFilter status="OPEN" label="Pending" count={stats.pending} />
         <StatusFilter status="RESOLVED" label="Resolved" count={stats.resolved} />
         <StatusFilter status="CANCELLED" label="Cancelled" count={stats.cancelled} />
       </View>
@@ -312,6 +316,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 40
   },
   statsContainer: {
     flexDirection: 'row',

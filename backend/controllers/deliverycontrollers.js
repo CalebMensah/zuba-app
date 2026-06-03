@@ -2,154 +2,8 @@ import prisma from '../config/prisma.js';
 import { cache } from '../config/redis.js';
 import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
+import { uploadMultipleToCloudinary } from '../config/cloudinary.js';
 
-export const assignCourier = async (req, res) => {
-  try {
-    const sellerId = req.user.userId;
-    const { orderId } = req.params;
-
-    const {
-      courierService,
-      driverName,
-      driverPhone,
-      driverVehicleNumber,
-      trackingNumber,
-      trackingUrl,
-      estimatedDelivery,
-      notes
-    } = req.body;
-
-    if (!courierService || !driverName || !driverVehicleNumber) {
-      return res.status(400).json({
-        success: false,
-        message: 'Courier service name, driver name, and driver vehicle number are required.'
-      });
-    }
-
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      include: {
-        store: { 
-          select: { 
-            userId: true,
-            name: true,
-            user: { select: { email: true, firstName: true } }
-          } 
-        },
-        buyer: {
-          select: { email: true, firstName: true }
-        },
-        deliveryInfo: true
-      }
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found.'
-      });
-    }
-
-    if (order.store.userId !== sellerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Unauthorized to assign courier for this order.'
-      });
-    }
-
-    if (!['CONFIRMED', 'PROCESSING'].includes(order.status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot assign courier for order in status: ${order.status}. Expected 'CONFIRMED' or 'PROCESSING'.`
-      });
-    }
-
-    if (order.deliveryInfo && (order.deliveryInfo.courierService || order.deliveryInfo.driverName)) {
-      return res.status(409).json({
-        success: false,
-        message: 'Courier information already assigned for this order. Use the edit endpoint to update.'
-      });
-    }
-
-    let updatedDeliveryInfo;
-
-    if (order.deliveryInfo) {
-      updatedDeliveryInfo = await prisma.deliveryInfo.update({
-        where: { orderId },
-        data: {
-          courierService,
-          driverName,
-          driverPhone: driverPhone || null,
-          driverVehicleNumber,
-          trackingNumber: trackingNumber || null,
-          trackingUrl: trackingUrl || null,
-          estimatedDelivery: estimatedDelivery ? new Date(estimatedDelivery) : null,
-          notes: notes || order.deliveryInfo.notes,
-          status: 'PROCESSING'
-        }
-      });
-    } else {
-      return res.status(404).json({
-        success: false,
-        message: 'Delivery information not found. It should have been created during order creation.'
-      });
-    }
-
-    await prisma.order.update({
-      where: { id: orderId },
-      data: { status: 'SHIPPED' }
-    });
-
-    try {
-      const buyerId = order.buyerId;
-      const buyerName = order.buyer.firstName;
-      const storeName = order.store.name;
-      const orderUrl = `${process.env.FRONTEND_URL}/orders/${orderId}`;
-
-      await sendNotification(
-        buyerId,
-        'Courier Assigned',
-        `A courier has been assigned for your order #${orderId} from ${storeName}.`,
-        'COURIER_ASSIGNED',
-        { orderId, courierService, driverName }
-      );
-
-      await sendEmailNotification({
-        to: order.buyer.email,
-        toName: buyerName,
-        subject: `Courier Assigned for Order #${orderId}`,
-        template: 'generic',
-        templateData: {
-          title: 'Courier Assigned!',
-          message: `Your order #${orderId} from ${storeName} has been assigned to ${courierService}. Driver: ${driverName}. ${trackingNumber ? `Tracking: ${trackingNumber}` : ''}`,
-          ctaText: 'Track Order',
-          ctaUrl: orderUrl
-        }
-      });
-    } catch (notificationError) {
-      console.error('Error sending courier assignment notification:', notificationError);
-    }
-
-    await cache.del(`order:${orderId}:user:${order.buyerId}`);
-    await cache.del(`order:${orderId}:user:${order.store.userId}`);
-    await cache.del(`user:${order.buyerId}:orders`);
-    await cache.del(`store:${order.storeId}:orders`);
-
-    res.status(201).json({
-      success: true,
-      message: 'Courier assigned successfully.',
-      data: updatedDeliveryInfo
-    });
-
-  } catch (error) {
-    console.error('Error assigning courier:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
 
 export const getDeliveryInfoByOrderId = async (req, res) => {
   try {
@@ -169,9 +23,9 @@ export const getDeliveryInfoByOrderId = async (req, res) => {
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      select: { 
-        buyerId: true, 
-        store: { select: { userId: true } } 
+      select: {
+        buyerId: true,
+        store: { select: { userId: true } }
       }
     });
 
@@ -190,7 +44,10 @@ export const getDeliveryInfoByOrderId = async (req, res) => {
     }
 
     const deliveryInfo = await prisma.deliveryInfo.findUnique({
-      where: { orderId: orderId }
+      where: { orderId },
+      include: {
+        deliveryProofs: true
+      }
     });
 
     if (!deliveryInfo) {
@@ -202,14 +59,14 @@ export const getDeliveryInfoByOrderId = async (req, res) => {
 
     await cache.set(cacheKey, deliveryInfo, 300);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: deliveryInfo
     });
 
   } catch (error) {
     console.error('Error fetching delivery info:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Internal server error',
       error: error.message
@@ -217,47 +74,225 @@ export const getDeliveryInfoByOrderId = async (req, res) => {
   }
 };
 
-export const editAssignedDeliveryCourierInfo = async (req, res) => {
+export const shipOrder = async (req, res) => {
   try {
     const sellerId = req.user.userId;
     const { orderId } = req.params;
 
     const {
       courierService,
-      driverName,
-      driverPhone,
-      driverVehicleNumber,
       trackingNumber,
-      trackingUrl,
-      estimatedDelivery,
-      notes,
-      status
+      estimatedDeliveryDays,
+      dispatchNote
     } = req.body;
 
-    const existingDeliveryInfo = await prisma.deliveryInfo.findUnique({
-      where: { orderId: orderId }
-    });
-
-    if (!existingDeliveryInfo) {
-      return res.status(404).json({
+    if (!courierService) {
+      return res.status(400).json({
         success: false,
-        message: 'Delivery information record not found for this order.'
+        message: 'courierService is required.'
+      });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one delivery proof image is required.'
+      });
+    }
+
+    if (estimatedDeliveryDays !== undefined && isNaN(parseInt(estimatedDeliveryDays))) {
+      return res.status(400).json({
+        success: false,
+        message: 'estimatedDeliveryDays must be a number.'
       });
     }
 
     const order = await prisma.order.findUnique({
-      where: { id: existingDeliveryInfo.orderId },
-      include: { 
-        store: { 
-          select: { 
-            userId: true,
-            name: true,
-            user: { select: { email: true, firstName: true } }
-          } 
-        },
-        buyer: {
-          select: { email: true, firstName: true }
+      where: { id: orderId },
+      include: {
+        store: { select: { userId: true, name: true } },
+        buyer: { select: { id: true, email: true, firstName: true } },
+        deliveryInfo: true
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    if (order.store.userId !== sellerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized to ship this order.'
+      });
+    }
+
+    const delivery = order.deliveryInfo;
+    if (!delivery) {
+      return res.status(400).json({
+        success: false,
+        message: 'Delivery info not found for this order.'
+      });
+    }
+
+    if (delivery.status !== 'PENDING') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot ship order. Delivery status must be PENDING, currently ${delivery.status}.`
+      });
+    }
+
+    // Upload proof images to Cloudinary first
+    const buffers = req.files.map(file => file.buffer);
+    const uploads = await uploadMultipleToCloudinary(buffers, {
+      folder: 'delivery-proofs',
+      resource_type: 'image'
+    });
+    const proofUrls = uploads.map(file => file.secure_url);
+
+    // Atomic transaction: update delivery + create proofs + update order
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedDelivery = await tx.deliveryInfo.update({
+        where: { orderId },
+        data: {
+          courierService,
+          trackingNumber: trackingNumber || null,
+          estimatedDeliveryDays: estimatedDeliveryDays ? parseInt(estimatedDeliveryDays) : null,
+          dispatchNote: dispatchNote || null,
+          status: 'DISPATCHED',
+          dispatchedAt: new Date()
         }
+      });
+
+      await Promise.all(
+        proofUrls.map(url =>
+          tx.deliveryProof.create({
+            data: {
+              deliveryId: updatedDelivery.id,
+              type: 'DISPATCH_RECEIPT',
+              fileUrl: url,
+              uploadedById: sellerId,
+              uploadedRole: 'SELLER'
+            }
+          })
+        )
+      );
+
+      const updatedOrder = await tx.order.update({
+        where: { id: orderId },
+        data: { status: 'SHIPPED' }
+      });
+
+      return { updatedDelivery, updatedOrder };
+    });
+
+    // Notifications (non-blocking)
+    try {
+      await sendNotification(
+        order.buyer.id,
+        'Order Shipped',
+        `Your order #${orderId} from ${order.store.name} has been shipped via ${courierService}.`,
+        'ORDER_SHIPPED',
+        { orderId, trackingNumber }
+      );
+
+      await sendEmailNotification({
+        to: order.buyer.email,
+        toName: order.buyer.firstName,
+        subject: `Your Order (#${orderId}) Has Been Shipped!`,
+        template: 'order_shipped',
+        templateData: {
+          orderId,
+          courierService,
+          trackingNumber: trackingNumber || 'N/A',
+          estimatedDeliveryDays: estimatedDeliveryDays || 'N/A',
+          orderUrl: `${process.env.FRONTEND_URL}/orders/${orderId}`
+        }
+      });
+    } catch (e) {
+      console.error('Notification error:', e);
+    }
+
+    // Cache invalidation
+    await Promise.all([
+      cache.del(`order:${orderId}:user:${order.buyer.id}`),
+      cache.del(`order:${orderId}:user:${sellerId}`),
+      cache.del(`delivery:${orderId}:user:${order.buyer.id}`),
+      cache.del(`delivery:${orderId}:user:${sellerId}`),
+      cache.del(`user:${order.buyer.id}:orders`),
+      cache.del(`store:${order.storeId}:orders`)
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order shipped successfully.',
+      data: {
+        orderId: result.updatedOrder.id,
+        orderStatus: result.updatedOrder.status,
+        deliveryStatus: result.updatedDelivery.status,
+        courierService,
+        trackingNumber: trackingNumber || null,
+        estimatedDeliveryDays: result.updatedDelivery.estimatedDeliveryDays,
+        dispatchedAt: result.updatedDelivery.dispatchedAt,
+        proofs: proofUrls
+      }
+    });
+
+  } catch (error) {
+    console.error('Ship order error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to ship order'
+    });
+  }
+};
+
+
+export const updateDeliveryInfo = async (req, res) => {
+  try {
+    const sellerId = req.user.userId;
+    const { orderId } = req.params;
+
+    const {
+      courierService,
+      trackingNumber,
+      estimatedDeliveryDays,
+      dispatchNote,
+      status
+    } = req.body;
+
+    const ALLOWED_STATUSES = ['PENDING', 'PROCESSING', 'DISPATCHED', 'FAILED', 'RETURNED'];
+
+    if (status && !ALLOWED_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Allowed values: ${ALLOWED_STATUSES.join(', ')}`
+      });
+    }
+
+    if (estimatedDeliveryDays !== undefined && isNaN(parseInt(estimatedDeliveryDays))) {
+      return res.status(400).json({
+        success: false,
+        message: 'estimatedDeliveryDays must be a number.'
+      });
+    }
+
+    const existingDelivery = await prisma.deliveryInfo.findUnique({
+      where: { orderId }
+    });
+
+    if (!existingDelivery) {
+      return res.status(404).json({
+        success: false,
+        message: 'Delivery information not found for this order.'
+      });
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        store: { select: { userId: true, name: true } },
+        buyer: { select: { id: true, email: true, firstName: true } }
       }
     });
 
@@ -271,58 +306,50 @@ export const editAssignedDeliveryCourierInfo = async (req, res) => {
     if (order.store.userId !== sellerId) {
       return res.status(403).json({
         success: false,
-        message: 'Unauthorized to edit delivery info for this order.'
+        message: 'Unauthorized to update delivery info for this order.'
       });
     }
 
     const updateData = {};
     if (courierService !== undefined) updateData.courierService = courierService;
-    if (driverName !== undefined) updateData.driverName = driverName;
-    if (driverPhone !== undefined) updateData.driverPhone = driverPhone || null;
-    if (driverVehicleNumber !== undefined) updateData.driverVehicleNumber = driverVehicleNumber;
     if (trackingNumber !== undefined) updateData.trackingNumber = trackingNumber || null;
-    if (trackingUrl !== undefined) updateData.trackingUrl = trackingUrl || null;
-    if (estimatedDelivery !== undefined) updateData.estimatedDelivery = estimatedDelivery ? new Date(estimatedDelivery) : null;
-    if (notes !== undefined) updateData.notes = notes || null;
+    if (estimatedDeliveryDays !== undefined) updateData.estimatedDeliveryDays = parseInt(estimatedDeliveryDays);
+    if (dispatchNote !== undefined) updateData.dispatchNote = dispatchNote || null;
     if (status !== undefined) updateData.status = status;
 
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No fields provided for update.'
+        message: 'No valid fields provided for update.'
       });
     }
 
-    const updatedDeliveryInfo = await prisma.deliveryInfo.update({
-      where: { orderId: orderId },
+    const updatedDelivery = await prisma.deliveryInfo.update({
+      where: { orderId },
       data: updateData
     });
 
+    // Notify buyer if tracking number changed
     try {
-      if (trackingNumber && trackingNumber !== existingDeliveryInfo.trackingNumber) {
-        const buyerId = order.buyerId;
-        const buyerName = order.buyer.firstName;
-        const storeName = order.store.name;
-        const orderUrl = `${process.env.FRONTEND_URL}/orders/${orderId}`;
-
+      if (trackingNumber && trackingNumber !== existingDelivery.trackingNumber) {
         await sendNotification(
-          buyerId,
+          order.buyer.id,
           'Tracking Updated',
-          `Tracking information updated for order #${orderId} from ${storeName}.`,
+          `Tracking information updated for order #${orderId} from ${order.store.name}.`,
           'TRACKING_UPDATED',
           { orderId, trackingNumber }
         );
 
         await sendEmailNotification({
           to: order.buyer.email,
-          toName: buyerName,
+          toName: order.buyer.firstName,
           subject: `Tracking Updated for Order #${orderId}`,
           template: 'generic',
           templateData: {
             title: 'Tracking Information Updated',
-            message: `Your order #${orderId} from ${storeName} now has tracking information: ${trackingNumber}`,
-            ctaText: 'Track Order',
-            ctaUrl: trackingUrl || orderUrl
+            message: `Your order #${orderId} now has tracking number: ${trackingNumber}`,
+            ctaText: 'View Order',
+            ctaUrl: `${process.env.FRONTEND_URL}/orders/${orderId}`
           }
         });
       }
@@ -330,22 +357,25 @@ export const editAssignedDeliveryCourierInfo = async (req, res) => {
       console.error('Error sending delivery update notification:', notificationError);
     }
 
-    await cache.del(`order:${order.id}:user:${order.buyerId}`);
-    await cache.del(`order:${order.id}:user:${order.store.userId}`);
-    await cache.del(`delivery:${orderId}:user:${order.buyerId}`);
-    await cache.del(`delivery:${orderId}:user:${order.store.userId}`);
-    await cache.del(`user:${order.buyerId}:orders`);
-    await cache.del(`store:${order.storeId}:orders`);
+    // Cache invalidation
+    await Promise.all([
+      cache.del(`order:${orderId}:user:${order.buyer.id}`),
+      cache.del(`order:${orderId}:user:${sellerId}`),
+      cache.del(`delivery:${orderId}:user:${order.buyer.id}`),
+      cache.del(`delivery:${orderId}:user:${sellerId}`),
+      cache.del(`user:${order.buyer.id}:orders`),
+      cache.del(`store:${order.storeId}:orders`)
+    ]);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Delivery information updated successfully.',
-      data: updatedDeliveryInfo
+      data: updatedDelivery
     });
 
   } catch (error) {
-    console.error('Error editing delivery courier info:', error);
-    res.status(500).json({
+    console.error('Error updating delivery info:', error);
+    return res.status(500).json({
       success: false,
       message: 'Internal server error',
       error: error.message
@@ -353,305 +383,156 @@ export const editAssignedDeliveryCourierInfo = async (req, res) => {
   }
 };
 
-export const deleteAssignedDeliveryCourierInfo = async (req, res) => {
+
+export const addDeliveryProof = async (req, res) => {
   try {
-    const sellerId = req.user.userId;
+    const userId = req.user.userId;
     const { orderId } = req.params;
+    const { type, note } = req.body;
 
-    const deliveryInfoToDelete = await prisma.deliveryInfo.findUnique({
-      where: { orderId: orderId }
-    });
+    const VALID_PROOF_TYPES = [
+      'HANDOVER_PHOTO',
+      'WAYBILL',
+      'DISPATCH_RECEIPT',
+      'DELIVERY_PHOTO',
+      'BUYER_SIGNATURE',
+      'OTP_CONFIRMATION'
+    ];
 
-    if (!deliveryInfoToDelete) {
-      return res.status(404).json({
+    if (!type || !VALID_PROOF_TYPES.includes(type)) {
+      return res.status(400).json({
         success: false,
-        message: 'Delivery information record not found for this order.'
+        message: `Proof type is required. Allowed: ${VALID_PROOF_TYPES.join(', ')}`
+      });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one proof image is required.'
       });
     }
 
     const order = await prisma.order.findUnique({
-      where: { id: deliveryInfoToDelete.orderId },
-      include: { store: { select: { userId: true } } }
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Associated order not found.'
-      });
-    }
-
-    if (order.store.userId !== sellerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Unauthorized to delete delivery info for this order.'
-      });
-    }
-
-    if (['SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(order.status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete delivery info for order in status: ${order.status}.`
-      });
-    }
-
-    await prisma.deliveryInfo.update({
-      where: { orderId: orderId },
-      data: {
-        courierService: null,
-        driverName: null,
-        driverPhone: null,
-        driverVehicleNumber: null,
-        trackingNumber: null,
-        trackingUrl: null,
-        estimatedDelivery: null,
-        status: 'PENDING'
-      }
-    });
-
-    await prisma.order.update({
-      where: { id: order.id },
-      data: { status: 'CONFIRMED' }
-    });
-
-    await cache.del(`order:${order.id}:user:${order.buyerId}`);
-    await cache.del(`order:${order.id}:user:${order.store.userId}`);
-    await cache.del(`delivery:${orderId}:user:${order.buyerId}`);
-    await cache.del(`delivery:${orderId}:user:${order.store.userId}`);
-    await cache.del(`user:${order.buyerId}:orders`);
-    await cache.del(`store:${order.storeId}:orders`);
-
-    res.status(200).json({
-      success: true,
-      message: 'Courier assignment removed successfully.'
-    });
-
-  } catch (error) {
-    console.error('Error deleting delivery courier info:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const setDeliveryStatus = async (req, res) => {
-  try {
-    const sellerId = req.user.userId;
-    const { orderId } = req.params;
-    const { status } = req.body;
-
-    const validStatuses = ['PENDING', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'];
-    
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: 'Status is required.'
-      });
-    }
-
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid delivery status. Must be one of: ${validStatuses.join(', ')}.`
-      });
-    }
-
-    const deliveryInfo = await prisma.deliveryInfo.findUnique({
-      where: { orderId: orderId }
-    });
-
-    if (!deliveryInfo) {
-      return res.status(404).json({
-        success: false,
-        message: 'Delivery information record not found for this order.'
-      });
-    }
-
-    const order = await prisma.order.findUnique({
-      where: { id: deliveryInfo.orderId },
-      include: { 
-        store: { 
-          select: { 
-            userId: true,
-            name: true,
-            user: { select: { email: true, firstName: true } }
-          } 
-        },
-        buyer: {
-          select: { email: true, firstName: true }
-        }
+      where: { id: orderId },
+      include: {
+        store: { select: { userId: true } },
+        deliveryInfo: true
       }
     });
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Associated order not found.'
-      });
+      return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    if (order.store.userId !== sellerId) {
+    const isSeller = order.store.userId === userId;
+    const isBuyer = order.buyerId === userId;
+
+    if (!isSeller && !isBuyer) {
       return res.status(403).json({
         success: false,
-        message: 'Unauthorized to update delivery status for this order.'
+        message: 'Unauthorized to upload proof for this order.'
       });
     }
 
-    const updatedDeliveryInfo = await prisma.deliveryInfo.update({
-      where: { orderId: orderId },
-      data: { 
-        status,
-        ...(status === 'DELIVERED' && { actualDelivery: new Date() })
-      }
+    const delivery = order.deliveryInfo;
+    if (!delivery) {
+      return res.status(400).json({
+        success: false,
+        message: 'Delivery info not found for this order.'
+      });
+    }
+
+    // Upload to Cloudinary
+    const buffers = req.files.map(file => file.buffer);
+    const uploads = await uploadMultipleToCloudinary(buffers, {
+      folder: 'delivery-proofs',
+      resource_type: 'image'
     });
+    const proofUrls = uploads.map(file => file.secure_url);
 
-    if (status === 'OUT_FOR_DELIVERY') {
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { status: 'OUT_FOR_DELIVERY' }
-      });
-    } else if (status === 'DELIVERED') {
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { status: 'DELIVERED' }
-      });
-    }
-
-    try {
-      const buyerId = order.buyerId;
-      const buyerName = order.buyer.firstName;
-      const storeName = order.store.name;
-      const orderUrl = `${process.env.FRONTEND_URL}/orders/${orderId}`;
-
-      if (status === 'OUT_FOR_DELIVERY') {
-        await sendNotification(
-          buyerId,
-          'Out for Delivery',
-          `Your order #${orderId} from ${storeName} is out for delivery.`,
-          'OUT_FOR_DELIVERY',
-          { orderId }
-        );
-
-        await sendEmailNotification({
-          to: order.buyer.email,
-          toName: buyerName,
-          subject: `Order #${orderId} is Out for Delivery`,
-          template: 'generic',
-          templateData: {
-            title: 'Out for Delivery!',
-            message: `Your order #${orderId} from ${storeName} is out for delivery and will arrive soon.`,
-            ctaText: 'Track Order',
-            ctaUrl: orderUrl
+    const createdProofs = await Promise.all(
+      proofUrls.map(url =>
+        prisma.deliveryProof.create({
+          data: {
+            deliveryId: delivery.id,
+            type,
+            fileUrl: url,
+            note: note || null,
+            uploadedById: userId,
+            uploadedRole: isSeller ? 'SELLER' : 'BUYER'
           }
-        });
-      } else if (status === 'DELIVERED') {
-        await sendNotification(
-          buyerId,
-          'Order Delivered',
-          `Your order #${orderId} from ${storeName} has been delivered.`,
-          'ORDER_DELIVERED',
-          { orderId }
-        );
+        })
+      )
+    );
 
-        await sendEmailNotification({
-          to: order.buyer.email,
-          toName: buyerName,
-          subject: `Order #${orderId} Delivered`,
-          template: 'generic',
-          templateData: {
-            title: 'Order Delivered!',
-            message: `Your order #${orderId} from ${storeName} has been delivered. Please confirm receipt.`,
-            ctaText: 'Confirm Delivery',
-            ctaUrl: orderUrl
-          }
-        });
-      }
-    } catch (notificationError) {
-      console.error('Error sending delivery status notification:', notificationError);
-    }
+    // Invalidate delivery cache for both parties
+    await Promise.all([
+      cache.del(`delivery:${orderId}:user:${order.buyerId}`),
+      cache.del(`delivery:${orderId}:user:${order.store.userId}`)
+    ]);
 
-    await cache.del(`order:${order.id}:user:${order.buyerId}`);
-    await cache.del(`order:${order.id}:user:${order.store.userId}`);
-    await cache.del(`delivery:${orderId}:user:${order.buyerId}`);
-    await cache.del(`delivery:${orderId}:user:${order.store.userId}`);
-    await cache.del(`user:${order.buyerId}:orders`);
-    await cache.del(`store:${order.storeId}:orders`);
-
-    res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: `Delivery status updated to ${status}.`,
-      data: updatedDeliveryInfo
+      message: 'Delivery proof added successfully.',
+      data: createdProofs
     });
 
   } catch (error) {
-    console.error('Error setting delivery status:', error);
-    res.status(500).json({
+    console.error('Add delivery proof error:', error);
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message
+      message: error.message || 'Internal server error'
     });
   }
 };
 
-// Add this to your deliverycontrollers.js file
+
 
 export const getAllSellerDeliveries = async (req, res) => {
   try {
     const sellerId = req.user.userId;
     const { status, page = 1, limit = 50 } = req.query;
 
-    // Build filter conditions
-    const where = {
-      store: {
-        userId: sellerId
-      }
-    };
+    const VALID_STATUSES = ['PENDING', 'PROCESSING', 'DISPATCHED', 'DELIVERED', 'FAILED', 'RETURNED'];
 
-    // Add status filter if provided
-    if (status && status !== 'ALL') {
-      where.deliveryInfo = {
-        status: status
-      };
+    if (status && status !== 'ALL' && !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status filter. Allowed: ALL, ${VALID_STATUSES.join(', ')}`
+      });
     }
 
-    // Calculate pagination
+    const where = {
+      store: { userId: sellerId }
+    };
+
+    if (status && status !== 'ALL') {
+      where.deliveryInfo = { status };
+    }
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
-    // Fetch orders with delivery info for the seller
     const [orders, totalCount] = await Promise.all([
       prisma.order.findMany({
         where,
         include: {
-          deliveryInfo: true,
-          store: {
-            select: {
-              id: true,
-              name: true,
-              userId: true
-            }
+          deliveryInfo: {
+            include: { deliveryProofs: true }
           },
+          store: { select: { id: true, name: true, userId: true } },
           buyer: {
-            select: {
-              id: true,
-              email: true,
-              firstName: true,
-              lastName: true
-            }
+            select: { id: true, email: true, firstName: true, lastName: true }
           }
         },
-        orderBy: {
-          createdAt: 'desc'
-        },
+        orderBy: { createdAt: 'desc' },
         skip,
         take
       }),
       prisma.order.count({ where })
     ]);
 
-    // Filter out orders without delivery info and map to delivery info
     const deliveries = orders
       .filter(order => order.deliveryInfo !== null)
       .map(order => ({
@@ -667,25 +548,100 @@ export const getAllSellerDeliveries = async (req, res) => {
         }
       }));
 
-    // Calculate pagination metadata
-    const totalPages = Math.ceil(totalCount / take);
-    const hasMore = page < totalPages;
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: deliveries,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
         totalCount,
-        totalPages,
-        hasMore
+        totalPages: Math.ceil(totalCount / take),
+        hasMore: parseInt(page) < Math.ceil(totalCount / take)
       }
     });
 
   } catch (error) {
     console.error('Error fetching seller deliveries:', error);
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
+
+
+export const getBuyerDeliveries = async (req, res) => {
+  try {
+    const buyerId = req.user.userId;
+    const { status, page = 1, limit = 50 } = req.query;
+
+    const VALID_STATUSES = ['PENDING', 'PROCESSING', 'DISPATCHED', 'DELIVERED', 'FAILED', 'RETURNED'];
+
+    if (status && status !== 'ALL' && !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status filter. Allowed: ALL, ${VALID_STATUSES.join(', ')}`
+      });
+    }
+
+    const where = {
+      buyerId
+    };
+
+    if (status && status !== 'ALL') {
+      where.deliveryInfo = { status };
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const take = parseInt(limit);
+
+    const [orders, totalCount] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        include: {
+          deliveryInfo: {
+            include: { deliveryProofs: true }
+          },
+          store: { select: { id: true, name: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take
+      }),
+      prisma.order.count({ where })
+    ]);
+
+    const deliveries = orders
+      .filter(order => order.deliveryInfo !== null)
+      .map(order => ({
+        ...order.deliveryInfo,
+        order: {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          totalAmount: order.totalAmount,
+          createdAt: order.createdAt,
+          store: order.store
+        }
+      }));
+
+    return res.status(200).json({
+      success: true,
+      data: deliveries,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalCount,
+        totalPages: Math.ceil(totalCount / take),
+        hasMore: parseInt(page) < Math.ceil(totalCount / take)
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching buyer deliveries:', error);
+    return res.status(500).json({
       success: false,
       message: 'Internal server error',
       error: error.message
@@ -697,70 +653,39 @@ export const getSellerDeliveryStats = async (req, res) => {
   try {
     const sellerId = req.user.userId;
 
-    // Get all orders for the seller with delivery info
-    const orders = await prisma.order.findMany({
+    const statusCounts = await prisma.deliveryInfo.groupBy({
+      by: ['status'],
       where: {
-        store: {
-          userId: sellerId
-        },
-        deliveryInfo: {
-          isNot: null
+        order: {
+          store: { userId: sellerId }
         }
       },
-      include: {
-        deliveryInfo: true
-      }
+      _count: { status: true }
     });
 
-    // Calculate statistics
     const stats = {
-      total: orders.length,
-      pending: 0,
-      processing: 0,
-      shipped: 0,
-      outForDelivery: 0,
-      delivered: 0,
-      returned: 0,
-      cancelled: 0
+      total: 0,
+      PENDING: 0,
+      PROCESSING: 0,
+      DISPATCHED: 0,
+      DELIVERED: 0,
+      FAILED: 0,
+      RETURNED: 0
     };
 
-    orders.forEach(order => {
-      if (order.deliveryInfo) {
-        const status = order.deliveryInfo.status.toLowerCase();
-        switch (status) {
-          case 'pending':
-            stats.pending++;
-            break;
-          case 'processing':
-            stats.processing++;
-            break;
-          case 'shipped':
-            stats.shipped++;
-            break;
-          case 'out_for_delivery':
-            stats.outForDelivery++;
-            break;
-          case 'delivered':
-            stats.delivered++;
-            break;
-          case 'returned':
-            stats.returned++;
-            break;
-          case 'cancelled':
-            stats.cancelled++;
-            break;
-        }
-      }
+    statusCounts.forEach(({ status, _count }) => {
+      stats[status] = _count.status;
+      stats.total += _count.status;
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: stats
     });
 
   } catch (error) {
     console.error('Error fetching delivery stats:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Internal server error',
       error: error.message

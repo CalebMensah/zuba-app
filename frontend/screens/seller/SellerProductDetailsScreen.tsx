@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  ActivityIndicator,
   Alert,
   StyleSheet,
   Dimensions,
@@ -16,7 +15,8 @@ import { RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import { useProduct } from '../../hooks/useProducts';
+import { useProduct, useSoftDeleteProduct } from '../../hooks/useProducts';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 import { SellerStackParamList } from '../../types/navigation';
 
@@ -35,21 +35,21 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
   navigation,
 }) => {
   const { productUrl } = route.params;
-  const { product, loading, error, getProductByUrl, deleteProduct, clearProduct } = useProduct();
-  const [deleting, setDeleting] = useState(false);
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
-
+  
+  // TanStack Query hooks
+  const { data: product, isLoading, error, refetch } = useProduct(productUrl);
+  console.log('productUrl:', productUrl);
+  
+  // Log product data when it's available
   useEffect(() => {
-    fetchProductDetails();
-
-    return () => {
-      clearProduct();
-    };
-  }, [productUrl]);
-
-  const fetchProductDetails = async () => {
-    await getProductByUrl(productUrl);
-  };
+    if (product) {
+      console.log('product details:', product);
+    }
+  }, [product]);
+  
+  const deleteMutation = useSoftDeleteProduct();
+  
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
   const handleEdit = () => {
     if (product) {
@@ -63,14 +63,14 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
   const handleDelete = () => {
     Alert.alert(
       'Delete Product',
-      'Are you sure you want to delete this product? This action cannot be undone.',
+      'Are you sure you want to delete this product? This product will be moved to trash.',
       [
         {
           text: 'Cancel',
           style: 'cancel',
         },
         {
-          text: 'Delete',
+          text: 'Move to Trash',
           style: 'destructive',
           onPress: confirmDelete,
         },
@@ -78,28 +78,26 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
     );
   };
 
-  const confirmDelete = async () => {
+
+  const confirmDelete = () => {
     if (!product) return;
 
-    setDeleting(true);
-    const success = await deleteProduct(product.id);
-    setDeleting(false);
-
-    if (success) {
-      Alert.alert('Success', 'Product deleted successfully', [
-        {
-          text: 'OK',
-          onPress: () => navigation.goBack(),
-        },
-      ]);
-    } else {
-      Alert.alert('Error', 'Failed to delete product. Please try again.');
-    }
+    deleteMutation.mutate(product.id, {
+      onSuccess: () => {
+        Alert.alert('Success', 'Product moved to trash successfully', [
+          {
+            text: 'OK',
+            onPress: () => navigation.goBack(),
+          },
+        ]);
+      },
+      onError: (error) => {
+        Alert.alert('Error', error.message || 'Failed to delete product. Please try again.');
+      },
+    });
   };
 
   const handleCopyUrl = async () => {
-    console.log('Copy URL pressed');
-    console.log('Product slug:', product?.url);
     if (product?.url) {
       const productUrl = `https://zuba-web.vercel.app/product/${product.url}`;
       await Clipboard.setStringAsync(productUrl);
@@ -108,7 +106,6 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
   };
 
   const handleShareUrl = async () => {
-    console.log('Share URL pressed');
     if (product?.url) {
       const productUrl = `https://zuba-web.vercel.app/product/${product.url}`;
       try {
@@ -122,37 +119,61 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
     }
   };
 
-  if (loading && !product) {
+  // Loading state with LoadingSpinner
+  if (isLoading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <LoadingSpinner size={40} color={Colors.primary} />
         <Text style={styles.loadingText}>Loading product details...</Text>
       </View>
     );
   }
 
-  if (error && !product) {
+  // Error state
+  if (error) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.errorIcon}>⚠️</Text>
-        <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryButton} onPress={fetchProductDetails}>
+        <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+        <Text style={styles.errorText}>{error.message}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+          <Ionicons name="refresh" size={20} color={Colors.white} />
           <Text style={styles.retryButtonText}>Retry</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
+  // Not found state
   if (!product) {
     return (
       <View style={styles.centerContainer}>
+        <Ionicons name="search-outline" size={64} color={Colors.gray400} />
         <Text style={styles.errorText}>Product not found</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={() => navigation.goBack()}>
+          <Text style={styles.retryButtonText}>Go Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.navigationHeader}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Product Details</Text>
+        <View style={styles.headerRight}>
+          <TouchableOpacity onPress={handleCopyUrl} style={styles.headerIconButton}>
+            <Ionicons name="copy-outline" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleShareUrl} style={styles.headerIconButton}>
+            <Ionicons name="share-social-outline" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Image Carousel */}
         {product.images && product.images.length > 0 && (
@@ -213,38 +234,27 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
           {/* Title and Price */}
           <View style={styles.header}>
             <Text style={styles.productName}>{product.name}</Text>
-            <Text style={styles.price}>${product.price.toFixed(2)}</Text>
-          </View>
-
-          {/* Header Actions */}
-          <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.iconButton}
-              onPress={handleCopyUrl}
-            >
-              <Ionicons name="copy-outline" size={24} color={Colors.gray700} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.iconButton}
-              onPress={handleShareUrl}
-            >
-              <Ionicons name="share-social-outline" size={24} color={Colors.gray700} />
-            </TouchableOpacity>
+            <Text style={styles.price}>GH₵{product.price.toFixed(2)}</Text>
           </View>
 
           {/* Stock Info */}
           <View style={styles.stockSection}>
             <View style={styles.stockItem}>
-              <Text style={styles.stockLabel}>Stock</Text>
-              <Text style={[styles.stockValue, product.stock < 10 && styles.stockLow]}>
-                {product.stock} units
-              </Text>
+              <Ionicons name="cube-outline" size={20} color={Colors.textSecondary} />
+              <View style={styles.stockInfo}>
+                <Text style={styles.stockLabel}>Stock</Text>
+                <Text style={[styles.stockValue, product.stock < 10 && styles.stockLow]}>
+                  {product.stock} units
+                </Text>
+              </View>
             </View>
             {product.moq && (
               <View style={styles.stockItem}>
-                <Text style={styles.stockLabel}>MOQ</Text>
-                <Text style={styles.stockValue}>{product.moq} units</Text>
+                <Ionicons name="layers-outline" size={20} color={Colors.textSecondary} />
+                <View style={styles.stockInfo}>
+                  <Text style={styles.stockLabel}>MOQ</Text>
+                  <Text style={styles.stockValue}>{product.moq} units</Text>
+                </View>
               </View>
             )}
           </View>
@@ -252,11 +262,13 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
           {/* Stats */}
           <View style={styles.statsSection}>
             <View style={styles.statItem}>
+              <Ionicons name="cart-outline" size={24} color={Colors.primary} />
               <Text style={styles.statValue}>{product.quantityBought}</Text>
               <Text style={styles.statLabel}>Sold</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
+              <Ionicons name="eye-outline" size={24} color={Colors.primary} />
               <Text style={styles.statValue}>{product.viewCount}</Text>
               <Text style={styles.statLabel}>Views</Text>
             </View>
@@ -275,6 +287,7 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Category</Text>
               <View style={styles.chip}>
+                <Ionicons name="pricetag" size={14} color={Colors.white} />
                 <Text style={styles.chipText}>{product.category}</Text>
               </View>
             </View>
@@ -300,7 +313,7 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
               <Text style={styles.sectionTitle}>Available Sizes</Text>
               <View style={styles.chipContainer}>
                 {product.sizes.map((size, index) => (
-                  <View key={index} style={styles.chip}>
+                  <View key={index} style={styles.sizeChip}>
                     <Text style={styles.chipText}>{size}</Text>
                   </View>
                 ))}
@@ -322,31 +335,15 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
             </View>
           )}
 
-          {/* Weight */}
-          {product.weight && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Weight</Text>
-              <Text style={styles.infoText}>{product.weight} kg</Text>
-            </View>
-          )}
-
-          {/* Seller Note */}
-          {product.sellerNote && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Seller Note</Text>
-              <View style={styles.noteContainer}>
-                <Text style={styles.noteText}>{product.sellerNote}</Text>
-              </View>
-            </View>
-          )}
-
           {/* Metadata */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Product Information</Text>
             <View style={styles.metadataContainer}>
               <View style={styles.metadataRow}>
                 <Text style={styles.metadataLabel}>Product URL:</Text>
-                <Text style={styles.metadataValue}>{product.url}</Text>
+                <Text style={styles.metadataValue} numberOfLines={1}>
+                  {product.url}
+                </Text>
               </View>
               <View style={styles.metadataRow}>
                 <Text style={styles.metadataLabel}>Created:</Text>
@@ -367,25 +364,33 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
         </View>
       </ScrollView>
 
-      {/* Action Buttons */}
+      {/* Action Buttons - WITH LoadingSpinner */}
       <View style={styles.actionBar}>
         <TouchableOpacity
           style={[styles.actionButton, styles.editButton]}
           onPress={handleEdit}
-          disabled={deleting}
+          disabled={deleteMutation.isPending}
         >
-          <Text style={styles.actionButtonText}>✏️ Edit Product</Text>
+          <Ionicons name="create-outline" size={20} color={Colors.white} />
+          <Text style={styles.actionButtonText}>Edit Product</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.actionButton, styles.deleteButton]}
+          style={[
+            styles.actionButton, 
+            styles.deleteButton,
+            deleteMutation.isPending && styles.actionButtonDisabled
+          ]}
           onPress={handleDelete}
-          disabled={deleting}
+          disabled={deleteMutation.isPending}
         >
-          {deleting ? (
-            <ActivityIndicator color={Colors.white} />
+          {deleteMutation.isPending ? (
+            <LoadingSpinner size={20} color={Colors.white} />
           ) : (
-            <Text style={styles.actionButtonText}>🗑️ Delete</Text>
+            <>
+              <Ionicons name="trash-outline" size={20} color={Colors.white} />
+              <Text style={styles.actionButtonText}>Delete</Text>
+            </>
           )}
         </TouchableOpacity>
       </View>
@@ -397,6 +402,40 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+  },
+  navigationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingTop: 50,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  headerIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   centerContainer: {
     flex: 1,
@@ -472,19 +511,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.primary,
   },
-  headerActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16,
-  },
-  iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.gray100,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   stockSection: {
     flexDirection: 'row',
     gap: 16,
@@ -494,6 +520,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   stockItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  stockInfo: {
     flex: 1,
   },
   stockLabel: {
@@ -513,7 +545,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    padding: 16,
+    padding: 20,
     backgroundColor: Colors.white,
     borderRadius: 12,
     marginBottom: 16,
@@ -521,12 +553,12 @@ const styles = StyleSheet.create({
   statItem: {
     alignItems: 'center',
     flex: 1,
+    gap: 8,
   },
   statValue: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: Colors.primary,
-    marginBottom: 4,
+    color: Colors.textPrimary,
   },
   statLabel: {
     fontSize: 12,
@@ -534,7 +566,7 @@ const styles = StyleSheet.create({
   },
   statDivider: {
     width: 1,
-    height: 40,
+    height: 60,
     backgroundColor: Colors.border,
   },
   section: {
@@ -557,21 +589,44 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: Colors.primary,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+  },
+  sizeChip: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 16,
+    minWidth: 50,
+    alignItems: 'center',
   },
   chipText: {
     color: Colors.white,
     fontSize: 14,
     fontWeight: '500',
   },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  infoContent: {
+    flex: 1,
+  },
   infoText: {
     fontSize: 16,
     color: Colors.textPrimary,
+    fontWeight: '500',
   },
   noteContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
     backgroundColor: Colors.white,
     padding: 16,
     borderRadius: 12,
@@ -579,6 +634,7 @@ const styles = StyleSheet.create({
     borderLeftColor: Colors.primary,
   },
   noteText: {
+    flex: 1,
     fontSize: 15,
     lineHeight: 22,
     color: Colors.textSecondary,
@@ -594,6 +650,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+    gap: 8,
   },
   metadataLabel: {
     fontSize: 14,
@@ -603,23 +660,25 @@ const styles = StyleSheet.create({
   metadataValue: {
     fontSize: 14,
     color: Colors.textPrimary,
+    flex: 1,
+    textAlign: 'right',
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
     color: Colors.textSecondary,
   },
-  errorIcon: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
   errorText: {
     fontSize: 16,
-    color: Colors.error,
+    color: Colors.textSecondary,
     textAlign: 'center',
+    marginTop: 16,
     marginBottom: 16,
   },
   retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: Colors.primary,
     paddingHorizontal: 24,
     paddingVertical: 12,
@@ -652,16 +711,21 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 12,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    padding: 16,
+    borderRadius: 12,
   },
   editButton: {
     backgroundColor: Colors.primary,
   },
   deleteButton: {
     backgroundColor: Colors.error,
+  },
+  actionButtonDisabled: {
+    opacity: 0.6,
   },
   actionButtonText: {
     color: Colors.white,

@@ -1,5 +1,5 @@
 import { body, param, validationResult } from 'express-validator';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 // CUID validation helper
 const isCuid = (value) => {
@@ -34,7 +34,7 @@ export const likeActionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    return `like-action-${req.user?.userId || req.ip}`;
+    return `like-action-${req.user?.userId || ipKeyGenerator(req)}`;
   }
 });
 

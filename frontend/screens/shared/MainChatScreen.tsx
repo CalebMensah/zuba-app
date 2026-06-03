@@ -13,8 +13,8 @@ import {
   Platform
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useChat } from '../../hooks/useChat';
+import { Ionicons } from '@expo/vector-icons';
+import { useChatContext } from '../../context/ChatContext';
 import { ChatRoom } from '../../types/chat';
 import { Colors } from '../../constants/colors';
 import { useAuth } from '../../context/AuthContext';
@@ -22,17 +22,15 @@ import { useAuth } from '../../context/AuthContext';
 const ChatListScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user } = useAuth();
-  
+
   const {
     chatRooms,
     isLoading,
     error,
     fetchChatRooms,
-    onlineUsers
-  } = useChat({
-    apiUrl: process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000',
-    autoConnect: true
-  });
+    onlineUsers,
+    currentUserId
+  } = useChatContext();
 
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -46,44 +44,54 @@ const ChatListScreen: React.FC = () => {
     setRefreshing(false);
   };
 
+  const getOtherParticipant = (room: ChatRoom) => {
+    if (!currentUserId) return null;
+    const otherParticipant = room.participants.find(
+      p => p.userId !== currentUserId
+    );
+    return otherParticipant?.user;
+  };
+
   const navigateToChatRoom = (item: ChatRoom) => {
     const otherUser = getOtherParticipant(item);
-    const otherUserName = otherUser?.role === 'SELLER' && otherUser?.store?.name ? otherUser.store.name : otherUser?.firstName || 'Unknown User';
-    const otherUserAvatar = otherUser?.role === 'SELLER' && otherUser?.store?.logo ? otherUser.store.logo : otherUser?.avatar;
-    const otherUserType = user?.role === 'BUYER' ? 'seller' : 'buyer';
-    const storeName = otherUserType === 'seller' ? otherUser?.store?.name : undefined;
-    const storeLogo = otherUserType === 'seller' ? otherUser?.store?.logo : undefined;
+    const isSeller = otherUser?.role === 'SELLER';
 
-    // Use parent navigation to navigate to stack screen from tab screen
+    const otherUserName = isSeller && otherUser?.store?.name
+      ? otherUser.store.name
+      : otherUser?.firstName || 'Unknown User';
+
+    const otherUserAvatar = isSeller && otherUser?.store?.logo
+      ? otherUser.store.logo
+      : otherUser?.avatar;
+
+    const otherUserType = user?.role === 'BUYER' ? 'seller' : 'buyer';
+    const storeName = isSeller ? otherUser?.store?.name : undefined;
+    const storeLogo = isSeller ? otherUser?.store?.logo : undefined;
+
     navigation.getParent()?.navigate('Chat' as any, {
       chatRoomId: item.id,
       otherUserName,
-      otherUserAvatar,
+      otherUserAvatar: otherUserAvatar || null,
       otherUserType,
       storeName,
       storeLogo
     } as never);
   };
 
-  const getOtherParticipant = (room: ChatRoom) => {
-    // Get the other participant (not current user)
-    if (!user?.id) return null;
-    
-    const otherParticipant = room.participants.find(
-      p => p.userId !== user.id
-    );
-    return otherParticipant?.user;
-  };
-
-  const isUserOnline = (userId: string) => {
-    return onlineUsers.has(userId);
-  };
+  const isUserOnline = (userId: string) => onlineUsers.has(userId);
 
   const getOtherUserDisplayName = (otherUser: any) => {
     if (otherUser?.role === 'SELLER' && otherUser?.store?.name) {
       return otherUser.store.name;
     }
     return otherUser?.firstName || 'Unknown User';
+  };
+
+  const getDisplayAvatar = (otherUser: any) => {
+    if (otherUser?.role === 'SELLER' && otherUser?.store?.logo) {
+      return otherUser.store.logo;
+    }
+    return otherUser?.avatar || null;
   };
 
   const formatTimestamp = (date: Date) => {
@@ -113,10 +121,9 @@ const ChatListScreen: React.FC = () => {
     const lastMessage = item.lastMessage;
     const unreadCount = item.unreadCount || 0;
     const displayName = getOtherUserDisplayName(otherUser);
-    const displayAvatar = otherUser?.role === 'SELLER' && otherUser?.store?.logo ? otherUser.store.logo : otherUser?.avatar;
-    console.log('otherUser', otherUser);
-    console.log('displayName', displayName);
-    console.log('displayAvatar', displayAvatar);
+    const displayAvatar = getDisplayAvatar(otherUser);
+
+    const isOwnLastMessage = lastMessage?.senderId === currentUserId;
 
     return (
       <TouchableOpacity
@@ -148,9 +155,11 @@ const ChatListScreen: React.FC = () => {
             <Text style={styles.chatRoomName} numberOfLines={1}>
               {displayName}
             </Text>
-
             {lastMessage && (
-              <Text style={styles.timestamp}>
+              <Text style={[
+                styles.timestamp,
+                unreadCount > 0 && styles.timestampUnread
+              ]}>
                 {formatTimestamp(lastMessage.createdAt)}
               </Text>
             )}
@@ -164,16 +173,19 @@ const ChatListScreen: React.FC = () => {
                     styles.lastMessage,
                     unreadCount > 0 && styles.unreadMessage
                   ]}
-                  numberOfLines={2}
+                  numberOfLines={1}
                 >
-                  {lastMessage.senderId === 'current-user-id' && 'You: '}
+                  {isOwnLastMessage ? 'You: ' : ''}
                   {lastMessage.content}
                 </Text>
               ) : (
-                <View style={styles.mediaContainer}>
-                  <MaterialCommunityIcons name="paperclip" size={14} color={Colors.textSecondary} />
-                  <Text style={[styles.lastMessage, unreadCount > 0 && styles.unreadMessage]}>
-                    {lastMessage.senderId === 'current-user-id' && 'You: '}Media
+                <View style={styles.mediaPreviewContainer}>
+                  <Ionicons name="attach" size={14} color={Colors.textSecondary} />
+                  <Text style={[
+                    styles.lastMessage,
+                    unreadCount > 0 && styles.unreadMessage
+                  ]}>
+                    {isOwnLastMessage ? 'You: ' : ''}Media
                   </Text>
                 </View>
               )
@@ -194,10 +206,19 @@ const ChatListScreen: React.FC = () => {
     );
   };
 
+  const totalUnread = chatRooms.reduce(
+    (sum, room) => sum + (room.unreadCount || 0), 0
+  );
+
   if (error) {
     return (
       <View style={styles.centerContainer}>
-        <MaterialCommunityIcons name="alert" size={80} color={Colors.error} style={styles.emptyIcon} />
+        <Ionicons
+          name="alert-circle-outline"
+          size={64}
+          color={Colors.error}
+          style={{ marginBottom: 16 }}
+        />
         <Text style={styles.errorText}>{error}</Text>
         <TouchableOpacity
           style={styles.retryButton}
@@ -225,18 +246,14 @@ const ChatListScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor={Colors.white}
-      />
-      
-      {/* Header */}
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
+
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Messages</Text>
-        {chatRooms.length > 0 && (
+        {totalUnread > 0 && (
           <View style={styles.headerBadge}>
             <Text style={styles.headerBadgeText}>
-              {chatRooms.reduce((sum, room) => sum + (room.unreadCount || 0), 0)}
+              {totalUnread > 99 ? '99+' : totalUnread}
             </Text>
           </View>
         )}
@@ -257,7 +274,12 @@ const ChatListScreen: React.FC = () => {
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>💬</Text>
+            <Ionicons
+              name="chatbubbles-outline"
+              size={72}
+              color={Colors.gray300}
+              style={{ marginBottom: 20 }}
+            />
             <Text style={styles.emptyText}>No conversations yet</Text>
             <Text style={styles.emptySubtext}>
               Start a conversation by browsing products or checking your orders
@@ -280,7 +302,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: Platform.OS === 'ios' ? 60 : 16,
-    marginTop: Platform.OS === 'ios' ? 60 : 30,
+    marginTop: Platform.OS === 'ios' ? 0 : 30,
     paddingBottom: 16,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
@@ -322,11 +344,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
-    backgroundColor: Colors.background,
+    backgroundColor: Colors.backgroundSecondary,
   },
   listContainer: {
     flexGrow: 1,
     paddingTop: 8,
+    paddingBottom: 20,
   },
   chatRoomContainer: {
     flexDirection: 'row',
@@ -402,6 +425,10 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     fontWeight: '500',
   },
+  timestampUnread: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
   chatRoomFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -423,6 +450,13 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     fontStyle: 'italic',
   },
+  mediaPreviewContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginRight: 8,
+  },
   unreadBadge: {
     backgroundColor: Colors.primary,
     borderRadius: 14,
@@ -437,38 +471,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  chatRoomType: {
-    fontSize: 13,
-    color: Colors.primary,
-    marginTop: 4,
-    fontWeight: '500',
-  },
-  chatRoomTypeOrder: {
-    color: Colors.accent,
-  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 40,
     marginTop: 60,
-  },
-  emptyIcon: {
-    marginBottom: 24,
-    opacity: 0.3,
-  },
-  chatRoomTypeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  lastMessageContainer: {
-    flex: 1,
-    marginRight: 8,
-  },
-  mediaContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
   },
   emptyText: {
     fontSize: 22,
@@ -513,9 +521,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.3,
-  },
-  loader: {
-    marginTop: 40,
   },
 });
 

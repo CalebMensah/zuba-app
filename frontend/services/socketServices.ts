@@ -213,6 +213,19 @@ class SocketService {
     }
   }
 
+  /**
+   * Listen for order cancelled events
+   * @param callback - Receives {userId, orderId, cancelledBy, timestamp}
+   */
+  onOrderCancelled(callback: (data: { userId: string; orderId: string; cancelledBy: string; timestamp: string }) => void): void {
+    if (this.socket) {
+      this.socket.on('order_cancelled', callback);
+      this.listeners.set('order_cancelled', callback);
+      console.log('Listening for order_cancelled events');
+    }
+  }
+
+
   off(event: string): void {
     if (this.socket && this.listeners.has(event)) {
       const callback = this.listeners.get(event);

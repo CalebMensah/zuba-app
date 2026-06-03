@@ -16,7 +16,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useProduct } from '../../hooks/useProducts';
+import { useCreateProduct } from '../../hooks/useProducts';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 
 const CATEGORIES = [
@@ -53,7 +54,8 @@ const COLORS = [
 
 export default function AddProductScreen() {
   const navigation = useNavigation();
-  const { createProduct, loading } = useProduct();
+  
+  const createMutation = useCreateProduct();
 
   // Form state
   const [name, setName] = useState('');
@@ -61,9 +63,7 @@ export default function AddProductScreen() {
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('');
   const [category, setCategory] = useState('');
-  const [weight, setWeight] = useState('');
   const [moq, setMoq] = useState('');
-  const [sellerNote, setSellerNote] = useState('');
   const [images, setImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
   const [selectedColors, setSelectedColors] = useState<string[]>([]);
@@ -154,7 +154,7 @@ export default function AddProductScreen() {
     return true;
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (!validateForm()) return;
 
     const productData = {
@@ -163,24 +163,30 @@ export default function AddProductScreen() {
       price: parseFloat(price),
       stock: parseInt(stock),
       category: category || undefined,
-      weight: weight ? parseFloat(weight) : undefined,
       moq: moq ? parseInt(moq) : undefined,
-      sellerNote: sellerNote.trim() || undefined,
       images,
       sizes: selectedSizes.length > 0 ? selectedSizes : undefined,
       color: selectedColors.length > 0 ? selectedColors : undefined,
       tags: tags.length > 0 ? tags : undefined,
     };
 
-    const result = await createProduct(productData);
-
-    if (result) {
-      Alert.alert('Success', 'Product created successfully!', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
-    } else {
-      Alert.alert('Error', 'Failed to create product. Please try again.');
-    }
+    createMutation.mutate(productData, {
+      onSuccess: (newProduct) => {
+        Alert.alert('Success', 'Product created successfully!', [
+          { 
+            text: 'OK', 
+            onPress: () => navigation.goBack() 
+            // ManageProductsScreen will automatically show the new product!
+          },
+        ]);
+      },
+      onError: (error) => {
+        Alert.alert(
+          'Error', 
+          error.message || 'Failed to create product. Please try again.'
+        );
+      },
+    });
   };
 
   return (
@@ -285,7 +291,6 @@ export default function AddProductScreen() {
             </View>
           </View>
 
-          {/* Category */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Category</Text>
             <TouchableOpacity
@@ -303,7 +308,11 @@ export default function AddProductScreen() {
             </TouchableOpacity>
 
             {showCategoryPicker && (
-              <View style={styles.categoryList}>
+              <ScrollView 
+                style={styles.categoryList}
+                nestedScrollEnabled={true}
+                showsVerticalScrollIndicator={true}
+              >
                 {CATEGORIES.map((cat) => (
                   <TouchableOpacity
                     key={cat}
@@ -329,7 +338,7 @@ export default function AddProductScreen() {
                     )}
                   </TouchableOpacity>
                 ))}
-              </View>
+              </ScrollView>
             )}
           </View>
 
@@ -420,46 +429,6 @@ export default function AddProductScreen() {
           {/* Additional Details */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Additional Details</Text>
-
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, styles.flex1]}>
-                <Text style={styles.label}>Weight (kg)</Text>
-                <TextInput
-                  style={styles.input}
-                  value={weight}
-                  onChangeText={setWeight}
-                  placeholder="0.0"
-                  placeholderTextColor={Colors.gray400}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-
-              <View style={[styles.inputGroup, styles.flex1]}>
-                <Text style={styles.label}>MOQ</Text>
-                <TextInput
-                  style={styles.input}
-                  value={moq}
-                  onChangeText={setMoq}
-                  placeholder="Min. order qty"
-                  placeholderTextColor={Colors.gray400}
-                  keyboardType="number-pad"
-                />
-              </View>
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Seller Note</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={sellerNote}
-                onChangeText={setSellerNote}
-                placeholder="Add a note for buyers (e.g., shipping info)"
-                placeholderTextColor={Colors.gray400}
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-              />
-            </View>
           </View>
 
           <View style={styles.bottomPadding} />
@@ -468,12 +437,15 @@ export default function AddProductScreen() {
         {/* Submit Button */}
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+            style={[
+              styles.submitButton, 
+              createMutation.isPending && styles.submitButtonDisabled
+            ]}
             onPress={handleSubmit}
-            disabled={loading}
+            disabled={createMutation.isPending}
           >
-            {loading ? (
-              <ActivityIndicator size="small" color={Colors.white} />
+            {createMutation.isPending ? (
+              <LoadingSpinner size={20} color={Colors.white} />
             ) : (
               <>
                 <Ionicons name="checkmark-circle" size={20} color={Colors.white} />

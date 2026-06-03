@@ -58,47 +58,52 @@ export default function AddAddress({ navigation }: any) {
     return true;
   };
 
-  const handleSubmit = async () => {
-    clearError();
+const handleSubmit = async () => {
+  clearError();
 
-    let accountData: PaymentAccountInput;
+  let accountData: PaymentAccountInput;
 
-    if (accountType === 'bank') {
-      if (!validateBankAccount()) return;
-      
-      accountData = {
-        accountType: 'bank',
-        bankName: bankName.trim(),
-        accountNumber: accountNumber.trim(),
-        accountName: accountName.trim(),
-        isPrimary: true,
-        isActive: true,
-      };
-    } else {
-      if (!validateMobileMoneyAccount()) return;
-      
-      accountData = {
-        accountType: 'mobile_money',
-        provider: provider.trim(),
-        mobileNumber: mobileNumber.trim(),
-        isPrimary: true,
-        isActive: true,
-      };
-    }
+  if (accountType === 'bank') {
+    if (!validateBankAccount()) return;
+    
+    accountData = {
+      accountType: 'bank',
+      bankName: bankName.trim(),
+      accountNumber: accountNumber.trim(),
+      accountName: accountName.trim(),
+      isPrimary: true,
+      isActive: true,
+    };
+  } else {
+    if (!validateMobileMoneyAccount()) return;
+    
+    accountData = {
+      accountType: 'mobile_money',
+      provider: provider.trim(),
+      mobileNumber: mobileNumber.trim(),
+      isPrimary: true,
+      isActive: true,
+    };
+  }
 
-    const result = await upsertPaymentAccount(accountData);
+  const result = await upsertPaymentAccount(accountData);
 
-    if (result) {
-      Alert.alert('Success', 'Payment account added successfully', [
-        {
-          text: 'OK',
-          onPress: () => navigation.goBack(),
-        },
-      ]);
-    } else if (error) {
-      Alert.alert('Error', error);
-    }
-  };
+  if (result) {
+    // Check if this was the first account (payout preference was auto-set)
+    const message = result.payoutPreferenceSet
+      ? 'Payment account added successfully. This has been set as your preferred payout method.'
+      : 'Payment account updated successfully.';
+    
+    Alert.alert('Success', message, [
+      {
+        text: 'OK',
+        onPress: () => navigation.goBack(),
+      },
+    ]);
+  } else if (error) {
+    Alert.alert('Error', error);
+  }
+};
 
   return (
     <KeyboardAvoidingView

@@ -1,628 +1,306 @@
-// hooks/useOrders.ts
-import { useState, useCallback } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Order, OrderItem, DeliveryInfo, CreateOrderData } from '../types/order';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Alert } from 'react-native';
+import { orderAPI } from '../services/orderApi';
+import {
+  Order,
+  OrderWithBreakdown,
+  CreateOrderData,
+  OrderFilters,
+} from '../types/order';
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
+// Inline mutation arg types
+type UpdateOrderStatusArg = { orderId: string; status: string; reason?: string };
+type UpdateCheckoutSessionArg = {
+  orderId: string;
+  checkoutSession: string;
+  paymentStatus?: string;
+  paymentRef?: string;
+};
+type CancelOrderArg = { orderId: string; reason?: string };
+type RejectOrderArg = { orderId: string; reason: string };
+type CancelUnpaidOrderArg = string;
 
-export interface OrderBreakdown {
-  subtotal: number;
-  deliveryFee: number;
-  taxAmount: number;
-  discount: number;
-  orderSubtotal: number;
-  paystackCollectionFee: number;
-  buyerTotal: number;
-  commissionTotal: number;
-  transferFee: number;  
-  grossSellerPayout: number;  
-  netSellerPayout: number;
-}
+// Export types used by components
+export type { OrderWithBreakdown };
 
-export interface OrderWithBreakdown extends Order {
-  buyerTotalAmount: number;
-  breakdown: OrderBreakdown;
-}
+// Query Keys
+export const orderKeys = {
+  all: ['orders'] as const,
+  lists: () => [...orderKeys.all, 'list'] as const,
+  buyerOrders: (filters?: OrderFilters) => [...orderKeys.lists(), 'buyer', filters] as const,
+  sellerOrders: (filters?: OrderFilters) => [...orderKeys.lists(), 'seller', filters] as const,
+  detail: (orderId: string) => [...orderKeys.all, 'detail', orderId] as const,
+  checkoutSession: (sessionId: string) => [...orderKeys.all, 'checkout', sessionId] as const,
+  unpaid: () => [...orderKeys.all, 'unpaid'] as const,
+  unpaidList: (filters?: OrderFilters) => [...orderKeys.unpaid(), 'list', filters] as const,
+  unpaidSummary: () => [...orderKeys.unpaid(), 'summary'] as const,
+  unpaidByStore: () => [...orderKeys.unpaid(), 'by-store'] as const,
+  unpaidDetail: (orderId: string) => [...orderKeys.unpaid(), 'detail', orderId] as const,
+};
 
-export interface OrdersResponse {
-  orders: OrderWithBreakdown[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    pages: number;
-  };
-}
+// Queries
+export const useBuyerOrders = (filters?: OrderFilters) => useQuery({
+  queryKey: orderKeys.buyerOrders(filters),
+  queryFn: () => orderAPI.getBuyerOrders(filters),
+  staleTime: 30000,
+});
 
-interface ApiResponse<T> {
-  success: boolean;
-  message?: string;
-  data?: T;
-  error?: string;
-}
+export const useSellerOrders = (filters?: OrderFilters) => useQuery({
+  queryKey: orderKeys.sellerOrders(filters),
+  queryFn: () => orderAPI.getSellerOrders(filters),
+  staleTime: 30000,
+});
 
-export interface UnpaidOrdersSummary {
-  totalUnpaidOrders: number;
-  totalAmount: number;
-  totalItems: number;
-  uniqueStores: number;
-  currency: string;
-  oldestUnpaidOrder: {
-    id: string;
-    createdAt: string;
-    amount: number;
-  } | null;
-  hasUnpaidOrders: boolean;
-}
+export const useOrder = (orderId: string) => useQuery({
+  queryKey: orderKeys.detail(orderId),
+  queryFn: () => orderAPI.getOrderById(orderId),
+  enabled: !!orderId,
+  staleTime: 60000,
+});
 
-export interface UnpaidOrdersResponse {
-  orders: OrderWithBreakdown[];
-  ordersByStore: {
-    store: any;
-    orders: OrderWithBreakdown[];
-    storeTotal: number;
-  }[];
-  summary: {
-    totalUnpaidOrders: number;
-    totalAmount: number;
-    totalItems: number;
-    uniqueStores: number;
-    currency: string;
-  };
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-    hasNextPage: boolean;
-    hasPrevPage: boolean;
-  };
-}
+export const useOrderByCheckoutSession = (sessionId: string) => useQuery({
+  queryKey: orderKeys.checkoutSession(sessionId),
+  queryFn: () => orderAPI.getOrderByCheckoutSession(sessionId),
+  enabled: !!sessionId,
+  staleTime: 60000,
+});
 
-export interface UnpaidOrderDetails extends OrderWithBreakdown {
-  hasUnavailableItems: boolean;
-  unavailableItems: {
-    productId: string;
-    productName: string;
-    requestedQuantity: number;
-    availableStock: number;
-  }[];
-}
+export const useUnpaidOrders = (filters?: OrderFilters) => useQuery({
+  queryKey: orderKeys.unpaidList(filters),
+  queryFn: () => orderAPI.getUnpaidOrders(filters),
+  staleTime: 30000,
+});
 
-export interface StoreGroup {
-  store: any;
-  orders: OrderWithBreakdown[];
-  orderCount: number;
-  totalAmount: number;
-  totalItems: number;
-  currency: string;
-}
+export const useUnpaidOrdersSummary = () => useQuery({
+  queryKey: orderKeys.unpaidSummary(),
+  queryFn: () => orderAPI.getUnpaidOrdersSummary(),
+  staleTime: 60000,
+});
 
-export interface UnpaidOrdersByStoreResponse {
-  storeGroups: StoreGroup[];
-  summary: {
-    totalStores: number;
-    totalOrders: number;
-    grandTotal: number;
-    currency: string;
-  };
-}
+export const useUnpaidOrdersByStore = () => useQuery({
+  queryKey: orderKeys.unpaidByStore(),
+  queryFn: () => orderAPI.getUnpaidOrdersByStore(),
+  staleTime: 60000,
+});
 
-export interface CreateOrderResponse {
-  orders: OrderWithBreakdown[];
-  sellerPayouts: {
-    sellerId: string;
-    orderId: string;
-    orderSubtotal: number;
-    paystackCollectionFee: number;
-    buyerTotalAmount: number;
-    totalRevenue: number;
-    commissionTotal: number;
-    grossPayoutAmount: number;
-    transferFee: number; 
-    netPayoutAmount: number;  
-    payoutPreference: string; 
-  }[];
-}
+export const useUnpaidOrder = (orderId: string) => useQuery({
+  queryKey: orderKeys.unpaidDetail(orderId),
+  queryFn: () => orderAPI.getUnpaidOrderById(orderId),
+  enabled: !!orderId,
+  staleTime: 60000,
+});
 
-export const useOrders = () => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+// Mutations - Fixed typing
+export const useCreateOrder = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (orderData: CreateOrderData) => orderAPI.createOrder(orderData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: orderKeys.unpaid() });
+    },
+    onError: (error) => {
+      Alert.alert('Error', (error as Error).message || 'Failed to create order');
+    },
+  });
+};
 
-  // Helper function to get token from AsyncStorage
-  const getToken = async (): Promise<string | null> => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      return token;
-    } catch (err) {
-      console.error('Error retrieving token:', err);
-      return null;
-    }
-  };
+export const useUpdateOrderStatus = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, status, reason }: UpdateOrderStatusArg) =>
+      orderAPI.updateOrderStatus(orderId, status, reason),
+    onSuccess: (data, { orderId }: UpdateOrderStatusArg) => {
+      queryClient.setQueryData(orderKeys.detail(orderId), data);
+      queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
+    },
+    onError: (error) => {
+      Alert.alert('Error', (error as Error).message || 'Failed to update order status');
+    },
+  });
+};
 
-  // Helper function to make authenticated API requests
-  const makeRequest = async <T,>(
-    endpoint: string,
-    method: string = 'GET',
-    body?: any
-  ): Promise<ApiResponse<T>> => {
-    try {
-      const token = await getToken();
+export const useUpdateCheckoutSession = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, checkoutSession, paymentStatus, paymentRef }: UpdateCheckoutSessionArg) =>
+      orderAPI.updateCheckoutSession(orderId, checkoutSession, paymentStatus, paymentRef),
+    onSuccess: (data, { orderId }: UpdateCheckoutSessionArg) => {
+      queryClient.setQueryData(orderKeys.detail(orderId), data);
+      queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
+    },
+    onError: (error) => {
+      Alert.alert('Error', (error as Error).message || 'Failed to update checkout session');
+    },
+  });
+};
+
+export const useCancelOrder = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, reason }: CancelOrderArg) => orderAPI.cancelOrder(orderId, reason),
+    onMutate: async (variables: CancelOrderArg) => {
+      const { orderId } = variables;
+      await queryClient.cancelQueries({ queryKey: orderKeys.lists() });
+      const previousOrder = queryClient.getQueryData(orderKeys.detail(orderId));
+      queryClient.setQueryData(orderKeys.detail(orderId), (old: any) => ({
+        ...old,
+        status: 'CANCELLED',
+        cancelledAt: new Date().toISOString(),
+      }));
+      return { previousOrder };
+    },
+    onError: (err: any, variables: CancelOrderArg, context: any) => {
+      const { orderId } = variables;
+      if ((context as any)?.previousOrder) {
+        queryClient.setQueryData(orderKeys.detail(orderId), (context as any).previousOrder);
+      }
+      Alert.alert('Error', (err as Error).message || 'Failed to cancel order');
+    },
+    onSettled: (data: any, error: any, variables: CancelOrderArg, context: any) => {
+      const { orderId } = variables;
+      queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
+      if (data) {
+        queryClient.setQueryData(orderKeys.detail(orderId), data);
+      }
+    },
+  });
+
+
+};
+
+export const useAcceptOrder = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (orderId: string) => orderAPI.acceptOrder(orderId),
+    onSuccess: (data, orderId: string) => {
+      queryClient.setQueryData(orderKeys.detail(orderId), data);
+      queryClient.invalidateQueries({ queryKey: orderKeys.sellerOrders() });
+    },
+    onError: (error) => {
+      Alert.alert('Error', (error as Error).message || 'Failed to accept order');
+    },
+  });
+};
+
+export const useRejectOrder = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderId, reason }: RejectOrderArg) => orderAPI.rejectOrder(orderId, reason),
+    onSuccess: (_data, { orderId }: RejectOrderArg) => {
+      queryClient.invalidateQueries({ queryKey: orderKeys.detail(orderId) });
+      queryClient.invalidateQueries({ queryKey: orderKeys.sellerOrders() });
+    },
+    onError: (error) => {
+      Alert.alert('Error', (error as Error).message || 'Failed to reject order');
+    },
+  });
+};
+
+export const useCancelUnpaidOrder = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (orderId: string) => orderAPI.cancelUnpaidOrder(orderId),
+    onMutate: async (orderId: string) => {
+      await queryClient.cancelQueries({ queryKey: orderKeys.unpaid() });
+      const previousLists = queryClient.getQueryData(orderKeys.unpaidList());
+      const previousSummary = queryClient.getQueryData(orderKeys.unpaidSummary());
       
-      if (!token) {
-        throw new Error('No authentication token found. Please login again.');
+      const currentUnpaidList = queryClient.getQueryData(orderKeys.unpaidList()) as any;
+      if (currentUnpaidList?.orders) {
+        queryClient.setQueryData(orderKeys.unpaidList(), {
+          ...currentUnpaidList,
+          orders: currentUnpaidList.orders.filter((order: any) => order.id !== orderId),
+        });
       }
-
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      };
-
-      const config: RequestInit = {
-        method,
-        headers,
-      };
-
-      if (body && (method === 'POST' || method === 'PATCH' || method === 'PUT')) {
-        config.body = JSON.stringify(body);
-      }
-
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || `Request failed with status ${response.status}`);
-      }
-
-      return data;
-    } catch (err: any) {
-      throw new Error(err.message || 'An error occurred while making the request');
-    }
-  };
-
-  // Create a new order
-  const createOrder = useCallback(async (orderData: CreateOrderData): Promise<CreateOrderResponse | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<CreateOrderResponse>('/orders', 'POST', orderData);
-
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to create order');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Create order error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get buyer's orders
-  const getBuyerOrders = useCallback(async (
-    page: number = 1,
-    limit: number = 10,
-    status?: string
-  ): Promise<OrdersResponse | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const queryParams = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-        ...(status && { status }),
-      });
-
-      const response = await makeRequest<OrdersResponse>(
-        `/orders/my-orders?${queryParams.toString()}`,
-        'GET'
-      );
       
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch orders');
+      const currentSummary = queryClient.getQueryData(orderKeys.unpaidSummary()) as any;
+      if (currentSummary) {
+        queryClient.setQueryData(orderKeys.unpaidSummary(), {
+          ...currentSummary,
+          totalUnpaidOrders: Math.max(0, (currentSummary.totalUnpaidOrders || 0) - 1),
+          totalAmount: Math.max(0, (currentSummary.totalAmount || 0) - 100),
+        });
       }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get buyer orders error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get seller's orders
-  const getSellerOrders = useCallback(async (
-    page: number = 1,
-    limit: number = 10,
-    status?: string
-  ): Promise<OrdersResponse | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const queryParams = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-        ...(status && { status }),
-      });
-
-      const response = await makeRequest<OrdersResponse>(
-        `/orders/seller/seller-orders?${queryParams.toString()}`,
-        'GET'
-      );
       
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch seller orders');
+      return { previousLists, previousSummary };
+    },
+    onError: (err, orderId: string, context?: { previousLists?: any; previousSummary?: any }) => {
+      if (context?.previousLists) {
+        queryClient.setQueryData(orderKeys.unpaidList(), context.previousLists);
       }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get seller orders error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get order by ID
-  const getOrderById = useCallback(async (orderId: string): Promise<OrderWithBreakdown | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<OrderWithBreakdown>(`/orders/${orderId}`, 'GET');
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch order');
+      if (context?.previousSummary) {
+        queryClient.setQueryData(orderKeys.unpaidSummary(), context.previousSummary);
       }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get order by ID error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      Alert.alert('Error', (err as Error).message || 'Failed to cancel unpaid order');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: orderKeys.unpaid() });
+    },
+  });
+};
 
-  // Get order by checkout session
-  const getOrderByCheckoutSession = useCallback(async (sessionId: string): Promise<OrderWithBreakdown | null> => {
-    setLoading(true);
-    setError(null);
+// Helper utilities
+export const formatCurrency = (amount: number, currency: string = 'GHS'): string => {
+  return new Intl.NumberFormat('en-GH', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+  }).format(amount);
+};
 
-    try {
-      const response = await makeRequest<OrderWithBreakdown>(`/orders/checkout/${sessionId}`, 'GET');
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch order by checkout session');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get order by checkout session error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Update order status (seller only)
-  const updateOrderStatus = useCallback(async (
-    orderId: string,
-    status: string,
-    reason?: string
-  ): Promise<Order | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<Order>(
-        `/orders/${orderId}/status`,
-        'PATCH',
-        { status, reason }
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to update order status');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Update order status error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Update checkout session (useful for payment webhooks/callbacks)
-  const updateCheckoutSession = useCallback(async (
-    orderId: string,
-    checkoutSession: string,
-    paymentStatus?: string,
-    paymentRef?: string
-  ): Promise<Order | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<Order>(
-        `/orders/${orderId}/checkout`,
-        'PUT',
-        { 
-          checkoutSession,
-          ...(paymentStatus && { paymentStatus }),
-          ...(paymentRef && { paymentRef })
-        }
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to update checkout session');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Update checkout session error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Cancel order
-  const cancelOrder = useCallback(async (
-    orderId: string,
-    reason?: string
-  ): Promise<Order | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<Order>(
-        `/orders/${orderId}`,
-        'DELETE',
-        { reason }
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to cancel order');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Cancel order error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get all unpaid orders with filtering and pagination
-  const getUnpaidOrders = useCallback(async (
-    page: number = 1,
-    limit: number = 10,
-    sortBy: 'createdAt' | 'totalAmount' | 'updatedAt' = 'createdAt',
-    sortOrder: 'asc' | 'desc' = 'desc',
-    storeId?: string
-  ): Promise<UnpaidOrdersResponse | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const queryParams = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-        sortBy,
-        sortOrder,
-        ...(storeId && { storeId }),
-      });
-
-      const response = await makeRequest<UnpaidOrdersResponse>(
-        `/orders/user/unpaid?${queryParams.toString()}`,
-        'GET'
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch unpaid orders');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get unpaid orders error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get summary of all unpaid orders
-  const getUnpaidOrdersSummary = useCallback(async (): Promise<UnpaidOrdersSummary | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<UnpaidOrdersSummary>(
-        '/orders/unpaid/summary',
-        'GET'
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch unpaid orders summary');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get unpaid orders summary error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get unpaid orders grouped by store
-  const getUnpaidOrdersByStore = useCallback(async (): Promise<UnpaidOrdersByStoreResponse | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<UnpaidOrdersByStoreResponse>(
-        '/orders/unpaid/by-store',
-        'GET'
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch unpaid orders by store');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get unpaid orders by store error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Get a specific unpaid order by ID
-  const getUnpaidOrderById = useCallback(async (orderId: string): Promise<UnpaidOrderDetails | null> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<UnpaidOrderDetails>(
-        `/orders/unpaid/${orderId}`,
-        'GET'
-      );
-      
-      if (response.success && response.data) {
-        return response.data;
-      } else {
-        throw new Error(response.message || 'Failed to fetch unpaid order');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Get unpaid order by ID error:', err);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Cancel an unpaid order and restore stock
-  const cancelUnpaidOrder = useCallback(async (orderId: string): Promise<boolean> => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await makeRequest<void>(
-        `/orders/unpaid/${orderId}`,
-        'DELETE'
-      );
-      
-      if (response.success) {
-        return true;
-      } else {
-        throw new Error(response.message || 'Failed to cancel unpaid order');
-      }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Cancel unpaid order error:', err);
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Helper function to format currency
-  const formatCurrency = (amount: number, currency: string = 'GHS'): string => {
-    return new Intl.NumberFormat('en-GH', {
-      style: 'currency',
-      currency: currency,
-      minimumFractionDigits: 2,
-    }).format(amount);
-  };
-
-  // UPDATED: Helper function to calculate order totals from breakdown
-  const calculateOrderTotals = (order: OrderWithBreakdown) => {
-    return {
-      subtotal: order.breakdown.subtotal,
-      fees: order.breakdown.deliveryFee + order.breakdown.taxAmount,
-      discount: order.breakdown.discount,
-      orderSubtotal: order.breakdown.orderSubtotal,
-      paystackCollectionFee: order.breakdown.paystackCollectionFee,
-      buyerTotal: order.breakdown.buyerTotal,
-      // NEW: Seller-specific calculations
-      commissionTotal: order.breakdown.commissionTotal,
-      transferFee: order.breakdown.transferFee,
-      grossSellerPayout: order.breakdown.grossSellerPayout,
-      netSellerPayout: order.breakdown.netSellerPayout,
-      formatted: {
-        subtotal: formatCurrency(order.breakdown.subtotal, order.currency),
-        fees: formatCurrency(order.breakdown.deliveryFee + order.breakdown.taxAmount, order.currency),
-        discount: formatCurrency(order.breakdown.discount, order.currency),
-        orderSubtotal: formatCurrency(order.breakdown.orderSubtotal, order.currency),
-        paystackCollectionFee: formatCurrency(order.breakdown.paystackCollectionFee, order.currency),
-        buyerTotal: formatCurrency(order.breakdown.buyerTotal, order.currency),
-        commissionTotal: formatCurrency(order.breakdown.commissionTotal, order.currency),
-        transferFee: formatCurrency(order.breakdown.transferFee, order.currency),
-        grossSellerPayout: formatCurrency(order.breakdown.grossSellerPayout, order.currency),
-        netSellerPayout: formatCurrency(order.breakdown.netSellerPayout, order.currency),
-      }
-    };
-  };
-
-  // Helper function to check if order can be cancelled
-  const canCancelOrder = (order: Order, userRole: 'buyer' | 'seller'): boolean => {
-    if (userRole === 'buyer') {
-      return order.status === 'PENDING';
-    } else if (userRole === 'seller') {
-      return ['PENDING', 'CONFIRMED'].includes(order.status);
-    }
-    return false;
-  };
-
+export const calculateOrderTotals = (order: OrderWithBreakdown) => {
   return {
-    loading,
-    error,
-    
-    // Order management
-    createOrder,
-    getBuyerOrders,
-    getSellerOrders,
-    getOrderById,
-    getOrderByCheckoutSession,
-    updateOrderStatus,
-    updateCheckoutSession,
-    cancelOrder,
-
-    // Unpaid orders management
-    getUnpaidOrders,
-    getUnpaidOrdersSummary,
-    getUnpaidOrdersByStore,
-    getUnpaidOrderById,
-    cancelUnpaidOrder,
-
-    // Helper utilities
-    formatCurrency,
-    calculateOrderTotals,
-    canCancelOrder,
+    subtotal: order.breakdown.subtotal,
+    fees: order.breakdown.deliveryFee + order.breakdown.taxAmount,
+    discount: order.breakdown.discount,
+    orderSubtotal: order.breakdown.orderSubtotal,
+    paystackCollectionFee: order.breakdown.paystackCollectionFee,
+    buyerTotal: order.breakdown.buyerTotal,
+    commissionTotal: order.breakdown.commissionTotal,
+    transferFee: order.breakdown.transferFee,
+    grossSellerPayout: order.breakdown.grossSellerPayout,
+    netSellerPayout: order.breakdown.netSellerPayout,
+    formatted: {
+      subtotal: formatCurrency(order.breakdown.subtotal, order.currency),
+      fees: formatCurrency(
+        order.breakdown.deliveryFee + order.breakdown.taxAmount,
+        order.currency
+      ),
+      discount: formatCurrency(order.breakdown.discount, order.currency),
+      orderSubtotal: formatCurrency(order.breakdown.orderSubtotal, order.currency),
+      paystackCollectionFee: formatCurrency(order.breakdown.paystackCollectionFee, order.currency),
+      buyerTotal: formatCurrency(order.breakdown.buyerTotal, order.currency),
+      commissionTotal: formatCurrency(order.breakdown.commissionTotal, order.currency),
+      transferFee: formatCurrency(order.breakdown.transferFee, order.currency),
+      grossSellerPayout: formatCurrency(order.breakdown.grossSellerPayout, order.currency),
+      netSellerPayout: formatCurrency(order.breakdown.netSellerPayout, order.currency),
+    },
   };
 };
 
-export default useOrders;
+export const canCancelOrder = (order: Order, userRole: 'buyer' | 'seller'): boolean => {
+  if (userRole === 'buyer') {
+    return order.status === 'PENDING_PAYMENT';
+  }
+  if (userRole === 'seller') {
+    return order.status ? ['PENDING', 'CONFIRMED'].includes(order.status) : false;
+  }
+  return false;
+};
+
+export const useInvalidateOrders = () => {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: orderKeys.all });
+};
+
+export const usePrefetchBuyerOrders = () => {
+  const queryClient = useQueryClient();
+  return (filters?: OrderFilters) => {
+    queryClient.prefetchQuery({
+      queryKey: orderKeys.buyerOrders(filters),
+      queryFn: () => orderAPI.getBuyerOrders(filters),
+    });
+  };
+};
+

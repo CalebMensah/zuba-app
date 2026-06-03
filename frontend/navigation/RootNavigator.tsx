@@ -14,7 +14,7 @@ import AdminNavigator from './AdminNavigator';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const RootNavigator: React.FC = () => {
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading, isGuest, user } = useAuth();
 
   if (isLoading) {
     return (
@@ -25,6 +25,9 @@ const RootNavigator: React.FC = () => {
   }
 
   const getMainNavigator = () => {
+    // Guests get buyer navigator
+    if (isGuest) return BuyerNavigator;
+
     if (!user) return null;
 
     switch (user.role) {
@@ -43,10 +46,11 @@ const RootNavigator: React.FC = () => {
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {!isAuthenticated || !MainNavigator ? (
-        <Stack.Screen name="Auth" component={AuthNavigator} />
-      ) : (
+      {/* Show Main navigator for authenticated users OR guests */}
+      {(isAuthenticated || isGuest) && MainNavigator ? (
         <Stack.Screen name="Main" component={MainNavigator} />
+      ) : (
+        <Stack.Screen name="Auth" component={AuthNavigator} />
       )}
     </Stack.Navigator>
   );

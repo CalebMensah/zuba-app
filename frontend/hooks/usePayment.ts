@@ -12,6 +12,7 @@ interface InitiatePaymentData {
   currency?: string;
 }
 
+
 interface CreateCheckoutSessionData {
   orderIds: string[];
   email: string;
@@ -343,25 +344,88 @@ export const usePayment = () => {
     };
   };
 
+
   // Create checkout session for multiple orders (multi-store)
   const createCheckoutSession = async (
     sessionData: CreateCheckoutSessionData
   ): Promise<CheckoutSessionResponse | null> => {
     setLoading(true);
     setError(null);
+    
     try {
+      // Validate input data
+      if (!sessionData.orderIds || !Array.isArray(sessionData.orderIds) || sessionData.orderIds.length === 0) {
+        const errorMsg = 'Order IDs array is required and must not be empty';
+        setError(errorMsg);
+        throw new Error(errorMsg);
+      }
+      
+      if (!sessionData.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sessionData.email)) {
+        const errorMsg = 'Valid email is required';
+        setError(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       const config = await getConfig();
+      
+      // Debug logging
+      console.log('🔄 Creating checkout session with data:', {
+        orderIds: sessionData.orderIds,
+        email: sessionData.email,
+        callbackUrl: sessionData.callbackUrl,
+        apiUrl: `${API_URL}/payments/checkout-session`
+      });
+
       const response = await axios.post<CheckoutSessionResponse>(
         `${API_URL}/payments/checkout-session`,
         sessionData,
         config
       );
+      
+      console.log('✅ Checkout session created successfully:', response.data);
       return response.data;
     } catch (err) {
       const axiosError = err as AxiosError<ApiErrorResponse>;
-      const errorMessage = axiosError.response?.data?.message || 'Failed to create checkout session';
+      
+      // Enhanced error logging
+      console.error('❌ Checkout session error:', {
+        status: axiosError.response?.status,
+        statusText: axiosError.response?.statusText,
+        data: axiosError.response?.data,
+        message: axiosError.message,
+        code: axiosError.code
+      });
+
+      let errorMessage = 'Failed to create checkout session';
+      
+      if (axiosError.response) {
+        switch (axiosError.response.status) {
+          case 400:
+            errorMessage = axiosError.response.data?.message || 'Invalid request data. Please check your information and try again.';
+            break;
+          case 401:
+            errorMessage = 'Authentication required. Please log in again.';
+            break;
+          case 403:
+            errorMessage = 'You do not have permission to perform this action.';
+            break;
+          case 429:
+            errorMessage = 'Too many payment attempts. Please wait a few minutes before trying again.';
+            break;
+          case 500:
+            errorMessage = 'Payment service temporarily unavailable. Please try again later.';
+            break;
+          default:
+            errorMessage = axiosError.response.data?.message || `Server error (${axiosError.response.status}). Please try again.`;
+        }
+      } else if (axiosError.request) {
+        errorMessage = 'Network error. Please check your internet connection and try again.';
+      } else {
+        errorMessage = axiosError.message || 'An unexpected error occurred.';
+      }
+      
       setError(errorMessage);
-      throw err;
+      throw new Error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -468,24 +532,43 @@ export const usePayment = () => {
     }
   };
 
-  // Verify payment by reference
+  // Verify payment by reference - WITH DETAILED LOGGING
   const verifyPayment = async (reference: string): Promise<PaymentVerificationResponse | null> => {
+    console.log(`🔍 FRONTEND: Starting verifyPayment(${reference})`);
     setLoading(true);
     setError(null);
+    
     try {
       const config = await getConfig();
+      console.log(`🔗 Calling backend /verify-payment/${reference}`);
+      
       const response = await axios.get<PaymentVerificationResponse>(
-        `${API_URL}/payments/verify/${reference}`,
+        `${API_URL}/payments/verify-payment/${reference}`,
         config
       );
+      
+      console.log(`✅ FRONTEND VERIFY SUCCESS [${reference}]`, {
+        success: response.data.success,
+        paymentsCount: response.data.data.payments?.length || 0,
+        statuses: response.data.data.payments?.map(p => p.status),
+        gatewayStatus: response.data.data.gatewayData?.status
+      });
+      
       return response.data;
     } catch (err) {
       const axiosError = err as AxiosError<ApiErrorResponse>;
+      console.error(`❌ FRONTEND VERIFY FAILED [${reference}]`, {
+        status: axiosError.response?.status,
+        message: axiosError.response?.data?.message,
+        debug: axiosError.response?.data?.debug
+      });
+      
       const errorMessage = axiosError.response?.data?.message || 'Failed to verify payment';
       setError(errorMessage);
       throw err;
     } finally {
       setLoading(false);
+      console.log(`🔚 FRONTEND: verifyPayment(${reference}) complete`);
     }
   };
 
@@ -536,6 +619,19 @@ export const usePayment = () => {
     }
   };
 
+  const markPaymentAsFailed = async (reference: string): Promise<void> => {
+  try {
+    const config = await getConfig();
+    await axios.patch(
+      `${API_URL}/payments/mark-failed/${reference}`,
+      {},
+      config
+    );
+  } catch (err) {
+    console.error('Error marking payment as failed:', err);
+  }
+};
+
   // Clear error
   const clearError = () => {
     setError(null);
@@ -584,6 +680,7 @@ export const usePayment = () => {
     getUserPayments,
     verifyPayment,
     getAllPayments,
+    markPaymentAsFailed,
     
     // Clear functions
     clearError,

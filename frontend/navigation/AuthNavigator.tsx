@@ -9,6 +9,7 @@ import SignupScreen from '../screens/auth/SignupScreen';
 import VerifyEmailScreen from '../screens/auth/VerifyEmail';
 import PrivacyPolicyScreen from '../screens/auth/PrivacyPolicyScreen';
 import TermsScreen from '../screens/auth/TermsConditionsScreen';
+import MarketPlaceScreen from '../screens/buyer/MarketPlaceScreen';
 
 const Stack = createNativeStackNavigator<AuthStackParamList>();
 
@@ -29,6 +30,7 @@ const AuthNavigator: React.FC = () => {
       <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
       <Stack.Screen name="Privacy" component={PrivacyPolicyScreen} />
       <Stack.Screen name="Terms" component={TermsScreen} />
+      <Stack.Screen name="MarketPlace" component={MarketPlaceScreen} />
     </Stack.Navigator>
   );
 };

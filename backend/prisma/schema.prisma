@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,142 +6,149 @@ datasource db {
   provider = "postgresql"
 }
 
+
+
 model User {
-  id                 String             @id @default(cuid())
-  email              String             @unique
-  phone              String?             @unique
-  firstName          String
-  lastName           String
-  password           String
-  role               UserRole           @default(BUYER)
-  avatar             String?
-
-  googleId          String?  
-  photoURL          String? 
-
-  isVerified         Boolean            @default(false)
-  verificationStatus VerificationStatus @default(PENDING)
-  verificationCode   String?
-  verificationExpiry DateTime?
-  failedVerificationAttempts Int       @default(0)
-
-  failedLoginAttempts        Int       @default(0)
+  id                         String                 @id @default(cuid())
+  email                      String                 @unique
+  phone                      String?                @unique
+  firstName                  String
+  lastName                   String
+  password                   String
+  role                       UserRole               @default(BUYER)
+  avatar                     String?
+  isVerified                 Boolean                @default(false)
+  verificationStatus         VerificationStatus     @default(PENDING)
+  verificationCode           String?
+  verificationExpiry         DateTime?
+  points                     Int                    @default(0)
+  createdAt                  DateTime               @default(now())
+  updatedAt                  DateTime               @updatedAt
+  lastLogin                  DateTime?
+  deletionCode               String?                @db.VarChar(6)
+  deletionExpiry             DateTime?
+  isSuspended                Boolean                @default(false)
   accountLockedUntil         DateTime?
-
-  points             Int                @default(0)
-  lastLogin          DateTime?
-  deletionCode       String?   @db.VarChar(6)
-  deletionExpiry     DateTime?
-  isSuspended       Boolean        @default(false)
-
-  store              Store?
-  notifications      Notification[]
-  orders             Order[]
-  cart               Cart?              // singular because Cart.userId is @unique (one cart per user)
-  address            Address[]
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-
-  // back-relations for relations declared elsewhere
-  storeFollowers     StoreFollower[]    // stores this user follows
-  productLikes       ProductLike[]      // products this user liked
-  disputesFiled      Dispute[]          // disputes where user is buyer
-  reviews            Review[]
-  reviewResponses    ReviewResponse[]
-  reviewLikes        ReviewLike[]
-  reviewReports      ReviewReport[]
-  chatRoomParticipants ChatRoomParticipant[]
-  userChatPreferences UserChatPreference[]
-  verificationAudits    VerificationAuditLog[]
-  messagesSent       ChatMessage[]      // messages this user sent
-  paystackRecipientCode String?
-  payoutPreference      String? @default("mobile_money")
-  payouts               Payout[]
+  failedLoginAttempts        Int                    @default(0)
+  failedVerificationAttempts Int                    @default(0)
+  payoutPreference           String?                @default("mobile_money")
+  paystackRecipientCode      String?
+  lastTokenRefreshAttempt    DateTime?
+  refreshToken               String?
+  refreshTokenCreatedAt      DateTime?
+  refreshTokenExpiresAt      DateTime?
+  refreshTokenUsed           Boolean                @default(false)
+  address                    Address[]
+  cart                       Cart?
+  messagesSent               ChatMessage[]
+  chatRoomParticipants       ChatRoomParticipant[]
+  disputesFiled              Dispute[]
+  notifications              Notification[]
+  orders                     Order[]
+  payouts                    Payout[]
+  productLikes               ProductLike[]
+  pushTokens                 PushToken[]
+  reviews                    Review[]
+  reviewLikes                ReviewLike[]
+  reviewReports              ReviewReport[]
+  reviewResponses            ReviewResponse[]
+  store                      Store?
+  storeFollowers             StoreFollower[]
+  userChatPreferences        UserChatPreference?
+  verificationAudits         VerificationAuditLog[]
 
   @@index([email])
   @@index([phone])
   @@index([role])
 }
 
-enum UserRole {
-  BUYER
-  SELLER
-  ADMIN
-}
+model PushToken {
+  id            String         @id @default(cuid())
+  userId        String
+  token         String         @unique
+  tokenType     String
+  platform      DevicePlatform
+  deviceId      String?
+  appVersion    String?
+  deviceModel   String?
+  osVersion     String?
+  /// Lifecycle tracking
+  createdAt     DateTime       @default(now())
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+  expiresAt     DateTime?
+  failureCount  Int            @default(0)
+  lastFailedAt  DateTime?
+  lastErrorCode String?
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-enum VerificationStatus {
-  PENDING
-  APPROVED
-  REJECTED
+  @@index([userId])
+  @@index([tokenType])
+  @@index([revokedAt])
 }
 
 model Store {
-  id             String            @id @default(cuid())
-  userId         String            @unique   // Only if 1 user = 1 store
+  id             String             @id @default(cuid())
+  userId         String             @unique
   name           String
-  url            String
+  url            String             @unique
   description    String?
   logo           String?
   location       String
   category       String
   region         String
-  isActive       Boolean           @default(false)
-  rating         Float             @default(0.0)
-  totalReviews   Int               @default(0)
-  viewCount      Int               @default(0)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  isSuspended    Boolean           @default(false)
-
-  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isActive       Boolean            @default(false)
+  rating         Float              @default(0.0)
+  totalReviews   Int                @default(0)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  viewCount      Int                @default(0)
+  isSuspended    Boolean            @default(false)
+  orders         Order[]
+  paymentDetails PaymentAccount?
+  products       Product[]
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  followers      StoreFollower[]
   verification   StoreVerification?
   views          StoreView[]
-  products       Product[]
-  paymentDetails PaymentAccount[]
-  orders         Order[]
-  followers      StoreFollower[]
 
   @@index([userId])
   @@index([isActive])
   @@index([url])
-  @@unique([url])
   @@index([viewCount])
 }
 
 model StoreVerification {
-  id              String   @id @default(cuid())
-  storeId         String   @unique
+  id              String                 @id @default(cuid())
+  storeId         String                 @unique
   ghanaCardFront  String
   ghanaCardBack   String
   selfie          String
   businessDoc     String?
-  status          String   @default("pending")
+  status          String                 @default("pending")
   rejectionReason String?
   verifiedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-
-  auditLogs         VerificationAuditLog[]
-  store           Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  store           Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  auditLogs       VerificationAuditLog[]
 
   @@index([storeId])
   @@index([status])
 }
 
 model Notification {
-  id          String   @id @default(cuid())
-  userId      String
-  title       String
-  message     String
-  type        String
-  data        Json?
-  read        Boolean  @default(false)
-  readAt      DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String
+  data      Json?
+  read      Boolean   @default(false)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([userId, read])
@@ -151,46 +156,43 @@ model Notification {
 }
 
 model StoreView {
-  id        String   @id @default(cuid())
-  storeId   String
-  userId    String?
-  viewedAt  DateTime @default(now())
-
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  id       String   @id @default(cuid())
+  storeId  String
+  userId   String?
+  viewedAt DateTime @default(now())
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId, userId])
   @@index([viewedAt])
 }
 
 model Product {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   storeId        String
   name           String
   description    String?
-  price          Float
-  stock          Int          @default(0)
-  images         String[]     // Array of image URLs from Cloudinary
+  price          Decimal
+  stock          Int           @default(0)
+  images         String[]
   category       String?
   tags           String[]
   sizes          String[]
   color          String[]
-  weight         Float?
-  sellerNote     String?
-  moq            Int?         // Minimum Order Quantity (null if no MOQ)
-  quantityBought Int          @default(0)
-  url            String       @unique
+  moq            Int?
+  quantityBought Int           @default(0)
+  url            String        @unique
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  isDeleted      Boolean       @default(false)
+  deletedAt      DateTime?
   rating         Int?
-
-  orderItems     OrderItem[]
-  isActive       Boolean      @default(true)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-
-  store          Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  productLikes   ProductLike[]
-  cartItems      CartItem[]   // opposite relation for CartItem
-  reviews        Review[]
+  cartItems      CartItem[]
   chatRooms      ChatRoom[]
+  orderItems     OrderItem[]
+  store          Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  productLikes   ProductLike[]
+  reviews        Review[]
 
   @@index([storeId])
   @@index([isActive])
@@ -202,230 +204,211 @@ model Product {
 }
 
 model PaymentAccount {
-  id            String   @id @default(cuid())
-  storeId       String   @unique
-  accountType   String   // 'bank' or 'mobile_money'
-
-  // Bank account fields (nullable for mobile money accounts)
-  bankName      String?
-  accountNumber String?
-  accountName   String?
-
-  // Mobile money fields (nullable for bank accounts)
-  provider      String?
-  mobileNumber  String?
-  paystackRecipientCode String?  // THIS IS REQUIRED FOR PAYOUTS
-
-  // Status fields
-  isPrimary     Boolean  @default(true)
-  isActive      Boolean  @default(true)
-
-  // Timestamps
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  // Relations
-  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  id                    String   @id @default(cuid())
+  storeId               String   @unique
+  accountType           String
+  bankName              String?
+  accountNumber         String?
+  accountName           String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  isActive              Boolean  @default(true)
+  isPrimary             Boolean  @default(true)
+  mobileNumber          String?
+  provider              String?
+  paystackRecipientCode String?
+  store                 Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
   @@index([accountType])
 }
 
 model OrderItem {
-  id        String   @id @default(cuid())
-  orderId   String
-  productId String
-  storeId   String?
-  quantity  Int
-  price     Float
-  total     Float    // = quantity * price
-  commission Float?   // 3% of total or (price * quantity * 0.03)
+  id           String   @id @default(cuid())
+  orderId      String
+  productId    String
+  quantity     Int
+  price        Decimal
+  total        Decimal
+  createdAt    DateTime @default(now())
+  commission   Float?
   sellerPayout Float?
-
-  createdAt DateTime @default(now())
-
-  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  storeId      String?
+  color        String?
+  size         String?
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id])
 
   @@index([orderId])
   @@index([productId])
 }
 
 model DeliveryInfo {
-  id          String   @id @default(cuid())
-  orderId     String   @unique
+  id                     String            @id @default(cuid())
+  orderId                String            @unique
+  recipient              String
+  phone                  String
+  address                String
+  city                   String
+  region                 String
+  country                String            @default("Ghana")
+  deliveryMethod         DeliveryMethod    @default(SELLER_DELIVERY)
+  deliveryFee            Decimal?          @db.Decimal(10, 2)
+  estimatedDeliveryDays  Int?
+  dispatchNote           String?
+  status                 DeliveryStatus    @default(PENDING)
+  dispatchedAt           DateTime?
+  deliveredAt            DateTime?
+  buyerConfirmedAt       DateTime?
+  autoReleasedAt         DateTime?
+  trackingNumber         String?
+  courierService         String?
+  order                  Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryProofs         DeliveryProof[]
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
 
-  // Recipient Information
-  recipient   String
-  phone       String
-  email       String?
+  @@index([orderId])
+  @@index([status])
+  @@index([deliveryMethod])
+}
 
-  // Address
-  address     String
-  city        String
-  region      String
-  country     String   @default("Ghana")
-  postalCode  String?
+model DeliveryProof {
+  id            String              @id @default(cuid())
+  deliveryId    String
+  type          DeliveryProofType
+  fileUrl       String
+  note          String?
 
-  // Delivery Preferences
-  deliveryType String? @default("STANDARD") // "STANDARD", "EXPRESS", "PICKUP"
-  deliveryFee  Float?  @default(0)
-  deliveryInstructions String?
-  preferredDeliveryDate DateTime?
-  preferredDeliveryTime String? // "Morning", "Afternoon", "Evening"
-  notes       String?
-
-  // Courier/Driver Details (Seller-provided)
-  courierService      String?
-  driverName          String?
-  driverPhone         String?
-  driverVehicleNumber String?
-
-  // Tracking
-  trackingNumber    String?
-  trackingUrl       String?
-  estimatedDelivery DateTime?
-  actualDelivery    DateTime?
-
-  // Status
-  status      DeliveryStatus @default(PENDING)
-
-  // Timestamps
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  // Who uploaded it
+  uploadedById  String?
+  uploadedRole  DeliveryActor
 
   // Relations
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  delivery      DeliveryInfo        @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
 
-  @@index([orderId])
-  @@index([trackingNumber])
-  @@index([courierService])
-  @@index([status])
-}
+  // Timestamps
+  createdAt     DateTime            @default(now())
 
-model BillingInfo {
-  id        String @id @default(cuid())
-  orderId   String @unique
-
-  fullName  String
-  email     String
-  phone     String
-  address   String
-  city      String
-  region    String
-  country   String @default("Ghana")
-  postalCode String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@index([orderId])
-}
-
-model StatusChange {
-  id        String      @id @default(cuid())
-  orderId   String
-  oldStatus OrderStatus?
-  newStatus OrderStatus
-  changedBy String
-  reason    String?
-  createdAt DateTime @default(now())
-
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@index([orderId])
-  @@index([createdAt])
-}
-
-enum OrderStatus {
-  PENDING
-  CONFIRMED
-  PROCESSING
-  SHIPPED
-  OUT_FOR_DELIVERY
-  DELIVERED
-  COMPLETED
-  CANCELLED
-  REFUNDED
+  @@index([deliveryId])
+  @@index([type])
 }
 
 enum DeliveryStatus {
   PENDING
   PROCESSING
-  SHIPPED
-  OUT_FOR_DELIVERY
+  DISPATCHED
   DELIVERED
   FAILED
   RETURNED
-  CANCELLED
+}
+
+enum DeliveryMethod {
+  SELLER_DELIVERY
+  BOLT_DISPATCH
+  BUS_TRANSPORT
+  PICKUP
+  THIRD_PARTY_RIDER
+  OTHER
+}
+
+enum DeliveryProofType {
+  HANDOVER_PHOTO
+  WAYBILL
+  DISPATCH_RECEIPT
+  DELIVERY_PHOTO
+  BUYER_SIGNATURE
+  OTP_CONFIRMATION
+}
+
+enum DeliveryActor {
+  SELLER
+  BUYER
+  SYSTEM
+  ADMIN
+}
+
+model BillingInfo {
+  id         String   @id @default(cuid())
+  orderId    String   @unique
+  fullName   String
+  email      String
+  phone      String
+  address    String
+  city       String
+  region     String
+  country    String   @default("Ghana")
+  postalCode String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model StatusChange {
+  id        String       @id @default(cuid())
+  orderId   String
+  oldStatus OrderStatus?
+  newStatus OrderStatus
+  changedBy String
+  reason    String?
+  createdAt DateTime     @default(now())
+  order     Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([createdAt])
 }
 
 model Order {
-  id            String        @id @default(cuid())
-  buyerId       String
-  storeId       String
-  status        OrderStatus   @default(PENDING)
-
-  // Payment Information
-  totalAmount   Float
-  subtotal      Float         // Items total before fees
-  deliveryFee   Float?        @default(0)
-  taxAmount     Float?        @default(0)
-  discount      Float?        @default(0)
-  currency      String        @default("GHS")
-  checkoutSession String?
-
-  paymentStatus   PaymentStatus @default(PENDING)
-  paymentMethod   String?       // "MOBILE_MONEY", "CARD", "CASH_ON_DELIVERY"
-  paymentProvider String?       // "MTN", "VODAFONE", "AIRTEL_TIGO", "PAYSTACK"
-  paymentRef      String?
-
-  // Promo/Discount
-  promoCode     String?
-  promoDiscount Float?        @default(0)
-
-  commissionTotal Float?
-  commissionRate  Float?
-  paystackFee     Float?  @default(0)
-  sellerPayoutPreference String? @default("mobile_money")
-  transferFee            Float?  @default(0)
+  id                     String         @id @default(cuid())
+  buyerId                String
+  storeId                String
+  status                 OrderStatus    @default(PENDING_PAYMENT)
+  totalAmount            Float
+  currency               String         @default("GHS")
+  paymentStatus          PaymentStatus  @default(PENDING)
+  paymentRef             String?
+  escrowRelease          DateTime?
+  refundAmount           Float?
+  refundReason           String?
+  cancelledAt            DateTime?
+  cancelledBy            String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+  deletedAt              DateTime?
+  escrowId               String?
+  paymentId              String?
+  buyerEmail             String?
+  paidAt                 DateTime?
+  buyerPhone             String?
+  checkoutSession        String?
+  deliveryFee            Float?         @default(0)
+  discount               Float?         @default(0)
+  paymentMethod          String?
+  paymentProvider        String?
+  promoCode              String?
+  promoDiscount          Float?         @default(0)
+  subtotal               Float
+  taxAmount              Float?         @default(0)
+  commissionTotal        Float?
+  sellerPayoutPreference String?        @default("mobile_money")
+  transferFee            Float?         @default(0)
+  commissionRate         Float?
+  platformFee            Float?         @default(0)
+  paystackFee            Float?         @default(0)
+  billingInfo            BillingInfo?
+  chatRoom               ChatRoom[]
+  deliveryInfo           DeliveryInfo?
+  disputes               Dispute[]
+  escrow                 Escrow?
+  buyer                  User           @relation(fields: [buyerId], references: [id])
+  store                  Store          @relation(fields: [storeId], references: [id])
+  items                  OrderItem[]
+  payment                Payment[]
   payout                 Payout?
-
-
-  // Escrow & Refund
-  escrowRelease DateTime?
-  refundAmount  Float?
-  refundReason  String?
-
-  // Buyer Contact (at time of order)
-  buyerEmail    String?
-  buyerPhone    String?
-
-  // Cancellation
-  cancelledAt   DateTime?
-  cancelledBy   String?       // "buyer" or "seller"
-
-  // Timestamps
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  deletedAt     DateTime?
-
-  // Relations
-  buyer         User          @relation(fields: [buyerId], references: [id], onDelete: Restrict)
-  store         Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
-  items         OrderItem[]
-  deliveryInfo  DeliveryInfo?
-  billingInfo   BillingInfo?
-  statusHistory StatusChange[]
-  chatRoom      ChatRoom[]
-  payment       Payment?
-  paymentId     String?
-  escrow        Escrow?
-  escrowId      String?
-  disputes      Dispute[]
-  reviews       Review[]
+  reviews                Review[]
+  statusHistory          StatusChange[]
 
   @@index([buyerId])
   @@index([storeId])
@@ -439,13 +422,12 @@ model Order {
 }
 
 model Cart {
-  id String  @id @default(cuid())
-  userId  String  @unique
-  items   CartItem[]
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-
-  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String     @id @default(cuid())
+  userId    String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
 }
 
 model CartItem {
@@ -455,13 +437,14 @@ model CartItem {
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  color     String?
+  size      String?
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id])
 
-  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
+  @@unique([cartId, productId, color, size])
   @@index([cartId])
   @@index([productId])
-  @@unique([cartId, productId])
 }
 
 model StoreFollower {
@@ -469,9 +452,8 @@ model StoreFollower {
   userId    String
   storeId   String
   createdAt DateTime @default(now())
-
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, storeId])
   @@index([userId])
@@ -483,9 +465,8 @@ model ProductLike {
   userId    String
   productId String
   createdAt DateTime @default(now())
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, productId])
   @@index([userId])
@@ -507,35 +488,28 @@ model Address {
   isVerified   Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([isDefault])
 }
 
 model Payment {
-  id              String        @id @default(cuid())
-  orderId         String        @unique   // Payment references Order (one-to-one)
-  amount          Float
-  currency        String        @default("GHS")
-  gateway         String
-  gatewayRef      String
-  gatewayStatus   String
-  status          PaymentStatus @default(PENDING)
-  metadata        Json?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  // Payment holds the foreign key to Order (orderId)
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  // back-relation for Escrow (Escrow.paymentId is the FK)
-  escrow Escrow?
-  escrowId  String?
-
-  // back-relation for Dispute.payment
-  disputes Dispute[]
+  id            String        @id @default(cuid())
+  orderId       String
+  amount        Float
+  currency      String        @default("GHS")
+  gateway       String
+  gatewayRef    String
+  gatewayStatus String
+  status        PaymentStatus @default(PENDING)
+  metadata      Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  escrowId      String?
+  disputes      Dispute[]
+  escrow        Escrow?
+  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
   @@index([gatewayRef])
@@ -544,22 +518,20 @@ model Payment {
 }
 
 model Escrow {
-  id              String        @id @default(cuid())
-  paymentId       String        @unique // Each escrow relates to one payment (one-to-one)
-  orderId         String        @unique // Each escrow relates to one order (one-to-one)
-  amountHeld      Float
-  currency        String        @default("GHS")
-  releaseDate     DateTime
-  releasedAt      DateTime?
-  releasedTo      String?
-  releaseStatus   EscrowStatus  @default(PENDING)
-  releaseReason   String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  // Escrow references Payment and Order (defines FK fields)
-  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  order   Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  id            String       @id @default(cuid())
+  paymentId     String       @unique
+  orderId       String       @unique
+  amountHeld    Float
+  currency      String       @default("GHS")
+  releaseDate   DateTime
+  releasedAt    DateTime?
+  releasedTo    String?
+  releaseStatus EscrowStatus @default(HELD)
+  releaseReason String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  order         Order        @relation(fields: [orderId], references: [id])
+  payment       Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 
   @@index([paymentId])
   @@index([orderId])
@@ -568,22 +540,23 @@ model Escrow {
 }
 
 model Dispute {
-  id            String      @id @default(cuid())
-  orderId       String
-  paymentId     String?
-  buyerId       String
-  sellerId      String
-  type          DisputeType
-  description   String
-  status        DisputeStatus @default(PENDING)
-  resolution    String?
-  resolvedAt    DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  buyer User  @relation(fields: [buyerId], references: [id], onDelete: Restrict)
+  id          String        @id @default(cuid())
+  orderId     String
+  paymentId   String?
+  buyerId     String
+  sellerId    String
+  type        DisputeType
+  description String
+  status      DisputeStatus @default(PENDING)
+  outcome    String?   // 'BUYER_WON' | 'SELLER_WON'
+  resolvedBy String?
+  resolution  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  buyer       User          @relation(fields: [buyerId], references: [id])
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  payment     Payment?      @relation(fields: [paymentId], references: [id])
 
   @@index([orderId])
   @@index([paymentId])
@@ -592,11 +565,264 @@ model Dispute {
   @@index([status])
 }
 
-enum EscrowStatus {
+model RefundLog {
+  id           String    @id @default(cuid())
+  orderId      String
+  paymentId    String
+  amount       Float
+  currency     String
+  reason       String?
+  gatewayRef   String
+  status       String
+  errorMessage String?
+  attemptedAt  DateTime  @default(now())
+  processedAt  DateTime?
+
+  @@index([orderId])
+  @@index([paymentId])
+  @@index([status])
+  @@index([attemptedAt])
+}
+
+model TransferLog {
+  id            String    @id @default(cuid())
+  orderId       String
+  escrowId      String
+  amount        Float
+  currency      String
+  recipientCode String
+  transferCode  String?
+  transferRef   String?
+  status        String
+  reason        String?
+  errorMessage  String?
+  initiatedAt   DateTime  @default(now())
+  completedAt   DateTime?
+
+  @@index([orderId])
+  @@index([escrowId])
+  @@index([transferCode])
+  @@index([status])
+  @@index([initiatedAt])
+}
+
+model Review {
+  id             String          @id @default(cuid())
+  userId         String
+  productId      String
+  orderId        String
+  title          String?
+  comment        String?
+  media          String[]
+  isVerified     Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  rating         Int
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  likes          ReviewLike[]
+  reports        ReviewReport[]
+  sellerResponse ReviewResponse?
+
+  @@unique([userId, orderId, productId])
+  @@index([productId])
+  @@index([userId])
+  @@index([orderId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+model ReviewResponse {
+  id        String   @id @default(cuid())
+  reviewId  String   @unique
+  sellerId  String
+  response  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  seller    User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId])
+}
+
+model ReviewLike {
+  id        String   @id @default(cuid())
+  userId    String
+  reviewId  String
+  createdAt DateTime @default(now())
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, reviewId])
+  @@index([reviewId])
+}
+
+model ReviewReport {
+  id          String   @id @default(cuid())
+  userId      String
+  reviewId    String
+  reason      String
+  description String?
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  review      Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+  @@index([userId])
+  @@index([status])
+}
+
+model ChatRoom {
+  id           String                @id @default(cuid())
+  name         String?
+  type         ChatRoomType          @default(GENERAL)
+  otherUserId  String?
+  isGroup      Boolean               @default(false)
+  isArchived   Boolean               @default(false)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  messages     ChatMessage[]
+  participants ChatRoomParticipant[]
+  product      Product?              @relation(fields: [productId], references: [id])
+  productId    String?
+  order        Order?                @relation(fields: [orderId], references: [id])
+  orderId      String?
+
+  @@index([otherUserId])
+}
+
+model ChatMessage {
+  id          String        @id @default(cuid())
+  chatRoomId  String
+  senderId    String
+  content     String
+  media       String[]
+  isRead      Boolean       @default(false)
+  readAt      DateTime?
+  repliedToId String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  chatRoom    ChatRoom      @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  repliedTo   ChatMessage?  @relation("MessageReplies", fields: [repliedToId], references: [id])
+  replies     ChatMessage[] @relation("MessageReplies")
+  sender      User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([chatRoomId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+model UserChatPreference {
+  id                     String    @id @default(cuid())
+  userId                 String    @unique
+  notifyOnNewMessage     Boolean   @default(true)
+  muteNotificationsUntil DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ChatRoomParticipant {
+  id         String    @id @default(cuid())
+  chatRoomId String
+  userId     String
+  joinedAt   DateTime  @default(now())
+  leftAt     DateTime?
+  isMuted    Boolean   @default(false)
+  chatRoom   ChatRoom  @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatRoomId, userId])
+  @@index([chatRoomId])
+  @@index([userId])
+}
+
+model VerificationAuditLog {
+  id             String            @id @default(cuid())
+  verificationId String
+  action         String
+  performedBy    String
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+  performer      User              @relation(fields: [performedBy], references: [id])
+  verification   StoreVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+
+  @@index([verificationId])
+  @@index([performedBy])
+  @@index([createdAt])
+  @@map("verification_audit_logs")
+}
+
+model Payout {
+  id                String    @id @default(cuid())
+  orderId           String    @unique
+  sellerId          String
+  amount            Float
+  grossAmount       Float?
+  transferFee       Float?
+  currency          String    @default("GHS")
+  status            String    @default("PENDING")
+  transferReference String?   @unique
+  transferCode      String?
+  transferStatus    String?
+  method            String?
+  recipientCode     String?
+  failureReason     String?
+  transferredAt     DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  order             Order     @relation(fields: [orderId], references: [id])
+  seller            User      @relation(fields: [sellerId], references: [id])
+
+  @@index([sellerId])
+  @@index([status])
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum TokenType {
+  EXPO
+  FCM
+  WEB_PUSH
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
+enum VerificationStatus {
   PENDING
-  RELEASED
-  FAILED
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  COMPLETED
+  DISPUTED
+  CANCELLED
+  SHIPPED
   REFUNDED
+}
+
+enum EscrowStatus {
+  HELD
+  RELEASE_PENDING
+  DISPUTED
+  RELEASED
+  REFUNDED
+  FAILED
   CANCELLED
 }
 
@@ -615,47 +841,6 @@ enum DisputeStatus {
   CANCELLED
 }
 
-model RefundLog {
-  id           String   @id @default(cuid())
-  orderId      String
-  paymentId    String
-  amount       Float
-  currency     String
-  reason       String?
-  gatewayRef   String
-  status       String
-  errorMessage String?
-  attemptedAt  DateTime @default(now())
-  processedAt  DateTime?
-
-  @@index([orderId])
-  @@index([paymentId])
-  @@index([status])
-  @@index([attemptedAt])
-}
-
-model TransferLog {
-  id              String   @id @default(cuid())
-  orderId         String
-  escrowId        String
-  amount          Float
-  currency        String
-  recipientCode   String
-  transferCode    String?
-  transferRef     String?
-  status          String
-  reason          String?
-  errorMessage    String?
-  initiatedAt     DateTime @default(now())
-  completedAt     DateTime?
-
-  @@index([orderId])
-  @@index([escrowId])
-  @@index([transferCode])
-  @@index([status])
-  @@index([initiatedAt])
-}
-
 enum PaymentStatus {
   PENDING
   SUCCESS
@@ -665,202 +850,10 @@ enum PaymentStatus {
   CANCELLED
 }
 
-model Review {
-  id            String           @id @default(cuid())
-  userId        String
-  productId     String
-  orderId       String
-  rating        Int              // 1-5
-  title         String?
-  comment       String?          @db.Text
-  media         String[]         // Array of image/video URLs
-  isVerified    Boolean          @default(true)
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  product       Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
-  order         Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  sellerResponse ReviewResponse?
-  likes         ReviewLike[]
-  reports       ReviewReport[]
-
-  @@unique([userId, orderId, productId])
-  @@index([productId])
-  @@index([userId])
-  @@index([orderId])
-  @@index([rating])
-  @@index([createdAt])
-}
-
-model ReviewResponse {
-  id         String   @id @default(cuid())
-  reviewId   String   @unique
-  sellerId   String
-  response   String   @db.Text
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  review     Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
-  seller     User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-
-  @@index([sellerId])
-}
-
-model ReviewLike {
-  id        String   @id @default(cuid())
-  userId    String
-  reviewId  String
-  createdAt DateTime @default(now())
-
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, reviewId])
-  @@index([reviewId])
-}
-
-model ReviewReport {
-  id          String   @id @default(cuid())
-  userId      String
-  reviewId    String
-  reason      String
-  description String?  @db.Text
-  status      String   @default("PENDING") // PENDING, REVIEWED, RESOLVED
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  review      Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
-
-  @@index([reviewId])
-  @@index([userId])
-  @@index([status])
-}
-
-model ChatRoom {
-  id                   String                 @id @default(cuid())
-  name                 String?                // Optional name for the room (e.g., "Order #123 Chat")
-  type                 ChatRoomType           @default(ORDER) // e.g., ORDER, PRODUCT_INQUIRY, GENERAL
-  orderId              String?                // Link to an order if it's an order-specific chat
-  productId            String?                // Link to a product if it's a product-specific chat
-  isGroup              Boolean                @default(false) // Is this a group chat? (e.g., admin + buyer + seller)
-  isArchived           Boolean                @default(false) // Has a user archived this room?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
-
-  order   Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade) // Optional link
-  product Product? @relation(fields: [productId], references: [id], onDelete: Cascade) // Optional link
-
-  // explicit pivot table for participants (custom fields like joinedAt, leftAt, isMuted)
-  participants ChatRoomParticipant[]
-  messages             ChatMessage[]
-
-  @@index([orderId])
-  @@index([productId])
-}
-
-model ChatMessage {
-  id          String      @id @default(cuid())
-  chatRoomId  String
-  senderId    String      // User who sent the message
-  content     String      // The message text
-  media       String[]    // Optional array of media URLs (images, videos) uploaded to Cloudinary
-  isRead      Boolean     @default(false) // Has the recipient read this message?
-  readAt      DateTime?   // When was it read?
-  repliedToId String?     // FK to message this message replies to (self-relation)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-
-  // Relations
-  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  sender   User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
-
-  // Self-relation for replies:
-  repliedTo ChatMessage? @relation("MessageReplies", fields: [repliedToId], references: [id], onDelete: SetNull)
-  replies   ChatMessage[] @relation("MessageReplies")
-
-  @@index([chatRoomId])
-  @@index([senderId])
-  @@index([createdAt])
-}
-
-model UserChatPreference {
-  id        String   @id @default(cuid())
-  userId    String   @unique // Each user has one preference record
-  notifyOnNewMessage Boolean @default(true) // Should user receive notifications for new messages?
-  muteNotificationsUntil DateTime? // Temporarily mute notifications (e.g., do not disturb)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
 enum ChatRoomType {
   ORDER
   PRODUCT_INQUIRY
   GENERAL
-  SYSTEM // For admin/system messages
-}
-
-// Explicit join table between ChatRoom and User (custom pivot)
-model ChatRoomParticipant {
-  id         String   @id @default(cuid())
-  chatRoomId String
-  userId     String
-  joinedAt   DateTime @default(now())
-  leftAt     DateTime? // If user leaves the room (relevant for group chats)
-  isMuted    Boolean  @default(false) // Is this user muted in this specific room?
-
-  chatRoom ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([chatRoomId, userId]) // A user can only join a specific room once
-  @@index([chatRoomId])
-  @@index([userId])
-}
-
-
-model VerificationAuditLog {
-  id              String   @id @default(cuid())
-  verificationId  String
-  verification    StoreVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
-  
-  action          String   // SUBMITTED, RESUBMITTED, APPROVED, REJECTED, DELETED
-  performedBy     String   // User ID who performed the action
-  performer       User     @relation(fields: [performedBy], references: [id])
-  
-  metadata        Json?    // Additional data like IP, user agent, rejection reason
-  
-  createdAt       DateTime @default(now())
-  
-  @@index([verificationId])
-  @@index([performedBy])
-  @@index([createdAt])
-  @@map("verification_audit_logs")
-}
-
-model Payout {
-  id                 String   @id @default(cuid())
-  orderId            String   @unique
-  order              Order    @relation(fields: [orderId], references: [id])
-  sellerId           String
-  seller             User     @relation(fields: [sellerId], references: [id])
-  amount             Float
-  grossAmount        Float?
-  transferFee        Float?
-  currency           String   @default("GHS")
-  status             String   @default("PENDING")
-  transferReference  String?  @unique
-  transferCode       String?
-  transferStatus     String?
-  method             String?
-  recipientCode      String?
-  failureReason      String?
-  transferredAt      DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  @@index([sellerId])
-  @@index([status])
+  SYSTEM
+  DIRECT
 }

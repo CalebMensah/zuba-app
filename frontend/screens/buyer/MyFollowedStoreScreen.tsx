@@ -36,10 +36,11 @@ export default function MyFollowedStoresScreen({
     fetchFollowedStores();
   }, []);
 
+
   const fetchFollowedStores = async () => {
     try {
       const followedStores = await getMyFollowing();
-      setStores(followedStores);
+      setStores(followedStores.stores);
     } catch (err) {
       console.error('Error fetching followed stores:', err);
     }
@@ -100,9 +101,9 @@ export default function MyFollowedStoresScreen({
       </Text>
       <TouchableOpacity
         style={styles.exploreButton}
-        onPress={() => navigation.navigate('Explore')}
+        onPress={() => navigation.navigate('MarketPlace')}
       >
-        <Text style={styles.exploreButtonText}>Explore Stores</Text>
+        <Text style={styles.exploreButtonText}>Explore Produts</Text>
       </TouchableOpacity>
     </View>
   );

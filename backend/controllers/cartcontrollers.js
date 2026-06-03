@@ -28,10 +28,13 @@ const calculateCartTotals = (items) => {
     totalItems += quantity;
     totalValue = totalValue.plus(itemTotal);
     
+
     return {
       id: item.id,
       productId: item.productId,
       quantity: quantity,
+      color: item.color,
+      size: item.size,
       product: item.product,
       total: itemTotal.toNumber()
     };
@@ -196,7 +199,7 @@ export const getUserCart = async (req, res) => {
 export const addItemToCart = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { productId, quantity = 1 } = req.body;
+    const { productId, quantity = 1, color, size } = req.body;
 
     // Validate inputs
     if (!productId || !isValidId(productId)) {
@@ -219,6 +222,10 @@ export const addItemToCart = async (req, res) => {
         message: `Quantity cannot exceed ${MAX_QUANTITY_PER_ITEM} per item.`
       });
     }
+
+    // Normalize color and size to null if undefined or empty string
+    const normalizedColor = color || null;
+    const normalizedSize = size || null;
 
     // Use transaction for atomicity and row-level locking
     const result = await prisma.$transaction(async (tx) => {
@@ -270,14 +277,14 @@ export const addItemToCart = async (req, res) => {
         throw new Error('CART_FULL');
       }
 
-      // Find existing cart item
-      const existingCartItem = await tx.cartItem.findUnique({
+      // Find existing cart item - use findFirst for nullable fields
+      const existingCartItem = await tx.cartItem.findFirst({
         where: {
-          cartId_productId: {
-            cartId: cart.id,
-            productId
-          }
-        }
+          cartId: cart.id,
+          productId,
+          color: normalizedColor,
+          size: normalizedSize,
+        },
       });
 
       const newQuantity = existingCartItem 
@@ -304,15 +311,17 @@ export const addItemToCart = async (req, res) => {
           data: {
             cartId: cart.id,
             productId,
-            quantity
+            quantity,
+            color: normalizedColor,
+            size: normalizedSize
           }
         });
       }
 
       return { cartItem, product };
     }, {
-      isolationLevel: 'Serializable', // Highest isolation level
-      timeout: 10000 // 10 second timeout
+      isolationLevel: 'Serializable',
+      timeout: 10000
     });
 
     // Invalidate cache after successful operation
@@ -324,7 +333,9 @@ export const addItemToCart = async (req, res) => {
       data: {
         id: result.cartItem.id,
         productId: result.cartItem.productId,
-        quantity: result.cartItem.quantity
+        quantity: result.cartItem.quantity,
+        color: result.cartItem.color,
+        size: result.cartItem.size
       }
     });
 

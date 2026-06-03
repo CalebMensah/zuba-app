@@ -1,4 +1,3 @@
-// screens/auth/SignupScreen.tsx
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -14,11 +13,13 @@ import {
   Image,
 } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList, UserRole } from '../../types/navigation';
 import { authAPI, SignupData } from '../../services/api';
 import { Colors } from '../../constants/colors';
-import { useGoogleLogin } from '../../hooks/useGoogle';
+import { useAuth } from '../../context/AuthContext';
+
 
 type SignupScreenNavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Signup'>;
 
@@ -27,6 +28,8 @@ interface Props {
 }
 
 const SignupScreen: React.FC<Props> = ({ navigation }) => {
+  const { loginAsGuest } = useAuth();
+
   const [formData, setFormData] = useState({
     email: '',
     phone: '',
@@ -38,8 +41,6 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
   const [role, setRole] = useState<UserRole>('BUYER');
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
-
-  const { signInWithGoogle, isLoading: googleLoading, error: googleError } = useGoogleLogin();
 
   const validateForm = (): boolean => {
     const newErrors: { [key: string]: string } = {};
@@ -60,14 +61,14 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
 
     if (!formData.phone.trim()) {
       newErrors.phone = 'Phone number is required';
-    } else if (!/^\+?[\d\s\-\(\)]{10,}$/.test(formData.phone)) {
-      newErrors.phone = 'Invalid phone number';
+    } else if (!/^0\d{9}$/.test(formData.phone)) {
+      newErrors.phone = 'Phone must be 10 digits starting with 0 (e.g., 0551234567)';
     }
 
     if (!formData.password) {
       newErrors.password = 'Password is required';
-    } else if (formData.password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
+    } else if (formData.password.length < 8 || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(formData.password)) {
+      newErrors.password = 'Password needs: uppercase, lowercase, number, special char (@$!%*?&), min 8 chars';
     }
 
     if (formData.password !== formData.confirmPassword) {
@@ -107,8 +108,25 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
         );
       }
     } catch (error: any) {
-      const errorMessage = error.response?.data?.message || 'Signup failed. Please try again.';
-      Alert.alert('Error', errorMessage);
+      let errorMessage = error.response?.data?.message || 'Signup failed. Please try again.';
+      
+      // Map specific backend validation errors
+      if (error.response?.data?.errors) {
+        const validationErrors = error.response.data.errors.map((err: any) => err.msg).join(', ');
+        if (validationErrors.includes('Invalid phone number format')) {
+          errorMessage = 'Invalid Ghana phone format. Use 0551234567 (10 digits no spaces)';
+        } else if (validationErrors.includes('Password must contain')) {
+          errorMessage = 'Password must contain uppercase, lowercase, number, and special character';
+        } else {
+          errorMessage = validationErrors;
+        }
+      } else if (errorMessage.includes('Invalid phone number format')) {
+        errorMessage = 'Invalid Ghana phone format. Use 0551234567 (10 digits no spaces)';
+      } else if (errorMessage.includes('Password must contain at least one uppercase')) {
+        errorMessage = 'Password needs uppercase letter, lowercase, number, special char';
+      }
+      
+      Alert.alert('Signup Error', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -275,7 +293,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                   style={styles.input}
                   value={formData.phone}
                   onChangeText={(value) => updateFormData('phone', value)}
-                  placeholder="+233 XX XXX XXXX"
+                  placeholder="0551234567"
                   placeholderTextColor={Colors.textTertiary}
                   keyboardType="phone-pad"
                   editable={!loading}
@@ -284,6 +302,7 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
               {errors.phone && (
                 <Text style={styles.errorText}>{errors.phone}</Text>
               )}
+              <Text style={styles.helpText}>Ghana phone 10 digits (e.g., 0551234567)</Text>
             </View>
 
             {/* Password */}
@@ -295,12 +314,13 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                   style={styles.input}
                   value={formData.password}
                   onChangeText={(value) => updateFormData('password', value)}
-                  placeholder="Min. 6 characters"
+                  placeholder="At least 8 chars with uppercase, lowercase, number, special"
                   placeholderTextColor={Colors.textTertiary}
                   secureTextEntry
                   editable={!loading}
                 />
               </View>
+              <Text style={styles.helpText}>Min 8 chars: 1 uppercase, 1 lowercase, 1 number, 1 special (@$!%*?&)</Text>
               {errors.password && (
                 <Text style={styles.errorText}>{errors.password}</Text>
               )}
@@ -365,22 +385,6 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
               <View style={styles.divider} />
             </View>
 
-            {/* Google Sign Up Button */}
-            <TouchableOpacity
-              style={[styles.googleButton, (loading || googleLoading) && styles.googleButtonDisabled]}
-              onPress={signInWithGoogle}
-              disabled={loading || googleLoading}
-              activeOpacity={0.8}
-            >
-              {googleLoading ? (
-                <ActivityIndicator color={Colors.textPrimary} size="small" />
-              ) : (
-                <>
-                  <Ionicons name="logo-google" size={20} color={Colors.textPrimary} style={styles.googleIcon} />
-                  <Text style={styles.googleButtonText}>Continue with Google</Text>
-                </>
-              )}
-            </TouchableOpacity>
 
             {/* Login Section */}
             <View style={styles.loginSection}>
@@ -393,6 +397,23 @@ const SignupScreen: React.FC<Props> = ({ navigation }) => {
                 <Text style={styles.loginLink}>Sign In</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Continue as Guest */}
+            <TouchableOpacity
+              style={styles.guestButton}
+              onPress={async () => {
+                await loginAsGuest();
+                navigation.navigate('MarketPlace');
+              }}
+
+
+
+
+              disabled={loading}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.guestButtonText}>Continue as Guest</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -543,6 +564,12 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: '500',
   },
+  helpText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
   signupButton: {
     height: 56,
     backgroundColor: Colors.primary,
@@ -607,6 +634,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.primary,
     fontWeight: '700',
+  },
+  guestButton: {
+    height: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    backgroundColor: Colors.backgroundSecondary,
+    marginTop: 16,
+    marginBottom: 24,
+  },
+  guestButtonDisabled: {
+    opacity: 0.6,
+  },
+  guestButtonText: {
+    color: Colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   googleButton: {
     height: 56,

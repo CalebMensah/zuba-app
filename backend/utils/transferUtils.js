@@ -21,7 +21,7 @@ const paystackRequest = async (method, endpoint, data = null) => {
 };
 
 export const transferFundsToSeller = async ({
-  amount,
+  amount,  // Now receives exact net seller payout (97%)
   currency,
   recipientCode,
   orderId,
@@ -36,16 +36,16 @@ export const transferFundsToSeller = async ({
       throw new Error('Transfer amount must be greater than zero');
     }
 
-    console.log(`Initiating transfer of ${amount} ${currency} to recipient ${recipientCode} for order ${orderId}`);
+    console.log(`Initiating transfer of NET ${amount} ${currency} to seller ${recipientCode} for order ${orderId} (platform absorbs transfer fees)`);
 
-    // Call Paystack Transfer API directly
+    // Call Paystack Transfer API - amount is already net (platform pays any transfer fees from balance)
     const transferResponse = await paystackRequest('POST', '/transfer', {
       source: 'balance',
-      amount: Math.round(amount * 100), // Convert to kobo/pesewas
+      amount: Math.round(amount * 100),
       recipient: recipientCode,
-      reason: reason || `Payment for order #${orderId}`,
+      reason: reason || `Net payment for order #${orderId}`,
       currency: currency || 'GHS',
-      reference: `transfer_${orderId}_${Date.now()}`
+      reference: `transfer_net_${orderId}_${Date.now()}`
     });
 
     if (!transferResponse.status || !transferResponse.data) {

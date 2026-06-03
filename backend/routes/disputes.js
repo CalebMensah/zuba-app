@@ -1,20 +1,14 @@
 import express from 'express';
 import {
-  requestRefund,
+  openDispute,
   resolveDispute,
-  getDisputeDetails,
-  getUserDisputes,
-  getAllDisputes,
-  updateDispute,
+  getDispute,
+  getMyDisputes,
   cancelDispute
 } from '../controllers/disputescontroller.js';
 import {
-  requestRefundValidation,
+  openDisputeValidation,
   resolveDisputeValidation,
-  getDisputeDetailsValidation,
-  getUserDisputesValidation,
-  getAllDisputesValidation,
-  updateDisputeValidation,
   cancelDisputeValidation
 } from '../middleware/disputeValidators.js';
 import { authenticateToken, authorizeRoles } from '../middleware/authmiddleware.js';
@@ -22,26 +16,49 @@ import { rateLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-// Rate limiting configurations
 const standardRateLimit = rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // 100 requests per window
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 
 const strictRateLimit = rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20 // 20 requests per window for write operations
+  windowMs: 15 * 60 * 1000,
+  max: 20
 });
 
 router.post(
-  '/refund/:orderId',
+  '/:orderId/open',
   authenticateToken,
   authorizeRoles('BUYER'),
   strictRateLimit,
-  requestRefundValidation,
-  requestRefund
+  openDisputeValidation,
+  openDispute
 );
 
+router.patch(
+  '/:disputeId/cancel',
+  authenticateToken,
+  authorizeRoles('BUYER'),
+  strictRateLimit,
+  cancelDisputeValidation,
+  cancelDispute
+);
+
+router.get(
+  '/:disputeId',
+  authenticateToken,
+  standardRateLimit,
+  getDispute
+);
+
+router.get(
+  '/user/all',
+  authenticateToken,
+  standardRateLimit,
+  getMyDisputes
+);
+
+// Resolve a dispute (admin only)
 router.patch(
   '/:disputeId/resolve',
   authenticateToken,
@@ -49,47 +66,6 @@ router.patch(
   strictRateLimit,
   resolveDisputeValidation,
   resolveDispute
-);
-
-router.get(
-  '/:disputeId',
-  authenticateToken,
-  standardRateLimit,
-  getDisputeDetailsValidation,
-  getDisputeDetails
-);
-
-router.get(
-  '/user/all',
-  authenticateToken,
-  standardRateLimit,
-  getUserDisputesValidation,
-  getUserDisputes
-);
-
-router.get(
-  '/admin/all',
-  authenticateToken,
-  authorizeRoles('ADMIN'),
-  standardRateLimit,
-  getAllDisputesValidation,
-  getAllDisputes
-);
-
-router.patch(
-  '/:disputeId',
-  authenticateToken,
-  strictRateLimit,
-  updateDisputeValidation,
-  updateDispute
-);
-
-router.patch(
-  '/:disputeId/cancel',
-  authenticateToken,
-  strictRateLimit,
-  cancelDisputeValidation,
-  cancelDispute
 );
 
 export default router;

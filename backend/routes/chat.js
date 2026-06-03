@@ -1,8 +1,7 @@
 // routes/chatRoutes.js
 import express from 'express';
 import {
-  getOrCreateOrderChatRoom,
-  getOrCreateProductChatRoom,
+  getOrCreateDirectChat,
   getUserChatRooms,
   getRoomMessages,
   sendMessage,
@@ -19,8 +18,7 @@ const router = express.Router();
 
 router.use(authenticateToken);
 router.get('/rooms', getUserChatRooms);
-router.post('/rooms/order/:orderId', getOrCreateOrderChatRoom);
-router.post('/rooms/product/:productId', getOrCreateProductChatRoom);
+router.post('/rooms/direct/:otherUserId', getOrCreateDirectChat);
 router.get('/rooms/:chatRoomId/messages', getRoomMessages);
 router.post(
   '/rooms/:chatRoomId/messages',

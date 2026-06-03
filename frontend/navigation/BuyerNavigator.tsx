@@ -44,6 +44,8 @@ import TermsScreen from '../screens/auth/TermsConditionsScreen';
 import PolicyScreen from '../screens/auth/PrivacyPolicyScreen';
 import SellerStoreReviews from '../screens/buyer/StoreReviews';
 import ReviewDetails from '../screens/buyer/ReviewDetails';
+import PaymentSuccessScreen from '../screens/buyer/PaymentSuccessScreen';
+import SearchScreen from '../screens/buyer/SearchScreen';
 
 
 const Tab = createBottomTabNavigator<BuyerStackParamList>();
@@ -68,8 +70,8 @@ const BuyerTabNavigator: React.FC = () => {
 
           return <Ionicons name={iconName} size={size} color={color} />;
         },
-        tabBarActiveTintColor: '#1E40AF',
-        tabBarInactiveTintColor: 'gray',
+        tabBarActiveTintColor: '#3B82F6',
+        tabBarInactiveTintColor: '#6B7280`',
         headerShown: true,
       })}
     >
@@ -86,7 +88,7 @@ const BuyerTabNavigator: React.FC = () => {
       <Tab.Screen
         name="Chat"
         component={ChatScreen}
-        options={{ headerShown: false }}
+        options={{ headerShown: false , title: 'Messages'}}
       />
       <Tab.Screen
         name="Me"
@@ -136,6 +138,8 @@ const BuyerNavigator: React.FC = () => {
       <Stack.Screen name="Policy" component={PolicyScreen} />
       <Stack.Screen name="SellerStoreReviews" component={SellerStoreReviews} />
       <Stack.Screen name="ReviewDetails" component={ReviewDetails} />
+      <Stack.Screen name="PaymentSuccess" component={PaymentSuccessScreen} />
+      <Stack.Screen name="SearchScreen" component={SearchScreen} />
     </Stack.Navigator>
   );
 };

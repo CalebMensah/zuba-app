@@ -42,7 +42,6 @@ export const followStore = asyncHandler(async (req, res) => {
       id: true, 
       userId: true, 
       name: true,
-      isActive: true 
     }
   });
 
@@ -50,14 +49,6 @@ export const followStore = asyncHandler(async (req, res) => {
     return res.status(404).json({
       success: false,
       message: 'Store not found.'
-    });
-  }
-
-  // Check if store is active
-  if (!store.isActive) {
-    return res.status(400).json({
-      success: false,
-      message: 'This store is not active and cannot be followed.'
     });
   }
 

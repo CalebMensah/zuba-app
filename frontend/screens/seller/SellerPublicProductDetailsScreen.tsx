@@ -5,27 +5,27 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  ActivityIndicator,
   StyleSheet,
   Dimensions,
   Share,
   Alert,
-  FlatList,
+  Modal,
+  Animated,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useProduct } from '../../hooks/useProducts';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { useProductLike } from '../../hooks/useProductLikes';
 import { useCart } from '../../context/CartContext';
 import { useProductRecommendations } from '../../hooks/useProductRecommendations';
 import { useReviews } from '../../hooks/useReview';
-import { Colors } from '../../constants/colors';
+import { Colors, Typography } from '../../constants/colors';
 import ProductReviewCard from '../../components/ProductReviewCard';
 import ProductCard from '../../components/ProductCard';
-import ChatApiService from '../../services/chatApiServices';
+import { useChatContext } from '../../context/ChatContext';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
-const chatApiService = new ChatApiService(process.env.EXPO_PUBLIC_API_URL); 
 
 interface SellerPublicProductDetailsScreenProps {
   route: {
@@ -42,7 +42,7 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
   navigation,
 }) => {
   const { productUrl, storeUrl } = route.params;
-  const { getProductByUrl, product, loading, error } = useProduct();
+  const { data: product, isLoading, error, refetch } = useProduct(productUrl);
   const {
     loading: likeLoading,
     likeProduct,
@@ -51,32 +51,32 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
     getProductLikeCount,
   } = useProductLike();
   const { addItem } = useCart();
-  const { 
-    getProductsYouMayLike, 
-    youMayLikeProducts, 
-    loading: recommendationsLoading 
+  const {
+    getProductsYouMayLike,
+    youMayLikeProducts,
+    loading: recommendationsLoading
   } = useProductRecommendations();
-  const { 
-    getProductReviews, 
+  const {
+    getProductReviews,
     getProductReviewSummary,
-    loading: reviewsLoading 
+    loading: reviewsLoading
   } = useReviews();
 
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  const [quantity, setQuantity] = useState(1);
   const [isLiked, setIsLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
-  const [addingToCart, setAddingToCart] = useState(false);
   const [productReviews, setProductReviews] = useState<any[]>([]);
   const [reviewSummary, setReviewSummary] = useState<any>(null);
-  const [selectedSize, setSelectedSize] = useState<string | null>(null);
-  const [selectedColor, setSelectedColor] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (productUrl) {
-      fetchProduct();
-    }
-  }, [productUrl]);
+  const { startDirectChat } = useChatContext();
+
+  // Modal states
+  const [showCartModal, setShowCartModal] = useState(false);
+  const [modalAnimation] = useState(new Animated.Value(0));
+  const [selectedSize, setSelectedSize] = useState<string | undefined>(undefined);
+  const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined);
+  const [quantity, setQuantity] = useState(1);
+  const [addingToCart, setAddingToCart] = useState(false);
 
   useEffect(() => {
     if (product?.id) {
@@ -87,10 +87,6 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
       fetchReviewSummary();
     }
   }, [product?.id]);
-
-  const fetchProduct = async () => {
-    await getProductByUrl(productUrl);
-  };
 
   const fetchLikeStatus = async () => {
     if (!product?.id) return;
@@ -124,8 +120,8 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
   const fetchProductReviews = async () => {
     if (!product?.id) return;
     try {
-      const result = await getProductReviews(product.id, { 
-        page: 1, 
+      const result = await getProductReviews(product.id, {
+        page: 1,
         limit: 5,
         sortBy: 'createdAt',
         sortOrder: 'desc'
@@ -178,6 +174,36 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
     }
   };
 
+  const openCartModal = () => {
+    if (!product) return;
+    
+    // Reset selections
+    setSelectedSize(undefined);
+    setSelectedColor(undefined);
+    setQuantity(1);
+    
+    setShowCartModal(true);
+    Animated.spring(modalAnimation, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 65,
+      friction: 10,
+    }).start();
+  };
+
+  const closeCartModal = () => {
+    Animated.timing(modalAnimation, {
+      toValue: 0,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowCartModal(false);
+      setSelectedSize(undefined);
+      setSelectedColor(undefined);
+      setQuantity(1);
+    });
+  };
+
   const handleAddToCart = async () => {
     if (!product) return;
 
@@ -195,57 +221,39 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
 
     setAddingToCart(true);
     try {
-      await addItem(product.id, quantity);
-      Alert.alert(
-        'Success',
-        `${product.name} has been added to your cart!`,
-        [
-          { text: 'Continue Shopping', style: 'cancel' },
-          {
-            text: 'View Cart',
-            onPress: () => navigation.navigate('CartScreen'),
-          },
-        ]
-      );
+      await addItem(product.id, quantity, selectedColor, selectedSize);
+      
+      // Close modal first
+      closeCartModal();
+      
+      // Show success alert after modal closes
+      setTimeout(() => {
+        Alert.alert(
+          '✓ Added to Cart',
+          `${quantity} ${quantity > 1 ? 'items' : 'item'} of "${product.name}" added to your cart!`,
+          [
+            { 
+              text: 'Continue Shopping', 
+              style: 'cancel',
+              onPress: () => console.log('Continue shopping')
+            },
+            {
+              text: 'View Cart',
+              onPress: () => navigation.navigate('CartScreen'),
+              style: 'default'
+            },
+          ]
+        );
+      }, 300);
     } catch (err) {
       console.error('Error adding to cart:', err);
-      Alert.alert('Error', 'Failed to add item to cart. Please try again.');
+      Alert.alert(
+        'Error', 
+        'Failed to add item to cart. Please try again.',
+        [{ text: 'OK', style: 'cancel' }]
+      );
     } finally {
       setAddingToCart(false);
-    }
-  };
-
-  const handleStorePress = () => {
-    navigation.navigate('SellerPublicStore', {
-      storeId: product?.store?.id,
-    });
-  };
-
-  const handleReviewwsPress = () => {
-    navigation.navigate('ProductReviews', { productId: product?.id
-    });
-  }
-
-  const handleChatPress = async () => {
-    if (!product?.id || !product.store) {
-      Alert.alert('Error', 'Cannot start chat: product or store information missing.');
-      return;
-    }
-    try {
-      const response = await chatApiService.getOrCreateProductChatRoom(product.id);
-      const chatRoom = response?.data;
-      if (!chatRoom || !chatRoom.id) {
-        Alert.alert('Error', 'Failed to open chat room.');
-        return;
-      }
-      navigation.navigate('Chat', {
-        chatRoomId: chatRoom.id,
-        otherUserName: product.store.name,
-        otherUserAvatar: product.store.logo || null,
-      });
-    } catch (error) {
-      console.error('Error opening chat room:', error);
-      Alert.alert('Error', 'Failed to start chat. Please try again later.');
     }
   };
 
@@ -261,25 +269,69 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
     }
   };
 
-  const renderStarRating = (rating: number) => {
+  const handleStorePress = () => {
+    navigation.navigate('SellerPublicStore', {
+      storeId: product?.store?.id,
+    });
+  };
+
+const handleChatPress = async () => {
+  if (!product || !product.store) {
+    Alert.alert('Error', 'Product information is missing.');
+    return;
+  }
+
+  if (!product.store.userId) {
+    Alert.alert('Error', 'Cannot start chat: store user information missing.');
+    return;
+  }
+
+  try {
+    const chatRoom = await startDirectChat(product.store.userId);
+
+    if (!chatRoom?.id) {
+      Alert.alert('Error', 'Failed to open chat room.');
+      return;
+    }
+
+    navigation.navigate('Chat', {
+      chatRoomId: chatRoom.id,
+      otherUserName: product.store.name,
+      otherUserAvatar: product.store.logo || null,
+      otherUserType: 'seller',
+      storeName: product.store.name,
+      storeLogo: product.store.logo || null,
+    });
+  } catch (error) {
+    console.error('Error opening chat room:', error);
+    Alert.alert('Error', 'Failed to start chat. Please try again later.');
+  }
+};
+
+  const renderStarRating = (rating: number, size: number = 14) => {
     return (
       <View style={styles.starContainer}>
         {[1, 2, 3, 4, 5].map((star) => (
           <Ionicons
             key={star}
             name={star <= rating ? 'star' : star - 0.5 <= rating ? 'star-half' : 'star-outline'}
-            size={16}
-            color={Colors.warning}
+            size={size}
+            color="#FFA500"
           />
         ))}
       </View>
     );
   };
 
-  if (loading) {
+  const modalTranslateY = modalAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [height, 0],
+  });
+
+  if (isLoading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <LoadingSpinner size={40} color={Colors.primary} />
         <Text style={styles.loadingText}>Loading product...</Text>
       </View>
     );
@@ -291,9 +343,9 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
         <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
         <Text style={styles.errorTitle}>Product Not Found</Text>
         <Text style={styles.errorText}>
-          {error || 'This product may have been removed or is unavailable.'}
+          {error?.message || 'This product may have been removed or is unavailable.'}
         </Text>
-        <TouchableOpacity style={styles.retryBtn} onPress={fetchProduct}>
+        <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
           <Text style={styles.retryBtnText}>Retry</Text>
         </TouchableOpacity>
       </View>
@@ -356,7 +408,7 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
                 disabled={likeLoading}
               >
                 {likeLoading ? (
-                  <ActivityIndicator size="small" color={Colors.error} />
+                  <LoadingSpinner size={20} color={Colors.error} />
                 ) : (
                   <Ionicons
                     name={isLiked ? "heart" : "heart-outline"}
@@ -368,10 +420,10 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
             </View>
           </View>
 
-          {/* Discount Badge (if applicable) */}
+          {/* Stock Badge */}
           {product.stock > 0 && (
-            <View style={styles.discountBadge}>
-              <Text style={styles.discountText}>In Stock</Text>
+            <View style={styles.stockBadge}>
+              <Text style={styles.stockText}>In Stock</Text>
             </View>
           )}
         </View>
@@ -391,17 +443,17 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
           {/* Rating and Sales Info */}
           <View style={styles.statsRow}>
             {reviewSummary && reviewSummary.reviewCount > 0 && (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.statItem}
                 onPress={() => navigation.navigate('ProductReviews', { productId: product.id })}
               >
-                {renderStarRating(reviewSummary.averageRating)}
+                {renderStarRating(reviewSummary.averageRating, 14)}
                 <Text style={styles.statText}>
                   {reviewSummary.averageRating.toFixed(1)} ({reviewSummary.reviewCount})
                 </Text>
               </TouchableOpacity>
             )}
-            
+
             <View style={styles.statItem}>
               <Ionicons name="cube-outline" size={16} color={Colors.textSecondary} />
               <Text style={styles.statText}>{product.quantityBought || 0} sold</Text>
@@ -444,100 +496,6 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
             </View>
           )}
 
-          {/* Size Selection */}
-          {product.sizes && product.sizes.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Select Size</Text>
-              <View style={styles.optionsContainer}>
-                {product.sizes.map((size, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={[
-                      styles.optionBadge,
-                      selectedSize === size && styles.optionBadgeSelected,
-                    ]}
-                    onPress={() => setSelectedSize(size)}
-                  >
-                    <Text
-                      style={[
-                        styles.optionBadgeText,
-                        selectedSize === size && styles.optionBadgeTextSelected,
-                      ]}
-                    >
-                      {size}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Color Selection */}
-          {product.color && product.color.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Select Color</Text>
-              <View style={styles.optionsContainer}>
-                {product.color.map((color, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={[
-                      styles.optionBadge,
-                      selectedColor === color && styles.optionBadgeSelected,
-                    ]}
-                    onPress={() => setSelectedColor(color)}
-                  >
-                    <Text
-                      style={[
-                        styles.optionBadgeText,
-                        selectedColor === color && styles.optionBadgeTextSelected,
-                      ]}
-                    >
-                      {color}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Quantity Selector - Inline with description */}
-          {product.stock > 0 && (
-            <View style={styles.quantitySection}>
-              <Text style={styles.sectionTitle}>Quantity</Text>
-              <View style={styles.quantitySelector}>
-                <TouchableOpacity
-                  style={[
-                    styles.quantityBtn,
-                    quantity <= 1 && styles.quantityBtnDisabled,
-                  ]}
-                  onPress={decrementQuantity}
-                  disabled={quantity <= 1}
-                >
-                  <Ionicons
-                    name="remove"
-                    size={20}
-                    color={quantity <= 1 ? Colors.gray400 : Colors.white}
-                  />
-                </TouchableOpacity>
-                <Text style={styles.quantityText}>{quantity}</Text>
-                <TouchableOpacity
-                  style={[
-                    styles.quantityBtn,
-                    quantity >= product.stock && styles.quantityBtnDisabled,
-                  ]}
-                  onPress={incrementQuantity}
-                  disabled={quantity >= product.stock}
-                >
-                  <Ionicons
-                    name="add"
-                    size={20}
-                    color={quantity >= product.stock ? Colors.gray400 : Colors.white}
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
           {/* Store Section */}
           {product.store && (
             <TouchableOpacity style={styles.storeSection} onPress={handleStorePress}>
@@ -566,7 +524,7 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
                 </View>
               </View>
               <View style={styles.storeActions}>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.chatStoreBtn}
                   onPress={(e) => {
                     e.stopPropagation();
@@ -592,15 +550,6 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Specifications</Text>
             <View style={styles.specsGrid}>
-              {product.weight && (
-                <View style={styles.specItem}>
-                  <Ionicons name="scale-outline" size={20} color={Colors.primary} />
-                  <View style={styles.specInfo}>
-                    <Text style={styles.specLabel}>Weight</Text>
-                    <Text style={styles.specValue}>{product.weight} kg</Text>
-                  </View>
-                </View>
-              )}
               <View style={styles.specItem}>
                 <Ionicons name="cube-outline" size={20} color={Colors.primary} />
                 <View style={styles.specInfo}>
@@ -620,70 +569,62 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
             </View>
           </View>
 
-          {/* Seller Note */}
-          {product.sellerNote && (
-            <View style={styles.noteContainer}>
-              <Ionicons name="information-circle" size={20} color={Colors.info} />
-              <Text style={styles.noteText}>{product.sellerNote}</Text>
-            </View>
-          )}
-
           {/* Product Reviews Section */}
-<View style={styles.section}>
-  <View style={styles.sectionHeader}>
-    <Text style={styles.sectionTitle}>Customer Reviews</Text>
-    {productReviews.length > 0 && (
-      <TouchableOpacity
-        onPress={() => navigation.navigate('ProductReviews', { productId: product.id })}
-      >
-        <Text style={styles.seeAllText}>See All</Text>
-      </TouchableOpacity>
-    )}
-  </View>
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Customer Reviews</Text>
+              {productReviews.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('ProductReviews', { productId: product.id })}
+                >
+                  <Text style={styles.seeAllText}>See All</Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
-  {reviewSummary && reviewSummary.reviewCount > 0 && (
-    <View style={styles.reviewSummary}>
-      <Text style={styles.averageRating}>
-        {reviewSummary.averageRating.toFixed(1)}
-      </Text>
-      {renderStarRating(reviewSummary.averageRating)}
-      <Text style={styles.reviewCount}>
-        Based on {reviewSummary.reviewCount} reviews
-      </Text>
-    </View>
-  )}
+            {reviewSummary && reviewSummary.reviewCount > 0 && (
+              <View style={styles.reviewSummary}>
+                <Text style={styles.averageRating}>
+                  {reviewSummary.averageRating.toFixed(1)}
+                </Text>
+                {renderStarRating(reviewSummary.averageRating, 16)}
+                <Text style={styles.reviewCount}>
+                  Based on {reviewSummary.reviewCount} reviews
+                </Text>
+              </View>
+            )}
 
-  {productReviews.length > 0 ? (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false}
-      style={styles.reviewsList}
-    >
-      {productReviews.map((review) => (
-        <ProductReviewCard
-          key={review.id}
-          review={review}
-          onPress={() => navigation.navigate('ProductReviews', { productId: product.id })}
-        />
-      ))}
-    </ScrollView>
-  ) : (
-    <View style={styles.emptyReviewsContainer}>
-      <Ionicons name="chatbox-outline" size={48} color={Colors.gray400} />
-      <Text style={styles.emptyReviewsTitle}>No Reviews Yet</Text>
-      <Text style={styles.emptyReviewsText}>
-        Be the first to review this product
-      </Text>
-    </View>
-  )}
-</View>
+            {productReviews.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.reviewsList}
+              >
+                {productReviews.map((review) => (
+                  <ProductReviewCard
+                    key={review.id}
+                    review={review}
+                    onPress={() => navigation.navigate('ProductReviews', { productId: product.id })}
+                  />
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={styles.emptyReviewsContainer}>
+                <Ionicons name="chatbox-outline" size={48} color={Colors.gray400} />
+                <Text style={styles.emptyReviewsTitle}>No Reviews Yet</Text>
+                <Text style={styles.emptyReviewsText}>
+                  Be the first to review this product
+                </Text>
+              </View>
+            )}
+          </View>
 
           {/* Recommended Products */}
           {youMayLikeProducts.length > 0 && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>You May Also Like</Text>
-              <ScrollView 
-                horizontal 
+              <ScrollView
+                horizontal
                 showsHorizontalScrollIndicator={false}
                 style={styles.recommendationsList}
               >
@@ -708,32 +649,211 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
       {/* Sticky Bottom Bar */}
       <View style={styles.stickyBar}>
         <View style={styles.stickyPriceSection}>
-          <Text style={styles.stickyPriceLabel}>Total Price</Text>
-          <Text style={styles.stickyPrice}>
-            GH₵ {(product.price * quantity).toFixed(2)}
-          </Text>
+          <Text style={styles.stickyPriceLabel}>Price</Text>
+          <Text style={styles.stickyPrice}>GH₵ {product.price.toFixed(2)}</Text>
         </View>
 
         <TouchableOpacity
           style={[
             styles.addToCartBtn,
-            (product.stock === 0 || addingToCart) && styles.addToCartBtnDisabled,
+            product.stock === 0 && styles.addToCartBtnDisabled,
           ]}
-          onPress={handleAddToCart}
-          disabled={product.stock === 0 || addingToCart}
+          onPress={openCartModal}
+          disabled={product.stock === 0}
         >
-          {addingToCart ? (
-            <ActivityIndicator size="small" color={Colors.white} />
-          ) : (
-            <>
-              <Ionicons name="cart-outline" size={20} color={Colors.white} />
-              <Text style={styles.addToCartBtnText}>
-                {product.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
-              </Text>
-            </>
-          )}
+          <Ionicons name="cart-outline" size={20} color={Colors.white} />
+          <Text style={styles.addToCartBtnText}>
+            {product.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
+          </Text>
         </TouchableOpacity>
       </View>
+
+      {/* Add to Cart Modal */}
+      <Modal
+        visible={showCartModal}
+        transparent
+        animationType="none"
+        onRequestClose={closeCartModal}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={closeCartModal}
+          />
+          <Animated.View
+            style={[
+              styles.modalContent,
+              { transform: [{ translateY: modalTranslateY }] },
+            ]}
+          >
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <View style={styles.modalHandle} />
+              <Text style={styles.modalTitle}>Select Options</Text>
+              <TouchableOpacity onPress={closeCartModal} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              {/* Product Preview */}
+              <View style={styles.modalProductPreview}>
+                {product.images && product.images.length > 0 ? (
+                  <Image
+                    source={{ uri: product.images[0] }}
+                    style={styles.modalProductImage}
+                  />
+                ) : (
+                  <View style={styles.modalProductImagePlaceholder}>
+                    <Ionicons name="image-outline" size={32} color={Colors.gray400} />
+                  </View>
+                )}
+                <View style={styles.modalProductInfo}>
+                  <Text style={styles.modalProductName} numberOfLines={2}>
+                    {product.name}
+                  </Text>
+                  <Text style={styles.modalProductPrice}>
+                    GH₵ {product.price.toFixed(2)}
+                  </Text>
+                  <Text style={styles.modalProductStock}>
+                    {product.stock} units available
+                  </Text>
+                </View>
+              </View>
+
+              {/* Size Selection */}
+              {product.sizes && product.sizes.length > 0 && (
+                <View style={styles.modalSection}>
+                  <Text style={styles.modalSectionTitle}>
+                    Select Size <Text style={styles.requiredMark}>*</Text>
+                  </Text>
+                  <View style={styles.optionsContainer}>
+                    {product.sizes.map((size, index) => (
+                      <TouchableOpacity
+                        key={index}
+                        style={[
+                          styles.optionBadge,
+                          selectedSize === size && styles.optionBadgeSelected,
+                        ]}
+                        onPress={() => setSelectedSize(size)}
+                      >
+                        <Text
+                          style={[
+                            styles.optionBadgeText,
+                            selectedSize === size && styles.optionBadgeTextSelected,
+                          ]}
+                        >
+                          {size}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Color Selection */}
+              {product.color && product.color.length > 0 && (
+                <View style={styles.modalSection}>
+                  <Text style={styles.modalSectionTitle}>
+                    Select Color <Text style={styles.requiredMark}>*</Text>
+                  </Text>
+                  <View style={styles.optionsContainer}>
+                    {product.color.map((color, index) => (
+                      <TouchableOpacity
+                        key={index}
+                        style={[
+                          styles.optionBadge,
+                          selectedColor === color && styles.optionBadgeSelected,
+                        ]}
+                        onPress={() => setSelectedColor(color)}
+                      >
+                        <Text
+                          style={[
+                            styles.optionBadgeText,
+                            selectedColor === color && styles.optionBadgeTextSelected,
+                          ]}
+                        >
+                          {color}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Quantity Selector */}
+              <View style={styles.modalSection}>
+                <Text style={styles.modalSectionTitle}>Quantity</Text>
+                <View style={styles.quantityRow}>
+                  <View style={styles.quantitySelector}>
+                    <TouchableOpacity
+                      style={[
+                        styles.quantityBtn,
+                        quantity <= 1 && styles.quantityBtnDisabled,
+                      ]}
+                      onPress={decrementQuantity}
+                      disabled={quantity <= 1}
+                    >
+                      <Ionicons
+                        name="remove"
+                        size={20}
+                        color={quantity <= 1 ? Colors.gray400 : Colors.white}
+                      />
+                    </TouchableOpacity>
+                    <Text style={styles.quantityText}>{quantity}</Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.quantityBtn,
+                        quantity >= product.stock && styles.quantityBtnDisabled,
+                      ]}
+                      onPress={incrementQuantity}
+                      disabled={quantity >= product.stock}
+                    >
+                      <Ionicons
+                        name="add"
+                        size={20}
+                        color={quantity >= product.stock ? Colors.gray400 : Colors.white}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.quantityStockText}>
+                    Max: {product.stock}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Total Price */}
+              <View style={styles.modalTotalSection}>
+                <Text style={styles.modalTotalLabel}>Total Price</Text>
+                <Text style={styles.modalTotalPrice}>
+                  GH₵ {(product.price * quantity).toFixed(2)}
+                </Text>
+              </View>
+            </ScrollView>
+
+            {/* Modal Footer */}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.modalAddToCartBtn}
+                onPress={handleAddToCart}
+                disabled={addingToCart}
+              >
+                {addingToCart ? (
+                  <LoadingSpinner size={20} color={Colors.white} />
+                ) : (
+                  <>
+                    <Ionicons name="cart" size={20} color={Colors.white} />
+                    <Text style={styles.modalAddToCartBtnText}>
+                      Add to Cart
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -743,6 +863,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
     marginTop: 30,
+    marginBottom: 20,
   },
   centerContainer: {
     flex: 1,
@@ -753,32 +874,34 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     marginTop: 12,
-    fontSize: 16,
+    fontSize: Typography.base,
     color: Colors.textSecondary,
+    fontFamily: Typography.medium,
   },
   errorTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: Typography.xl,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
     marginTop: 16,
     marginBottom: 8,
   },
   errorText: {
-    fontSize: 14,
+    fontSize: Typography.sm,
     color: Colors.textSecondary,
     textAlign: 'center',
     marginBottom: 20,
+    fontFamily: Typography.regular,
   },
   retryBtn: {
     backgroundColor: Colors.primary,
     paddingHorizontal: 24,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 12,
   },
   retryBtnText: {
     color: Colors.white,
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
   },
   scrollView: {
     flex: 1,
@@ -800,9 +923,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   placeholderText: {
-    fontSize: 16,
+    fontSize: Typography.base,
     color: Colors.gray500,
     marginTop: 8,
+    fontFamily: Typography.medium,
   },
   topActions: {
     position: 'absolute',
@@ -830,7 +954,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  discountBadge: {
+  stockBadge: {
     position: 'absolute',
     top: 16,
     left: 16,
@@ -839,10 +963,10 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
   },
-  discountText: {
+  stockText: {
     color: Colors.white,
-    fontSize: 12,
-    fontWeight: 'bold',
+    fontSize: Typography.xs,
+    fontFamily: Typography.bold,
   },
   thumbnailContainer: {
     padding: 12,
@@ -873,8 +997,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   productName: {
-    fontSize: 22,
-    fontWeight: 'bold',
+    fontSize: Typography['2xl'],
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
     marginBottom: 8,
     lineHeight: 30,
@@ -886,16 +1010,17 @@ const styles = StyleSheet.create({
   },
   productPrice: {
     fontSize: 28,
-    fontWeight: 'bold',
+    fontFamily: Typography.bold,
     color: Colors.primary,
   },
   moqText: {
-    fontSize: 13,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
     backgroundColor: Colors.backgroundSecondary,
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
+    fontFamily: Typography.medium,
   },
   statsRow: {
     flexDirection: 'row',
@@ -913,9 +1038,9 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   statText: {
-    fontSize: 13,
+    fontSize: Typography.sm,
     color: Colors.textSecondary,
-    fontWeight: '500',
+    fontFamily: Typography.medium,
   },
   starContainer: {
     flexDirection: 'row',
@@ -938,8 +1063,8 @@ const styles = StyleSheet.create({
   },
   categoryBadgeText: {
     color: Colors.white,
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: Typography.xs,
+    fontFamily: Typography.semiBold,
   },
   tagBadge: {
     backgroundColor: Colors.backgroundSecondary,
@@ -949,8 +1074,8 @@ const styles = StyleSheet.create({
   },
   tagBadgeText: {
     color: Colors.primary,
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: Typography.xs,
+    fontFamily: Typography.semiBold,
   },
   warningContainer: {
     flexDirection: 'row',
@@ -962,9 +1087,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   warningText: {
-    fontSize: 13,
+    fontSize: Typography.sm,
     color: Colors.warning,
-    fontWeight: '600',
+    fontFamily: Typography.semiBold,
     flex: 1,
   },
   section: {
@@ -977,72 +1102,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: Typography.lg,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
   },
   seeAllText: {
-    fontSize: 14,
+    fontSize: Typography.sm,
     color: Colors.primary,
-    fontWeight: '600',
-  },
-  optionsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  optionBadge: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    backgroundColor: Colors.white,
-  },
-  optionBadgeSelected: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primaryLight,
-  },
-  optionBadgeText: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    fontWeight: '500',
-  },
-  optionBadgeTextSelected: {
-    color: Colors.primary,
-    fontWeight: '700',
-  },
-  quantitySection: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
-    marginBottom: 16,
-  },
-  quantitySelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-  },
-  quantityBtn: {
-    width: 36,
-    height: 36,
-    backgroundColor: Colors.primary,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  quantityBtnDisabled: {
-    backgroundColor: Colors.gray300,
-  },
-  quantityText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-    minWidth: 30,
-    textAlign: 'center',
+    fontFamily: Typography.semiBold,
   },
   storeSection: {
     flexDirection: 'row',
@@ -1073,8 +1140,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   storeLogoText: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: Typography['2xl'],
+    fontFamily: Typography.bold,
     color: Colors.white,
   },
   storeDetails: {
@@ -1082,13 +1149,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   storeLabel: {
-    fontSize: 11,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
     marginBottom: 2,
+    fontFamily: Typography.regular,
   },
   storeName: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
     color: Colors.textPrimary,
     marginBottom: 4,
   },
@@ -1098,8 +1166,9 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   storeLocation: {
-    fontSize: 12,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
+    fontFamily: Typography.regular,
   },
   storeActions: {
     flexDirection: 'row',
@@ -1117,9 +1186,10 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   descriptionText: {
-    fontSize: 15,
+    fontSize: Typography.base,
     color: Colors.textSecondary,
     lineHeight: 24,
+    fontFamily: Typography.regular,
   },
   specsGrid: {
     gap: 12,
@@ -1136,13 +1206,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   specLabel: {
-    fontSize: 12,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
     marginBottom: 2,
+    fontFamily: Typography.regular,
   },
   specValue: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
     color: Colors.textPrimary,
   },
   noteContainer: {
@@ -1156,10 +1227,11 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   noteText: {
-    fontSize: 14,
+    fontSize: Typography.sm,
     color: Colors.textSecondary,
     lineHeight: 20,
     flex: 1,
+    fontFamily: Typography.regular,
   },
   reviewSummary: {
     flexDirection: 'row',
@@ -1172,13 +1244,14 @@ const styles = StyleSheet.create({
   },
   averageRating: {
     fontSize: 36,
-    fontWeight: 'bold',
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
   },
   reviewCount: {
-    fontSize: 13,
+    fontSize: Typography.sm,
     color: Colors.textSecondary,
     marginLeft: 'auto',
+    fontFamily: Typography.regular,
   },
   reviewsList: {
     marginHorizontal: -20,
@@ -1187,6 +1260,30 @@ const styles = StyleSheet.create({
   recommendationsList: {
     marginHorizontal: -20,
     paddingHorizontal: 20,
+  },
+  emptyReviewsContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+    backgroundColor: Colors.backgroundSecondary,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    borderStyle: 'dashed',
+  },
+  emptyReviewsTitle: {
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
+    color: Colors.textPrimary,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptyReviewsText: {
+    fontSize: Typography.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    fontFamily: Typography.regular,
   },
   bottomSpacer: {
     height: 100,
@@ -1213,19 +1310,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   stickyPriceLabel: {
-    fontSize: 11,
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
     marginBottom: 2,
+    fontFamily: Typography.regular,
   },
   stickyPrice: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: Typography.xl,
+    fontFamily: Typography.bold,
     color: Colors.primary,
   },
   addToCartBtn: {
     flex: 1.5,
     flexDirection: 'row',
-    backgroundColor: Colors.success,
+    backgroundColor: Colors.primary,
     paddingVertical: 14,
     paddingHorizontal: 20,
     borderRadius: 12,
@@ -1238,43 +1336,219 @@ const styles = StyleSheet.create({
   },
   addToCartBtnText: {
     color: Colors.white,
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: Typography.base,
+    fontFamily: Typography.bold,
   },
-    emptyReviewsContainer: {
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalBackdrop: {
+    flex: 1,
+  },
+  modalContent: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: height,
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  modalHeader: {
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
+    paddingTop: 12,
     paddingHorizontal: 20,
-    backgroundColor: Colors.backgroundSecondary,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.borderLight,
-    borderStyle: 'dashed',
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
   },
-  emptyReviewsTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+  modalHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: Colors.gray300,
+    borderRadius: 2,
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: Typography.lg,
+    fontFamily: Typography.bold,
     color: Colors.textPrimary,
-    marginTop: 12,
+  },
+  modalCloseBtn: {
+    position: 'absolute',
+    right: 16,
+    top: 16,
+    padding: 4,
+  },
+  modalBody: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  modalProductPreview: {
+    flexDirection: 'row',
+    backgroundColor: Colors.backgroundSecondary,
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 24,
+    gap: 12,
+  },
+  modalProductImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    backgroundColor: Colors.gray100,
+  },
+  modalProductImagePlaceholder: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    backgroundColor: Colors.gray200,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalProductInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  modalProductName: {
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
+    color: Colors.textPrimary,
     marginBottom: 4,
   },
-  emptyReviewsText: {
-    fontSize: 14,
+  modalProductPrice: {
+    fontSize: Typography.lg,
+    fontFamily: Typography.bold,
+    color: Colors.primary,
+    marginBottom: 4,
+  },
+  modalProductStock: {
+    fontSize: Typography.xs,
     color: Colors.textSecondary,
+    fontFamily: Typography.regular,
+  },
+  modalSection: {
+    marginBottom: 24,
+  },
+  modalSectionTitle: {
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
+    color: Colors.textPrimary,
+    marginBottom: 12,
+  },
+  requiredMark: {
+    color: Colors.error,
+  },
+  optionsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  optionBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.white,
+  },
+  optionBadgeSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primary + '15',
+  },
+  optionBadgeText: {
+    fontSize: Typography.sm,
+    color: Colors.textPrimary,
+    fontFamily: Typography.medium,
+  },
+  optionBadgeTextSelected: {
+    color: Colors.primary,
+    fontFamily: Typography.bold,
+  },
+  quantityRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  quantitySelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    backgroundColor: Colors.backgroundSecondary,
+    padding: 8,
+    borderRadius: 12,
+  },
+  quantityBtn: {
+    width: 36,
+    height: 36,
+    backgroundColor: Colors.primary,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quantityBtnDisabled: {
+    backgroundColor: Colors.gray300,
+  },
+  quantityText: {
+    fontSize: Typography.lg,
+    fontFamily: Typography.bold,
+    color: Colors.textPrimary,
+    minWidth: 40,
     textAlign: 'center',
   },
-  viewAllBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: Colors.white,
-    borderRadius: 8,
+  quantityStockText: {
+    fontSize: Typography.sm,
+    color: Colors.textSecondary,
+    fontFamily: Typography.medium,
+  },
+  modalTotalSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.backgroundSecondary,
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 20,
+  },
+  modalTotalLabel: {
+    fontSize: Typography.base,
+    fontFamily: Typography.semiBold,
+    color: Colors.textPrimary,
+  },
+  modalTotalPrice: {
+    fontSize: Typography['2xl'],
+    fontFamily: Typography.bold,
     color: Colors.primary,
   },
-  viewAll: {
-    fontSize: 14,
-    color: Colors.primary,
-    fontWeight: '600',
+  modalFooter: {
+    padding: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+  },
+  modalAddToCartBtn: {
+    flexDirection: 'row',
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modalAddToCartBtnText: {
+    color: Colors.white,
+    fontSize: Typography.base,
+    fontFamily: Typography.bold,
   },
 });
 

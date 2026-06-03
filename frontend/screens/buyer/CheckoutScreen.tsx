@@ -6,14 +6,16 @@ import {
   TouchableOpacity,
   Image,
   StyleSheet,
-  ActivityIndicator,
   Alert,
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useCart } from '../../context/CartContext';
+import { useAuth } from '../../context/AuthContext';
 import { useAddress } from '../../hooks/useAddress';
-import { useOrders } from '../../hooks/useOrder';
+import { useCreateOrder } from '../../hooks/useOrder';
+import { usePayment } from '../../hooks/usePayment';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
 
 interface Address {
@@ -44,17 +46,22 @@ interface CartItem {
 const CheckoutScreen = ({ navigation, route }: any) => {
   const { cart, loading: cartLoading, fetchCart, clearCart } = useCart();
   const { getUserAddresses, loading: addressLoading } = useAddress();
-  const { createOrder, loading: orderLoading } = useOrders();
+  const { user } = useAuth();
+
+  // TanStack Query mutation
+  const createOrderMutation = useCreateOrder();
+  
+  const { createCheckoutSession, loading: paymentLoading } = usePayment();
 
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
 
   // Constants
   const deliveryFee = 0; // To be negotiated with seller
   const taxAmount = 0;
   const discount = 0;
-  const PAYSTACK_COLLECTION_PERCENT = 1.95; // 1.95% collection fee
+const PAYSTACK_COLLECTION_PERCENT = 1.95; // 1.95% collection fee
+const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
 
   useEffect(() => {
     loadCheckoutData();
@@ -67,16 +74,19 @@ const CheckoutScreen = ({ navigation, route }: any) => {
   const loadAddresses = async () => {
     const addresses = await getUserAddresses();
     if (addresses && addresses.length > 0) {
-      const defaultAddr = addresses.find(addr => addr.isDefault) || addresses[0];
+      const defaultAddr = addresses.find((addr) => addr.isDefault) || addresses[0];
       setSelectedAddress(defaultAddr);
     }
   };
 
   const onRefresh = async () => {
-    setRefreshing(true);
     await fetchCart();
     await loadCheckoutData();
-    setRefreshing(false);
+  };
+
+  // Calculate platform fee
+  const calculatePlatformFee = (subtotal: number) => {
+    return parseFloat((subtotal * PLATFORM_FEE_PERCENT).toFixed(2));
   };
 
   // Calculate Paystack collection fee (what buyer pays)
@@ -114,7 +124,7 @@ const CheckoutScreen = ({ navigation, route }: any) => {
       storeId,
       storeName: items[0].storeName,
       items,
-      subtotal: items.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+      subtotal: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
     }));
   };
 
@@ -125,29 +135,33 @@ const CheckoutScreen = ({ navigation, route }: any) => {
     const subtotal = storeGroups.reduce((sum, group) => sum + group.subtotal, 0);
     const totalDeliveryFee = deliveryFee * storeGroups.length; // Per store
     const orderSubtotal = subtotal + totalDeliveryFee + taxAmount - discount;
-    const paystackCollectionFee = calculatePaystackCollectionFee(orderSubtotal);
-    const total = orderSubtotal + paystackCollectionFee;
+    const platformFee = calculatePlatformFee(orderSubtotal);
+    const taxableForPaystack = orderSubtotal + platformFee;
+    const paystackCollectionFee = calculatePaystackCollectionFee(taxableForPaystack);
+    const total = orderSubtotal + platformFee + paystackCollectionFee;
     const totalItems = cart?.items?.length || 0;
 
-    return { 
-      subtotal, 
-      totalDeliveryFee, 
+    return {
+      subtotal,
+      totalDeliveryFee,
       taxAmount,
       discount,
       orderSubtotal,
-      paystackCollectionFee, 
-      total, 
-      totalItems 
+      platformFee,
+      paystackCollectionFee,
+      total,
+      totalItems,
     };
   };
 
-  const { 
-    subtotal, 
-    totalDeliveryFee, 
-    orderSubtotal, 
-    paystackCollectionFee, 
-    total, 
-    totalItems 
+  const {
+    subtotal,
+    totalDeliveryFee,
+    orderSubtotal,
+    platformFee,
+    paystackCollectionFee,
+    total,
+    totalItems,
   } = calculateTotals();
 
   const handlePlaceOrder = async () => {
@@ -184,7 +198,9 @@ const CheckoutScreen = ({ navigation, route }: any) => {
       const deliveryInfo = {
         recipient: selectedAddress!.recipient,
         phone: selectedAddress!.phone,
-        address: `${selectedAddress!.addressLine1}${selectedAddress!.addressLine2 ? ', ' + selectedAddress!.addressLine2 : ''}`,
+        address: `${selectedAddress!.addressLine1}${
+          selectedAddress!.addressLine2 ? ', ' + selectedAddress!.addressLine2 : ''
+        }`,
         city: selectedAddress!.city,
         region: selectedAddress!.region,
         country: selectedAddress!.country || 'Ghana',
@@ -192,14 +208,17 @@ const CheckoutScreen = ({ navigation, route }: any) => {
       };
 
       // Prepare items in the format backend expects
-      const items = cart?.items?.map((cartItem) => ({
-        productId: cartItem.productId,
-        quantity: cartItem.quantity,
-        price: cartItem.product.price,
-      })) || [];
+      const items =
+        cart?.items?.map((cartItem) => ({
+          productId: cartItem.productId,
+          quantity: cartItem.quantity,
+          price: cartItem.product.price,
+        })) || [];
 
       // Generate checkout session ID
-      const checkoutSession = `cs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const checkoutSession = `cs_${Date.now()}_${Math.random()
+        .toString(36)
+        .substr(2, 9)}`;
 
       // Create order data (backend will handle multi-seller grouping)
       const orderData = {
@@ -212,44 +231,65 @@ const CheckoutScreen = ({ navigation, route }: any) => {
         checkoutSession,
       };
 
-      const result = await createOrder(orderData);
+      // Step 1: Create orders using TanStack Query mutation
+      const orderResult = await createOrderMutation.mutateAsync(orderData);
 
-      if (result && result.orders && result.orders.length > 0) {
-        // Clear cart after successful order creation
-        await clearCart();
-
-        Alert.alert(
-          'Orders Created!',
-          `${result.orders.length} order(s) created successfully. Proceed to payment.`,
-          [
-            {
-              text: 'Go to Payment',
-              onPress: () => {
-                // Navigate to payment with all order details
-                navigation.navigate('Payment', {
-                  orders: result.orders.map(order => ({
-                    orderId: order.id,
-                    storeName: order.store?.name,
-                    amount: order.buyerTotalAmount,
-                    checkoutSession: order.checkoutSession,
-                  })),
-                  totalAmount: result.orders.reduce((sum, order) => sum + order.buyerTotalAmount, 0),
-                  totalOrders: result.orders.length,
-                });
-              },
-            },
-          ]
-        );
-      } else {
-        Alert.alert(
-          'Order Failed',
-          'Failed to create orders. Please try again.',
-          [{ text: 'OK' }]
-        );
+      if (!orderResult || !orderResult.orders || orderResult.orders.length === 0) {
+        throw new Error('Failed to create orders');
       }
-    } catch (error) {
-      console.error('Order creation error:', error);
-      Alert.alert('Error', 'Something went wrong. Please try again.');
+
+      // Step 2: Get user email from order, auth context, or empty
+      const userEmail = orderResult.orders[0]?.buyer?.realEmail || user?.email || '';
+
+      // Step 3: Create checkout session for payment
+      const orderIds = orderResult.orders.map((order) => order.id);
+      const paymentSessionData = {
+        orderIds,
+        email: userEmail,
+      };
+
+      const paymentResult = await createCheckoutSession(paymentSessionData);
+
+      if (!paymentResult || !paymentResult.data) {
+        throw new Error('Failed to create payment session');
+      }
+
+      // Clear cart after successful operations
+      await clearCart();
+
+      // Navigate directly to payment screen with both order and payment data
+      navigation.navigate('Payment', {
+        orders: orderResult.orders.map((order) => ({
+          orderId: order.id,
+          storeName: order.store?.name,
+          amount: order.buyerTotalAmount,
+          checkoutSession: order.checkoutSession,
+        })),
+        paymentSession: {
+          authorizationUrl: paymentResult.data.authorizationUrl,
+          reference: paymentResult.data.reference,
+          checkoutSessionId: paymentResult.data.checkoutSessionId,
+        },
+        totalAmount: orderResult.orders.reduce(
+          (sum, order) => sum + order.buyerTotalAmount,
+          0
+        ),
+        totalOrders: orderResult.orders.length,
+        email: userEmail,
+        reference: paymentResult?.data?.reference,
+        checkoutSessionId: paymentResult?.data?.checkoutSessionId,
+      });
+    } catch (error: any) {
+      console.error('Order creation and payment initiation error:', error);
+
+      let errorMessage = 'Something went wrong. Please try again.';
+      if (error.message) {
+        errorMessage = error.message;
+      }
+
+      Alert.alert('Order Processing Failed', errorMessage, [
+        { text: 'OK', onPress: () => setPlacingOrder(false) },
+      ]);
     } finally {
       setPlacingOrder(false);
     }
@@ -259,15 +299,17 @@ const CheckoutScreen = ({ navigation, route }: any) => {
     return `GH₵ ${price.toFixed(2)}`;
   };
 
+  // Loading state - cart is loading
   if (cartLoading || !cart) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <LoadingSpinner size={40} color={Colors.primary} />
         <Text style={styles.loadingText}>Loading checkout...</Text>
       </View>
     );
   }
 
+  // Empty cart state
   if (!cart.items || cart.items.length === 0) {
     return (
       <View style={styles.emptyContainer}>
@@ -284,14 +326,15 @@ const CheckoutScreen = ({ navigation, route }: any) => {
     );
   }
 
+  // Determine if mutations are loading
+  const isProcessing =
+    placingOrder || createOrderMutation.isPending || paymentLoading;
+
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Checkout</Text>
@@ -302,7 +345,12 @@ const CheckoutScreen = ({ navigation, route }: any) => {
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={cartLoading && !!cart}
+            onRefresh={onRefresh}
+            colors={[Colors.primary]}
+            tintColor={Colors.primary}
+          />
         }
       >
         {/* Multi-Store Notice */}
@@ -310,8 +358,8 @@ const CheckoutScreen = ({ navigation, route }: any) => {
           <View style={styles.multiStoreNotice}>
             <Ionicons name="information-circle" size={20} color={Colors.warning} />
             <Text style={styles.multiStoreText}>
-              You're ordering from {storeGroups.length} different stores. 
-              This will create {storeGroups.length} separate orders.
+              You're ordering from {storeGroups.length} different stores. This will create{' '}
+              {storeGroups.length} separate orders.
             </Text>
           </View>
         )}
@@ -337,7 +385,9 @@ const CheckoutScreen = ({ navigation, route }: any) => {
                   )}
                 </View>
                 <TouchableOpacity
-                  onPress={() => navigation.navigate('ManageAddresses', { fromCheckout: true })}
+                  onPress={() =>
+                    navigation.navigate('ManageAddresses', { fromCheckout: true })
+                  }
                 >
                   <Text style={styles.changeText}>Change</Text>
                 </TouchableOpacity>
@@ -393,7 +443,9 @@ const CheckoutScreen = ({ navigation, route }: any) => {
               {group.items.map((item, itemIndex) => (
                 <View key={`${item.productId}-${itemIndex}`} style={styles.orderItem}>
                   <Image
-                    source={{ uri: item.imageURL || 'https://via.placeholder.com/80' }}
+                    source={{
+                      uri: item.imageURL || 'https://via.placeholder.com/80',
+                    }}
                     style={styles.productImage}
                   />
                   <View style={styles.productDetails}>
@@ -426,7 +478,9 @@ const CheckoutScreen = ({ navigation, route }: any) => {
             {/* Store Subtotal */}
             <View style={styles.storeSubtotal}>
               <Text style={styles.storeSubtotalLabel}>Store Subtotal</Text>
-              <Text style={styles.storeSubtotalValue}>{formatPrice(group.subtotal)}</Text>
+              <Text style={styles.storeSubtotalValue}>
+                {formatPrice(group.subtotal)}
+              </Text>
             </View>
           </View>
         ))}
@@ -445,16 +499,15 @@ const CheckoutScreen = ({ navigation, route }: any) => {
               <Text style={styles.summaryLabel}>Subtotal ({totalItems} items)</Text>
               <Text style={styles.summaryValue}>{formatPrice(subtotal)}</Text>
             </View>
-            
+
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>
-                Delivery Fee ({storeGroups.length} {storeGroups.length === 1 ? 'store' : 'stores'})
+                Delivery Fee ({storeGroups.length}{' '}
+                {storeGroups.length === 1 ? 'store' : 'stores'})
               </Text>
               <Text style={styles.summaryValue}>{formatPrice(totalDeliveryFee)}</Text>
             </View>
-            <Text style={styles.deliveryNote}>
-              To be negotiated with seller
-            </Text>
+            <Text style={styles.deliveryNote}>To be negotiated with seller</Text>
 
             {taxAmount > 0 && (
               <View style={styles.summaryRow}>
@@ -472,6 +525,28 @@ const CheckoutScreen = ({ navigation, route }: any) => {
               </View>
             )}
 
+            {/* Platform Fee */}
+            <View style={styles.summaryRow}>
+              <View style={styles.feeInfoContainer}>
+                <Text style={styles.summaryLabel}>Platform Fee (3%)</Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    Alert.alert(
+                      'Platform Fee',
+                      '3% platform fee supports Zuba Marketplace operations and services.'
+                    )
+                  }
+                >
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={16}
+                    color={Colors.textSecondary}
+                  />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.summaryValue}>{formatPrice(platformFee)}</Text>
+            </View>
+
             <View style={styles.divider} />
 
             <View style={styles.summaryRow}>
@@ -481,17 +556,25 @@ const CheckoutScreen = ({ navigation, route }: any) => {
 
             <View style={styles.summaryRow}>
               <View style={styles.feeInfoContainer}>
-                <Text style={styles.summaryLabel}>Payment Processing Fee</Text>
-                <TouchableOpacity 
-                  onPress={() => Alert.alert(
-                    'Payment Processing Fee',
-                    `Paystack charges ${PAYSTACK_COLLECTION_PERCENT}% to process your payment securely.`
-                  )}
+                <Text style={styles.summaryLabel}>Payment Processing Fee ({PAYSTACK_COLLECTION_PERCENT}%)</Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    Alert.alert(
+                      'Payment Processing Fee',
+                      `Paystack charges ${PAYSTACK_COLLECTION_PERCENT}% to process your payment securely.`
+                    )
+                  }
                 >
-                  <Ionicons name="information-circle-outline" size={16} color={Colors.textSecondary} />
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={16}
+                    color={Colors.textSecondary}
+                  />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.summaryValue}>{formatPrice(paystackCollectionFee)}</Text>
+              <Text style={styles.summaryValue}>
+                {formatPrice(paystackCollectionFee)}
+              </Text>
             </View>
 
             <View style={styles.divider} />
@@ -513,20 +596,31 @@ const CheckoutScreen = ({ navigation, route }: any) => {
           <Text style={styles.bottomTotalLabel}>Total Amount</Text>
           <Text style={styles.bottomTotalValue}>{formatPrice(total)}</Text>
         </View>
+
         <TouchableOpacity
           style={[
             styles.checkoutButton,
-            (!selectedAddress || placingOrder) && styles.checkoutButtonDisabled,
+            (!selectedAddress || isProcessing) && styles.checkoutButtonDisabled,
           ]}
           onPress={handlePlaceOrder}
-          disabled={!selectedAddress || placingOrder}
+          disabled={!selectedAddress || isProcessing}
         >
-          {placingOrder ? (
-            <ActivityIndicator color={Colors.white} />
+          {isProcessing ? (
+            <View style={styles.buttonContentRow}>
+              <LoadingSpinner size={20} color={Colors.white} />
+              <Text style={styles.checkoutButtonText}>
+                {createOrderMutation.isPending
+                  ? 'Creating Orders...'
+                  : paymentLoading
+                  ? 'Setting up Payment...'
+                  : 'Processing...'}
+              </Text>
+            </View>
           ) : (
             <>
               <Text style={styles.checkoutButtonText}>
-                Place {storeGroups.length === 1 ? 'Order' : `${storeGroups.length} Orders`}
+                Place {storeGroups.length === 1 ? 'Order' : `${storeGroups.length} Orders`}{' '}
+                & Pay
               </Text>
               <Ionicons name="arrow-forward" size={20} color={Colors.white} />
             </>
@@ -548,9 +642,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: Colors.background,
+    gap: 12,
   },
   loadingText: {
-    marginTop: 16,
     fontSize: 16,
     color: Colors.textSecondary,
   },
@@ -908,6 +1002,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 5,
+    minHeight: 52,
   },
   checkoutButtonDisabled: {
     backgroundColor: Colors.disabled,
@@ -918,6 +1013,11 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 16,
     fontWeight: '700',
+  },
+  buttonContentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 });
 

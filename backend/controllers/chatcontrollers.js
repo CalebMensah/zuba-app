@@ -5,286 +5,9 @@ import { uploadMultipleToCloudinary, uploadPresets, deleteFromCloudinary } from 
 import { emitNewMessage, emitMessageRead, emitMessageDeleted, emitMessageEdited } from '../services/socketService.js';
 
 
-export const getOrCreateOrderChatRoom = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { orderId } = req.params;
 
-    // Verify the order exists and user is involved
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      include: {
-        product: {
-          include: {
-            seller: true
-          }
-        }
-      }
-    });
 
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found.'
-      });
-    }
 
-    // Check if user is buyer or seller
-    const isBuyer = order.buyerId === userId;
-    const isSeller = order.product.sellerId === userId;
-
-    if (!isBuyer && !isSeller) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to access this chat.'
-      });
-    }
-
-    // Check if chat room already exists for this order
-    let chatRoom = await prisma.chatRoom.findFirst({
-      where: {
-        orderId: orderId,
-        type: 'ORDER'
-      },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                email: true,
-                avatar: true
-              }
-            }
-          }
-        },
-        messages: {
-          take: 1,
-          orderBy: { createdAt: 'desc' },
-          include: {
-            sender: {
-              select: {
-                id: true,
-                firstName: true,
-                avatar: true
-              }
-            }
-          }
-        }
-      }
-    });
-
-    if (!chatRoom) {
-      // Create new chat room
-      chatRoom = await prisma.chatRoom.create({
-        data: {
-          name: `Order #${order.id.slice(-8)} Chat`,
-          type: 'ORDER',
-          orderId: orderId,
-          participants: {
-            create: [
-              { userId: order.buyerId },
-              { userId: order.product.sellerId }
-            ]
-          }
-        },
-        include: {
-          participants: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  email: true,
-                  avatar: true
-                }
-              }
-            }
-          },
-          messages: true
-        }
-      });
-
-      // Create notification for the other party
-      const otherUserId = isBuyer ? order.product.sellerId : order.buyerId;
-      await sendNotification(
-        otherUserId,
-        'New Chat Room',
-        `A new chat has been created for Order #${order.id.slice(-8)}`,
-        'message',
-        { chatRoomId: chatRoom.id, orderId }
-      );
-    }
-
-    res.status(200).json({
-      success: true,
-      data: chatRoom
-    });
-
-  } catch (error) {
-    console.error('Error getting/creating order chat room:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
-
-export const getOrCreateProductChatRoom = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { productId } = req.params;
-
-    // Verify the product exists
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
-      include: {
-        store: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                email: true,
-                avatar: true
-              }
-            }
-          }
-        }
-      }
-    });
-
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: 'Product not found.'
-      });
-    }
-
-    // Prevent seller from creating chat with themselves
-    if (product.store.userId === userId) {
-      return res.status(400).json({
-        success: false,
-        message: 'You cannot create a chat with yourself.'
-      });
-    }
-
-    // Check if chat room already exists between user and seller for this product
-    let chatRoom = await prisma.chatRoom.findFirst({
-      where: {
-        productId: productId,
-        type: 'PRODUCT_INQUIRY',
-        participants: {
-          every: {
-            OR: [
-              { userId: userId },
-              { userId: product.store.userId }
-            ]
-          }
-        }
-      },
-      include: {
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                firstName: true,
-                email: true,
-                avatar: true
-              }
-            }
-          }
-        },
-        messages: {
-          take: 1,
-          orderBy: { createdAt: 'desc' },
-          include: {
-            sender: {
-              select: {
-                id: true,
-                firstName: true,
-                avatar: true
-              }
-            }
-          }
-        },
-        product: {
-          select: {
-            id: true,
-            name: true,
-            images: true,
-            price: true
-          }
-        }
-      }
-    });
-
-    if (!chatRoom) {
-      // Create new chat room
-      chatRoom = await prisma.chatRoom.create({
-        data: {
-          name: `Inquiry: ${product.name}`,
-          type: 'PRODUCT_INQUIRY',
-          productId: productId,
-          participants: {
-            create: [
-              { userId: userId },
-              { userId: product.store.userId }
-            ]
-          }
-        },
-        include: {
-          participants: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  email: true,
-                  avatar: true
-                }
-              }
-            }
-          },
-          messages: true,
-          product: {
-            select: {
-              id: true,
-              name: true,
-              images: true,
-              price: true
-            }
-          }
-        }
-      });
-
-      // Notify the seller
-      await sendNotification(
-        product.store.userId,
-        'New Product Inquiry',
-        `Someone is interested in your product: ${product.name}`,
-        'message',
-        { chatRoomId: chatRoom.id, productId }
-      );
-    }
-
-    res.status(200).json({
-      success: true,
-      data: chatRoom
-    });
-
-  } catch (error) {
-    console.error('Error getting/creating product chat room:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-};
 
 export const getUserChatRooms = async (req, res) => {
   try {
@@ -342,21 +65,6 @@ export const getUserChatRooms = async (req, res) => {
                 }
               }
             }
-          },
-          product: {
-            select: {
-              id: true,
-              name: true,
-              images: true,
-              price: true
-            }
-          },
-          order: {
-            select: {
-              id: true,
-              status: true,
-              totalAmount: true
-            }
           }
         },
         orderBy: { updatedAt: 'desc' },
@@ -405,6 +113,143 @@ export const getUserChatRooms = async (req, res) => {
     });
   }
 };
+
+export const getOrCreateDirectChat = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { otherUserId } = req.params;
+
+    if (userId === otherUserId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot chat with yourself.'
+      });
+    }
+
+    const otherUser = await prisma.user.findUnique({
+      where: { id: otherUserId },
+      select: {
+        id: true,
+        firstName: true,
+        email: true,
+        avatar: true
+      }
+    });
+
+    if (!otherUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found.'
+      });
+    }
+
+    let chatRoom = await prisma.chatRoom.findFirst({
+      where: {
+        type: 'DIRECT',
+        AND: [
+          { participants: { some: { userId: userId, leftAt: null } } },
+          { participants: { some: { userId: otherUserId, leftAt: null } } }
+        ],
+        isArchived: false
+      },
+      include: {
+        participants: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                firstName: true,
+                email: true,
+                avatar: true,
+                role: true,
+                store: {
+                  select: {
+                    id: true,
+                    name: true,
+                    logo: true
+                  }
+                }
+              }
+            }
+          }
+        },
+        messages: {
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            sender: {
+              select: {
+                id: true,
+                firstName: true,
+                avatar: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!chatRoom) {
+      chatRoom = await prisma.chatRoom.create({
+        data: {
+          name: `Chat with ${otherUser.firstName}`,
+          type: 'DIRECT',
+          otherUserId: otherUserId,
+          participants: {
+            create: [
+              { userId: userId },
+              { userId: otherUserId }
+            ]
+          }
+        },
+        include: {
+          participants: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  email: true,
+                  avatar: true,
+                  role: true,
+                  store: {
+                    select: {
+                      id: true,
+                      name: true,
+                      logo: true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          messages: true
+        }
+      });
+
+      await sendNotification(
+        otherUserId,
+        'New Direct Chat',
+        `${req.user.firstName || 'Someone'} started a chat with you`,
+        'message',
+        { chatRoomId: chatRoom.id }
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      data: chatRoom
+    });
+  } catch (error) {
+    console.error('Error getting/creating direct chat:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
 
 export const getRoomMessages = async (req, res) => {
   try {
@@ -564,7 +409,9 @@ export const sendMessage = async (req, res) => {
           message: 'Replied-to message not found in this room.'
         });
       }
-      messageData.repliedToId = repliedToId;
+      messageData.repliedTo = {
+        connect: { id: repliedToId }
+      };
     }
 
     // Create the message
@@ -1012,8 +859,6 @@ export const updateChatPreferences = async (req, res) => {
 };
 
 export default {
-  getOrCreateOrderChatRoom,
-  getOrCreateProductChatRoom,
   getUserChatRooms,
   getRoomMessages,
   sendMessage,
@@ -1021,5 +866,6 @@ export default {
   editMessage,
   deleteMessage,
   archiveChatRoom,
-  updateChatPreferences
+  updateChatPreferences,
+  getOrCreateDirectChat,
 };

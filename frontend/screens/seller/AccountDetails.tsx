@@ -72,7 +72,7 @@ export default function AddressDetails({ navigation }: any) {
   };
 
   const handleAddAccount = () => {
-    navigation.navigate('AddAddress');
+    navigation.navigate('AddAccount');
   };
 
   // Loading state

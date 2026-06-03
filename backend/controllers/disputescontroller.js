@@ -1,207 +1,418 @@
 import prisma from '../config/prisma.js';
 import { cache } from '../config/redis.js';
-import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
+import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { processRefund } from '../utils/refundUtils.js';
+import { transferFundsToSeller } from '../utils/transferUtils.js';
 
-// Helper function to sanitize error messages in production
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const VALID_DISPUTE_OUTCOMES = ['BUYER_WON', 'SELLER_WON'];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 const sanitizeError = (error) => {
   if (process.env.NODE_ENV === 'production') {
-    console.error('Error:', error);
     return 'Internal server error';
   }
   return error.message;
 };
 
-// Helper function to invalidate dispute-related caches
 const invalidateDisputeCaches = async (orderId, buyerId, sellerId) => {
-  const cacheKeys = [
-    `order:${orderId}:user:${buyerId}`,
-    `order:${orderId}:user:${sellerId}`,
-    `user:${buyerId}:disputes`,
-    `user:${sellerId}:disputes`
-  ];
-
-  await Promise.allSettled(cacheKeys.map(key => cache.del(key)));
+  await Promise.allSettled([
+    cache.del(`order:${orderId}:user:${buyerId}`),
+    cache.del(`order:${orderId}:user:${sellerId}`)
+  ]);
 };
 
-export const requestRefund = async (req, res) => {
+// ── POST /orders/:orderId/disputes ────────────────────────────────────────────
+
+export const openDispute = async (req, res) => {
   try {
     const buyerId = req.user.userId;
     const { orderId } = req.params;
-    const { reason, type = 'REFUND_REQUEST' } = req.body;
+    const { reason, type } = req.body;
 
-    // Find the order and its payment/escrow details
+    if (!reason || !type) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reason and dispute type are required.'
+      });
+    }
+
+    if (!orderId || typeof orderId !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid order ID.' });
+    }
+
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        payment: true,
         escrow: true,
-        store: { 
-          include: { 
-            user: { 
-              select: { 
-                id: true, 
-                email: true, 
-                firstName: true 
-              } 
-            } 
-          } 
-        },
-        buyer: { 
-          select: { 
-            id: true, 
-            email: true, 
-            firstName: true 
-          } 
+        payment: true,
+        buyer: { select: { id: true, email: true, firstName: true } },
+        store: {
+          include: {
+            user: { select: { id: true, email: true, firstName: true } }
+          }
         }
       }
     });
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found.'
-      });
+      return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    // Verify buyer authorization
     if (order.buyerId !== buyerId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Unauthorized to create a dispute for this order.'
-      });
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
-    // Validate payment exists and is successful
-    if (!order.payment || order.payment.status !== 'SUCCESS') {
-      return res.status(400).json({
-        success: false,
-        message: 'Refund not eligible: Payment was not successful.'
-      });
+    // Payment must be successful
+    const successfulPayment = order.payment?.find(p => p.status === 'SUCCESS');
+    if (!successfulPayment) {
+      return res.status(400).json({ success: false, message: 'Order payment not successful.' });
     }
 
-    // Check if escrow funds have already been released
-    if (order.escrow && order.escrow.releaseStatus === 'RELEASED') {
-      return res.status(400).json({
-        success: false,
-        message: 'Funds have already been released to the seller. Please contact support for assistance.'
-      });
+    // Escrow already released — nothing to dispute
+    if (order.escrow?.releaseStatus === 'RELEASED') {
+      return res.status(400).json({ success: false, message: 'Escrow already released. Cannot open dispute.' });
     }
 
-    // Check if order is in a valid state for disputes
-    const validOrderStatuses = ['CONFIRMED', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
-    if (!validOrderStatuses.includes(order.status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot create dispute for order in status: ${order.status}.`
-      });
-    }
-
-    // Check if a dispute already exists for this order
-    const existingDispute = await prisma.dispute.findFirst({
-      where: {
-        orderId,
-        status: { in: ['PENDING', 'RESOLVED'] }
-      }
+    // Prevent duplicate dispute
+    const existing = await prisma.dispute.findFirst({
+      where: { orderId, status: 'PENDING' }
     });
 
-    if (existingDispute) {
-      return res.status(409).json({
-        success: false,
-        message: 'A dispute already exists for this order.',
-        data: existingDispute
-      });
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'An open dispute already exists for this order.' });
     }
 
-    // Create dispute in a transaction
-    const dispute = await prisma.dispute.create({
-      data: {
-        orderId,
-        paymentId: order.paymentId,
-        buyerId,
-        sellerId: order.store.userId,
-        type,
-        description: reason,
-        status: 'PENDING'
+    const dispute = await prisma.$transaction(async (tx) => {
+      const created = await tx.dispute.create({
+        data: {
+          orderId,
+          paymentId: successfulPayment.id,
+          buyerId,
+          sellerId: order.store.userId,
+          type,
+          description: reason,
+          status: 'PENDING'
+        }
+      });
+
+      // Freeze escrow
+      if (order.escrow) {
+        await tx.escrow.update({
+          where: { id: order.escrow.id },
+          data: { releaseStatus: 'DISPUTED' }
+        });
       }
+
+      // Mark order as disputed
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: 'DISPUTED' }
+      });
+
+      return created;
     });
 
-    // Send notifications (non-blocking)
+    // Notify seller (non-blocking)
     setImmediate(async () => {
       try {
-        const storeName = order.store.name || 'Store';
-        const sellerName = order.store.user.firstName || 'Seller';
-        const buyerName = order.buyer.firstName || 'Buyer';
-
         await Promise.allSettled([
           sendNotification(
             order.store.userId,
-            'Dispute Opened',
-            `A ${type.toLowerCase().replace(/_/g, ' ')} has been filed for order #${orderId}.`,
-            'DISPUTE_CREATED',
-            { disputeId: dispute.id, orderId }
+            'New Dispute Opened',
+            `A buyer opened a dispute for order #${orderId}.`,
+            'DISPUTE_OPENED',
+            { orderId, disputeId: dispute.id }
           ),
           sendEmailNotification({
             to: order.store.user.email,
-            toName: sellerName,
-            subject: 'Dispute Opened',
+            toName: order.store.user.firstName,
+            subject: 'New Dispute Opened',
             template: 'generic',
             templateData: {
               title: 'Dispute Opened',
-              message: `A dispute has been filed for order #${orderId}. Reason: ${reason}. Please respond within 48 hours.`,
+              message: `A buyer opened a dispute for order #${orderId}.`,
               ctaText: 'View Dispute',
-              ctaUrl: `${process.env.FRONTEND_URL}/disputes/${dispute.id}`
-            }
-          }),
-          sendNotification(
-            buyerId,
-            'Dispute Submitted',
-            `Your dispute for order #${orderId} has been submitted and is under review.`,
-            'DISPUTE_CREATED',
-            { disputeId: dispute.id, orderId }
-          ),
-          sendEmailNotification({
-            to: order.buyer.email,
-            toName: buyerName,
-            subject: 'Dispute Submitted',
-            template: 'generic',
-            templateData: {
-              title: 'Dispute Submitted',
-              message: `Your dispute for order #${orderId} has been submitted and is under review. You will be notified of any updates.`,
-              ctaText: 'View Dispute',
-              ctaUrl: `${process.env.FRONTEND_URL}/disputes/${dispute.id}`
+              ctaUrl: `${process.env.FRONTEND_URL}/seller/disputes/${dispute.id}`
             }
           })
         ]);
-      } catch (notificationError) {
-        console.error('Error sending dispute notifications:', notificationError);
+      } catch (_) {
+        // Notification failure must not affect response
       }
     });
 
-    // Invalidate caches
     await invalidateDisputeCaches(orderId, buyerId, order.store.userId);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: 'Dispute submitted successfully. Awaiting seller/admin response.',
+      message: 'Dispute opened successfully.',
       data: dispute
     });
 
   } catch (error) {
-    console.error('Error requesting refund:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };
 
+// ── POST /disputes/:disputeId/resolve (admin only) ────────────────────────────
+
 export const resolveDispute = async (req, res) => {
   try {
-    const { disputeId } = req.params;
-    const { status, resolution, refundAmount } = req.body;
     const adminId = req.user.userId;
+    const { disputeId } = req.params;
+    const { outcome, resolution, refundAmount } = req.body;
+
+    // Admin guard
+    const admin = await prisma.user.findUnique({
+      where: { id: adminId },
+      select: { role: true }
+    });
+
+    if (!admin || admin.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Unauthorized. Admin access required.' });
+    }
+
+    // Outcome validation
+    if (!VALID_DISPUTE_OUTCOMES.includes(outcome)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid outcome. Must be one of: ${VALID_DISPUTE_OUTCOMES.join(', ')}.`
+      });
+    }
+
+    if (!resolution || typeof resolution !== 'string') {
+      return res.status(400).json({ success: false, message: 'Resolution note is required.' });
+    }
+
+    const dispute = await prisma.dispute.findUnique({
+      where: { id: disputeId },
+      include: {
+        order: {
+          include: {
+            escrow: true,
+            payment: true,
+            buyer: { select: { id: true, email: true, firstName: true } },
+            store: {
+              include: {
+                user: { select: { id: true, email: true, firstName: true } },
+                paymentDetails: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!dispute) {
+      return res.status(404).json({ success: false, message: 'Dispute not found.' });
+    }
+
+    if (dispute.status !== 'PENDING') {
+      return res.status(400).json({ success: false, message: 'Dispute already resolved.' });
+    }
+
+    const order = dispute.order;
+
+    const successfulPayment = order.payment?.find(p => p.status === 'SUCCESS');
+    if (!successfulPayment) {
+      return res.status(400).json({ success: false, message: 'No successful payment found for this order.' });
+    }
+
+    if (!order.escrow) {
+      return res.status(400).json({ success: false, message: 'No escrow record found for this order.' });
+    }
+
+    // ── BUYER WON → refund buyer ──────────────────────────────────────────────
+    if (outcome === 'BUYER_WON') {
+      const amount = refundAmount
+        ? parseFloat(refundAmount)
+        : order.totalAmount;
+
+      if (isNaN(amount) || amount <= 0 || amount > order.totalAmount) {
+        return res.status(400).json({ success: false, message: 'Invalid refund amount.' });
+      }
+
+      const refund = await processRefund({
+        paymentId: successfulPayment.id,
+        amount,
+        gatewayRef: successfulPayment.gatewayRef,
+        reason: resolution
+      });
+
+      if (!refund.success) {
+        return res.status(500).json({ success: false, message: 'Refund processing failed.' });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.dispute.update({
+          where: { id: disputeId },
+          data: {
+            status: 'RESOLVED',
+            resolution,
+            resolvedAt: new Date()
+          }
+        });
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: { status: 'REFUNDED' }
+        });
+
+        await tx.escrow.update({
+          where: { id: order.escrow.id },
+          data: { releaseStatus: 'REFUNDED' }
+        });
+
+        await tx.payment.update({
+          where: { id: successfulPayment.id },
+          data: { status: 'REFUNDED' }
+        });
+      });
+    }
+
+    // ── SELLER WON → release escrow and transfer funds ────────────────────────
+    if (outcome === 'SELLER_WON') {
+      const sellerPaymentAccount = order.store.paymentDetails;
+
+      if (!sellerPaymentAccount?.paystackRecipientCode) {
+        return res.status(500).json({
+          success: false,
+          message: 'Seller payment account not configured.'
+        });
+      }
+
+      const amountToTransfer = order.escrow.amountHeld;
+
+      if (amountToTransfer <= 0) {
+        return res.status(400).json({ success: false, message: 'Invalid transfer amount.' });
+      }
+
+      const transferResult = await transferFundsToSeller({
+        amount: amountToTransfer,
+        currency: order.escrow.currency,
+        recipientCode: sellerPaymentAccount.paystackRecipientCode,
+        orderId: order.id,
+        reason: `Dispute #${disputeId} resolved in seller's favour`
+      });
+
+      if (!transferResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: 'Transfer failed.',
+          error: process.env.NODE_ENV === 'production' ? undefined : transferResult.error
+        });
+      }
+
+      const now = new Date();
+
+      await prisma.$transaction(async (tx) => {
+        await tx.dispute.update({
+          where: { id: disputeId },
+          data: {
+            status: 'RESOLVED',
+            resolution,
+            resolvedAt: now
+          }
+        });
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: { status: 'COMPLETED' }
+        });
+
+        await tx.escrow.update({
+          where: { id: order.escrow.id },
+          data: {
+            releaseStatus: 'RELEASED',
+            releasedAt: now,
+            releasedTo: 'seller_dispute_resolution'
+          }
+        });
+      });
+    }
+
+    // Notify both parties (non-blocking)
+    setImmediate(async () => {
+      try {
+        const buyerMessage = outcome === 'BUYER_WON'
+          ? `Your dispute for order #${order.id} was resolved in your favour. A refund has been initiated.`
+          : `Your dispute for order #${order.id} has been resolved.`;
+
+        const sellerMessage = outcome === 'SELLER_WON'
+          ? `The dispute for order #${order.id} was resolved in your favour. Funds have been released.`
+          : `The dispute for order #${order.id} has been resolved.`;
+
+        await Promise.allSettled([
+          sendNotification(
+            order.buyerId,
+            'Dispute Resolved',
+            buyerMessage,
+            'DISPUTE_RESOLVED',
+            { orderId: order.id, disputeId, outcome }
+          ),
+          sendNotification(
+            order.store.userId,
+            'Dispute Resolved',
+            sellerMessage,
+            'DISPUTE_RESOLVED',
+            { orderId: order.id, disputeId, outcome }
+          ),
+          sendEmailNotification({
+            to: order.buyer.email,
+            toName: order.buyer.firstName,
+            subject: 'Dispute Resolved',
+            template: 'generic',
+            templateData: {
+              title: 'Dispute Resolved',
+              message: buyerMessage,
+              ctaText: 'View Order',
+              ctaUrl: `${process.env.FRONTEND_URL}/orders/${order.id}`
+            }
+          }),
+          sendEmailNotification({
+            to: order.store.user.email,
+            toName: order.store.user.firstName,
+            subject: 'Dispute Resolved',
+            template: 'generic',
+            templateData: {
+              title: 'Dispute Resolved',
+              message: sellerMessage,
+              ctaText: 'View Order',
+              ctaUrl: `${process.env.FRONTEND_URL}/seller/orders/${order.id}`
+            }
+          })
+        ]);
+      } catch (_) {
+        // Notification failure must not affect response
+      }
+    });
+
+    await invalidateDisputeCaches(order.id, order.buyerId, order.store.userId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Dispute resolved successfully.'
+    });
+
+  } catch (error) {
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
+  }
+};
+
+
+export const getDispute = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+    const { disputeId } = req.params;
+
+    if (!disputeId || typeof disputeId !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid dispute ID.' });
+    }
 
     const dispute = await prisma.dispute.findUnique({
       where: { id: disputeId },
@@ -210,250 +421,11 @@ export const resolveDispute = async (req, res) => {
           include: {
             payment: true,
             escrow: true,
-            buyer: { 
-              select: { 
-                id: true, 
-                email: true, 
-                firstName: true 
-              } 
-            },
-            store: { 
-              include: { 
-                user: { 
-                  select: { 
-                    id: true, 
-                    email: true, 
-                    firstName: true 
-                  } 
-                } 
-              } 
-            }
-          }
-        }
-      }
-    });
-
-    if (!dispute) {
-      return res.status(404).json({
-        success: false,
-        message: 'Dispute not found.'
-      });
-    }
-
-    // Validate dispute is still pending
-    if (dispute.status !== 'PENDING') {
-      return res.status(400).json({
-        success: false,
-        message: 'Dispute has already been resolved or cancelled.'
-      });
-    }
-
-    const order = dispute.order;
-    const escrow = order.escrow;
-
-    // If resolving in favor of the buyer, process refund
-    if (status === 'RESOLVED') {
-      // Validate refund amount doesn't exceed order total
-      if (refundAmount && refundAmount > order.totalAmount) {
-        return res.status(400).json({
-          success: false,
-          message: 'Refund amount cannot exceed order total.'
-        });
-      }
-
-      // Check if funds are still in escrow
-      if (escrow && escrow.releaseStatus === 'PENDING') {
-        const amountToRefund = refundAmount || order.totalAmount;
-
-        // Process refund
-        const refundResult = await processRefund({
-          orderId: order.id,
-          paymentId: order.paymentId,
-          amount: amountToRefund,
-          currency: order.currency,
-          reason: resolution,
-          gatewayRef: order.payment.gatewayRef
-        });
-
-        if (!refundResult.success) {
-          return res.status(500).json({
-            success: false,
-            message: 'Failed to process refund. Please try again.',
-            error: refundResult.error
-          });
-        }
-
-        // Update Escrow status to REFUNDED in transaction
-        await prisma.$transaction([
-          prisma.escrow.update({
-            where: { id: escrow.id },
-            data: {
-              releaseStatus: 'REFUNDED',
-              releaseReason: `Dispute resolved - ${resolution}`,
-              updatedAt: new Date()
-            }
-          }),
-          prisma.dispute.update({
-            where: { id: disputeId },
-            data: {
-              status: 'RESOLVED',
-              resolution,
-              resolvedAt: new Date(),
-              resolvedBy: adminId
-            }
-          })
-        ]);
-
-      } else if (escrow && escrow.releaseStatus === 'RELEASED') {
-        // Funds already released - requires manual intervention
-        console.warn(`Dispute ${disputeId} resolved for order ${order.id}, but funds were already released. Manual action required.`);
-        
-        await prisma.dispute.update({
-          where: { id: disputeId },
-          data: {
-            status: 'RESOLVED',
-            resolution: `${resolution} [NOTE: Funds already released - manual refund required]`,
-            resolvedAt: new Date(),
-            resolvedBy: adminId
-          }
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: 'Dispute marked as resolved. NOTE: Funds were already released to seller. Manual refund processing required.',
-          data: { requiresManualRefund: true }
-        });
-      }
-    } else {
-      // Status is CANCELLED
-      await prisma.dispute.update({
-        where: { id: disputeId },
-        data: {
-          status: 'CANCELLED',
-          resolution,
-          resolvedAt: new Date(),
-          resolvedBy: adminId
-        }
-      });
-    }
-
-    // Send notifications (non-blocking)
-    setImmediate(async () => {
-      try {
-        const buyerName = order.buyer.firstName || 'Customer';
-        const sellerName = order.store.user.firstName || 'Seller';
-
-        await Promise.allSettled([
-          sendNotification(
-            dispute.buyerId,
-            'Dispute Resolved',
-            `Your dispute for order #${dispute.orderId} has been ${status.toLowerCase()}. Resolution: ${resolution}`,
-            'DISPUTE_RESOLVED',
-            { disputeId, orderId: order.id }
-          ),
-          sendEmailNotification({
-            to: order.buyer.email,
-            toName: buyerName,
-            subject: 'Dispute Resolved',
-            template: 'generic',
-            templateData: {
-              title: 'Dispute Resolved',
-              message: `Your dispute for order #${dispute.orderId} has been ${status.toLowerCase()}. Resolution: ${resolution}`,
-              ctaText: 'View Order',
-              ctaUrl: `${process.env.FRONTEND_URL}/orders/${order.id}`
-            }
-          }),
-          sendNotification(
-            dispute.sellerId,
-            'Dispute Resolved',
-            `The dispute for order #${dispute.orderId} has been ${status.toLowerCase()}. Resolution: ${resolution}`,
-            'DISPUTE_RESOLVED',
-            { disputeId, orderId: order.id }
-          ),
-          sendEmailNotification({
-            to: order.store.user.email,
-            toName: sellerName,
-            subject: 'Dispute Resolved',
-            template: 'generic',
-            templateData: {
-              title: 'Dispute Resolved',
-              message: `The dispute for order #${dispute.orderId} has been ${status.toLowerCase()}. Resolution: ${resolution}`,
-              ctaText: 'View Order',
-              ctaUrl: `${process.env.FRONTEND_URL}/orders/${order.id}`
-            }
-          })
-        ]);
-      } catch (notificationError) {
-        console.error('Error sending dispute resolution notifications:', notificationError);
-      }
-    });
-
-    // Invalidate caches
-    await invalidateDisputeCaches(dispute.orderId, dispute.buyerId, dispute.sellerId);
-
-    const updatedDispute = await prisma.dispute.findUnique({
-      where: { id: disputeId }
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Dispute resolved successfully.',
-      data: updatedDispute
-    });
-
-  } catch (error) {
-    console.error('Error resolving dispute:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
-  }
-};
-
-export const getDisputeDetails = async (req, res) => {
-  try {
-    const { disputeId } = req.params;
-    const userId = req.user.userId;
-    const userRole = req.user.role;
-
-    const dispute = await prisma.dispute.findUnique({
-      where: { id: disputeId },
-      include: {
-        order: {
-          include: {
-            payment: {
-              select: {
-                id: true,
-                amount: true,
-                status: true,
-                gatewayRef: true
-              }
-            },
-            escrow: {
-              select: {
-                id: true,
-                releaseStatus: true,
-                releaseReason: true
-              }
-            },
-            buyer: { 
-              select: { 
-                id: true, 
-                firstName: true, 
-                email: true 
-              } 
-            },
-            store: { 
-              select: {
-                id: true,
-                name: true,
-                user: { 
-                  select: { 
-                    id: true, 
-                    firstName: true, 
-                    email: true 
-                  } 
-                } 
+            deliveryInfo: true,
+            buyer: { select: { id: true, firstName: true, email: true } },
+            store: {
+              include: {
+                user: { select: { id: true, firstName: true, email: true } }
               }
             }
           }
@@ -462,431 +434,148 @@ export const getDisputeDetails = async (req, res) => {
     });
 
     if (!dispute) {
-      return res.status(404).json({
-        success: false,
-        message: 'Dispute not found.'
-      });
+      return res.status(404).json({ success: false, message: 'Dispute not found.' });
     }
 
-    // Check authorization (buyer, seller, or admin)
-    const isAuthorized = 
-      dispute.buyerId === userId || 
+    const authorized =
+      dispute.buyerId === userId ||
       dispute.sellerId === userId ||
       userRole === 'ADMIN';
 
-    if (!isAuthorized) {
-      return res.status(403).json({
-        success: false,
-        message: 'Unauthorized to view this dispute.'
-      });
+    if (!authorized) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
-    res.status(200).json({
-      success: true,
-      data: dispute
-    });
-
-  } catch (error) {
-    console.error('Error fetching dispute details:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
-  }
-};
-
-export const getUserDisputes = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { page = 1, limit = 10, status, type } = req.query;
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const where = {
-      OR: [
-        { buyerId: userId },
-        { sellerId: userId }
-      ]
+    // Strip sensitive payment metadata from non-admins
+    const sanitizedDispute = {
+      ...dispute,
+      order: {
+        ...dispute.order,
+        payment: userRole === 'ADMIN'
+          ? dispute.order.payment
+          : dispute.order.payment?.map(p => ({
+              id: p.id,
+              amount: p.amount,
+              status: p.status,
+              currency: p.currency,
+              createdAt: p.createdAt
+            }))
+      }
     };
 
-    if (status) {
-      where.status = status;
-    }
-
-    if (type) {
-      where.type = type;
-    }
-
-    const [disputes, total] = await Promise.all([
-      prisma.dispute.findMany({
-        where,
-        include: {
-          order: {
-            select: {
-              id: true,
-              status: true,
-              totalAmount: true,
-              currency: true,
-              buyer: { 
-                select: { 
-                  id: true, 
-                  firstName: true, 
-                  email: true 
-                } 
-              },
-              store: { 
-                select: { 
-                  id: true, 
-                  name: true 
-                } 
-              }
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.dispute.count({ where })
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        disputes,
-        pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / parseInt(limit))
-        }
-      }
-    });
+    return res.status(200).json({ success: true, data: sanitizedDispute });
 
   } catch (error) {
-    console.error('Error fetching user disputes:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };
 
-export const getAllDisputes = async (req, res) => {
+
+export const getMyDisputes = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, type } = req.query;
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const where = {};
-
-    if (status) {
-      where.status = status;
-    }
-
-    if (type) {
-      where.type = type;
-    }
-
-    const [disputes, total] = await Promise.all([
-      prisma.dispute.findMany({
-        where,
-        include: {
-          order: {
-            select: {
-              id: true,
-              status: true,
-              totalAmount: true,
-              currency: true,
-              buyer: { 
-                select: { 
-                  id: true, 
-                  firstName: true, 
-                  email: true 
-                } 
-              },
-              store: { 
-                select: { 
-                  id: true,
-                  name: true,
-                  user: { 
-                    select: { 
-                      id: true, 
-                      firstName: true, 
-                      email: true 
-                    } 
-                  }
-                } 
-              }
-            }
-          },
-          payment: {
-            select: {
-              id: true,
-              amount: true,
-              status: true,
-              gatewayRef: true
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.dispute.count({ where })
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        disputes,
-        pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(total / parseInt(limit))
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Error fetching all disputes:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
-  }
-};
-
-export const updateDispute = async (req, res) => {
-  try {
-    const { disputeId } = req.params;
     const userId = req.user.userId;
-    const { additionalInfo } = req.body;
 
-    const dispute = await prisma.dispute.findUnique({
-      where: { id: disputeId },
-      include: {
-        order: {
-          include: {
-            buyer: { 
-              select: { 
-                id: true, 
-                firstName: true, 
-                email: true 
-              } 
-            },
-            store: { 
-              include: { 
-                user: { 
-                  select: { 
-                    id: true, 
-                    firstName: true, 
-                    email: true 
-                  } 
-                } 
-              } 
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const where = {
+      OR: [{ buyerId: userId }, { sellerId: userId }]
+    };
+
+    const [disputes, total] = await Promise.all([
+      prisma.dispute.findMany({
+        where,
+        include: {
+          order: {
+            select: {
+              id: true,
+              status: true,
+              totalAmount: true,
+              createdAt: true
             }
           }
-        }
-      }
-    });
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      prisma.dispute.count({ where })
+    ]);
 
-    if (!dispute) {
-      return res.status(404).json({
-        success: false,
-        message: 'Dispute not found.'
-      });
-    }
-
-    // Check authorization
-    const isAuthorized = 
-      dispute.buyerId === userId || 
-      dispute.sellerId === userId;
-
-    if (!isAuthorized) {
-      return res.status(403).json({
-        success: false,
-        message: 'Unauthorized to update this dispute.'
-      });
-    }
-
-    // Can't update resolved or cancelled disputes
-    if (dispute.status !== 'PENDING') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot update a dispute that has been resolved or cancelled.'
-      });
-    }
-
-    // Determine who is updating
-    const updaterRole = userId === dispute.buyerId ? 'Buyer' : 'Seller';
-    const timestamp = new Date().toISOString();
-
-    // Update dispute with additional information
-    const updatedDispute = await prisma.dispute.update({
-      where: { id: disputeId },
-      data: {
-        description: `${dispute.description}\n\n[UPDATE from ${updaterRole} at ${timestamp}]: ${additionalInfo}`,
-        updatedAt: new Date()
-      }
-    });
-
-    // Notify the other party (non-blocking)
-    setImmediate(async () => {
-      try {
-        const notifyUserId = userId === dispute.buyerId ? dispute.sellerId : dispute.buyerId;
-        const notifyUser = userId === dispute.buyerId ? dispute.order.store.user : dispute.order.buyer;
-
-        await Promise.allSettled([
-          sendNotification(
-            notifyUserId,
-            'Dispute Updated',
-            `New information has been added to the dispute for order #${dispute.orderId}.`,
-            'DISPUTE_UPDATED',
-            { disputeId, orderId: dispute.orderId }
-          ),
-          sendEmailNotification({
-            to: notifyUser.email,
-            toName: notifyUser.firstName,
-            subject: 'Dispute Updated',
-            template: 'generic',
-            templateData: {
-              title: 'Dispute Updated',
-              message: `New information has been added to the dispute for order #${dispute.orderId}. Please review and respond.`,
-              ctaText: 'View Dispute',
-              ctaUrl: `${process.env.FRONTEND_URL}/disputes/${disputeId}`
-            }
-          })
-        ]);
-      } catch (notificationError) {
-        console.error('Error sending dispute update notifications:', notificationError);
-      }
-    });
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Dispute updated successfully.',
-      data: updatedDispute
+      data: disputes,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
     });
 
   } catch (error) {
-    console.error('Error updating dispute:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };
+
 
 export const cancelDispute = async (req, res) => {
   try {
-    const { disputeId } = req.params;
     const userId = req.user.userId;
-    const { reason } = req.body;
+    const { disputeId } = req.params;
+
+    if (!disputeId || typeof disputeId !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid dispute ID.' });
+    }
 
     const dispute = await prisma.dispute.findUnique({
       where: { id: disputeId },
       include: {
         order: {
-          include: {
-            buyer: { 
-              select: { 
-                id: true, 
-                firstName: true, 
-                email: true 
-              } 
-            },
-            store: { 
-              include: { 
-                user: { 
-                  select: { 
-                    id: true, 
-                    firstName: true, 
-                    email: true 
-                  } 
-                } 
-              } 
-            }
-          }
+          include: { escrow: true }
         }
       }
     });
 
     if (!dispute) {
-      return res.status(404).json({
-        success: false,
-        message: 'Dispute not found.'
-      });
+      return res.status(404).json({ success: false, message: 'Dispute not found.' });
     }
 
-    // Check authorization - only buyer can cancel their own dispute
     if (dispute.buyerId !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Only the buyer who created the dispute can cancel it.'
-      });
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
-    // Can't cancel already resolved or cancelled disputes
     if (dispute.status !== 'PENDING') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot cancel a dispute that has been resolved or already cancelled.'
-      });
+      return res.status(400).json({ success: false, message: 'Only pending disputes can be cancelled.' });
     }
 
-    // Update dispute status
-    const updatedDispute = await prisma.dispute.update({
-      where: { id: disputeId },
-      data: {
-        status: 'CANCELLED',
-        resolution: reason || 'Cancelled by buyer',
-        resolvedAt: new Date()
+    await prisma.$transaction(async (tx) => {
+      await tx.dispute.update({
+        where: { id: disputeId },
+        data: { status: 'CANCELLED' }
+      });
+
+      await tx.order.update({
+        where: { id: dispute.orderId },
+        data: { status: 'PROCESSING' }
+      });
+      if (dispute.order.escrow) {
+        await tx.escrow.update({
+          where: { id: dispute.order.escrow.id },
+          data: { releaseStatus: 'HELD' }
+        });
       }
     });
 
-    // Notify the seller (non-blocking)
-    setImmediate(async () => {
-      try {
-        await Promise.allSettled([
-          sendNotification(
-            dispute.sellerId,
-            'Dispute Cancelled',
-            `The dispute for order #${dispute.orderId} has been cancelled by the buyer.`,
-            'DISPUTE_CANCELLED',
-            { disputeId, orderId: dispute.orderId }
-          ),
-          sendEmailNotification({
-            to: dispute.order.store.user.email,
-            toName: dispute.order.store.user.firstName,
-            subject: 'Dispute Cancelled',
-            template: 'generic',
-            templateData: {
-              title: 'Dispute Cancelled',
-              message: `The dispute for order #${dispute.orderId} has been cancelled by the buyer.`,
-              ctaText: 'View Order',
-              ctaUrl: `${process.env.FRONTEND_URL}/orders/${dispute.orderId}`
-            }
-          })
-        ]);
-      } catch (notificationError) {
-        console.error('Error sending dispute cancellation notifications:', notificationError);
-      }
-    });
+    await invalidateDisputeCaches(dispute.orderId, userId, dispute.sellerId);
 
-    // Invalidate caches
-    await invalidateDisputeCaches(dispute.orderId, dispute.buyerId, dispute.sellerId);
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Dispute cancelled successfully.',
-      data: updatedDispute
+      message: 'Dispute cancelled successfully.'
     });
 
   } catch (error) {
-    console.error('Error cancelling dispute:', error);
-    res.status(500).json({
-      success: false,
-      message: sanitizeError(error)
-    });
+    return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };

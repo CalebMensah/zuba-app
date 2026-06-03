@@ -130,22 +130,36 @@ const SellerProfileScreen: React.FC = () => {
     }, 300);
   };
 
-  const QuickActionCard = ({ icon, label, count, color, onPress }: any) => (
+
+  const QuickActionCard = ({ icon, label, count, onPress }: any) => (
     <TouchableOpacity style={styles.quickActionCard} onPress={onPress} disabled={!onPress}>
-      <View style={[styles.iconContainer, { backgroundColor: color + '20' }]}>
-        <Ionicons name={icon} size={24} color={color} />
+      <View style={styles.iconContainer}>
+        <Ionicons name={icon} size={24} color="#000" />
+        {count && count > 0 && (
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>
+              {count > 99 ? '99+' : count}
+            </Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.quickActionCount}>{count}</Text>
       <Text style={styles.quickActionLabel}>{label}</Text>
     </TouchableOpacity>
   );
 
-  const OrderStatusCard = ({ icon, label, count, color, onPress }: any) => (
+
+  const OrderStatusCard = ({ icon, label, count, onPress }: any) => (
     <TouchableOpacity style={styles.orderStatusCard} onPress={onPress}>
-      <View style={[styles.orderIconContainer, { backgroundColor: color + '15' }]}>
-        <Ionicons name={icon} size={28} color={color} />
+      <View style={styles.orderIconContainer}>
+        <Ionicons name={icon} size={28} color="#000" />
+        {count > 0 && (
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>
+              {count > 99 ? '99+' : count}
+            </Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.orderCount}>{count}</Text>
       <Text style={styles.orderLabel}>{label}</Text>
     </TouchableOpacity>
   );
@@ -213,33 +227,30 @@ const SellerProfileScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
+
         {/* Quick Actions */}
         <View style={styles.quickActionsContainer}>
           <QuickActionCard
             icon="card-outline"
             label="Payments"
-            color="#FF9500"
             onPress={() => (navigation as any).navigate('PaymentsScreen')}
           />
           <QuickActionCard
             icon="star-outline"
             label="Reviews"
             count={reviewsCount}
-            color="#FFD700"
             onPress={() => (navigation as any).navigate('MyStoreReviews')}
           />
           <QuickActionCard
             icon="people-outline"
             label="Followers"
             count={followersCount}
-            color="#007AFF"
             onPress={undefined} // No action
           />
           <QuickActionCard
             icon="shield-checkmark-outline"
             label="Disputes"
             count={disputesCount}
-            color="#5856D6"
             onPress={() => (navigation as any).navigate('SellerDisputeManagement')}
           />
         </View>
@@ -253,43 +264,41 @@ const SellerProfileScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
 
+
           <View style={styles.orderStatusContainer}>
             <OrderStatusCard
               icon="time-outline"
               label="Pending"
               count={summary?.pendingOrders || 0}
-              color="#FF9500"
               onPress={() => (navigation as any).navigate('Orders', { status: 'PENDING' })}
             />
             <OrderStatusCard
               icon="checkmark-done-outline"
               label="Confirmed"
               count={summary?.confirmedOrders || 0}
-              color="#34C759"
               onPress={() => (navigation as any).navigate('Orders', { status: 'CONFIRMED' })}
             />
             <OrderStatusCard
               icon="car-outline"
               label="Shipped"
               count={summary?.shippedOrders || 0}
-              color="#007AFF"
               onPress={() => (navigation as any).navigate('Orders', { status: 'SHIPPED' })}
             />
             <OrderStatusCard
               icon="checkmark-circle-outline"
               label="Completed"
               count={summary?.deliveredOrders || 0}
-              color="#5856D6"
               onPress={() => (navigation as any).navigate('Orders', { status: 'COMPLETED' })}
             />
           </View>
         </View>
 
+
         {/* My Followers and My Products Section */}
         <View style={styles.section}>
           <TouchableOpacity style={styles.followLikeCard} disabled>
             <View style={styles.followLikeIconContainer}>
-              <Ionicons name="people" size={24} color="#007AFF" />
+              <Ionicons name="people" size={24} color="#000" />
             </View>
             <View style={styles.followLikeInfo}>
               <Text style={styles.followLikeCount}>{followersCount}</Text>
@@ -302,7 +311,7 @@ const SellerProfileScreen: React.FC = () => {
             onPress={() => (navigation as any).navigate('ManageProducts')}
           >
             <View style={styles.followLikeIconContainer}>
-              <Ionicons name="pricetags" size={24} color="#34C759" />
+              <Ionicons name="pricetags" size={24} color="#000" />
             </View>
             <View style={styles.followLikeInfo}>
               <Text style={styles.followLikeCount}>{summary?.totalProducts || 0}</Text>
@@ -311,12 +320,6 @@ const SellerProfileScreen: React.FC = () => {
             <Ionicons name="chevron-forward" size={24} color="#C7C7CC" />
           </TouchableOpacity>
         </View>
-
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color="#fff" />
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
 
         <View style={styles.bottomPadding} />
       </ScrollView>
@@ -392,11 +395,19 @@ const SellerProfileScreen: React.FC = () => {
                 color="#8E8E93"
                 onPress={() => handleSettingsItemPress('About')}
               />
+
               <SettingsMenuItem
                 icon="chatbubble-ellipses-outline"
                 label="Contact Support"
                 color="#FF9500"
                 onPress={() => handleSettingsItemPress('Support')}
+              />
+              <View style={styles.settingsDivider} />
+              <SettingsMenuItem
+                icon="log-out-outline"
+                label="Logout"
+                color="#FF3B30"
+                onPress={handleLogout}
               />
             </ScrollView>
           </Animated.View>
@@ -515,16 +526,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
+    position: 'relative',
   },
-  quickActionCount: {
-    fontSize: 16,
+  countBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF3B30',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  countBadgeText: {
+    color: '#fff',
+    fontSize: 10,
     fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 2,
+    textAlign: 'center',
   },
   quickActionLabel: {
     fontSize: 12,
     color: '#8E8E93',
+    textAlign: 'center',
   },
   section: {
     paddingHorizontal: 20,
@@ -571,12 +597,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 8,
-  },
-  orderCount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 4,
+    position: 'relative',
   },
   orderLabel: {
     fontSize: 11,
@@ -702,6 +723,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#000',
     fontWeight: '500',
+  },
+  settingsDivider: {
+    height: 1,
+    backgroundColor: '#E5E5EA',
+    marginHorizontal: 20,
+    marginVertical: 8,
   },
 });
 

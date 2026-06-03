@@ -1,822 +1,621 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-  TextInput,
-  Modal,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useDisputes, Dispute, DisputeStatus, DisputeType } from '../../hooks/useDisputes';
-import { useAuth } from '../../context/AuthContext';
 import { Colors } from '../../constants/colors';
 
-interface RouteParams {
-  disputeId: string;
-  autoResolve?: boolean;
-}
-
-const DisputeDetailsScreen = () => {
+const DisputesScreen: React.FC = () => {
   const navigation = useNavigation();
-  const route = useRoute();
-  const { disputeId, autoResolve } = route.params as RouteParams;
-  const { user } = useAuth();
+  const { loading, error, getMyDisputes, clearError } = useDisputes();
 
-  const {
-    loading,
-    error,
-    getDisputeById,
-    resolveDispute,
-    updateDispute,
-    cancelDispute,
-    clearError,
-  } = useDisputes();
-
-  const [dispute, setDispute] = useState<Dispute | null>(null);
+  const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-
-  // Modal states
-  const [showResolveModal, setShowResolveModal] = useState(false);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-
-  // Form states
-  const [resolution, setResolution] = useState('');
-  const [refundAmount, setRefundAmount] = useState('');
-  const [additionalInfo, setAdditionalInfo] = useState('');
-  const [cancelReason, setCancelReason] = useState('');
-  const [actionLoading, setActionLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [selectedStatus, setSelectedStatus] = useState<DisputeStatus | 'ALL'>('ALL');
 
   useEffect(() => {
-    fetchDisputeDetails();
-  }, [disputeId]);
+    loadDisputes();
+  }, [selectedStatus]);
 
-  useEffect(() => {
-    if (autoResolve && dispute && dispute.status === 'PENDING' && user?.role === 'ADMIN') {
-      setShowResolveModal(true);
+  useFocusEffect(
+    useCallback(() => {
+      loadDisputes();
+      return () => clearError();
+    }, [selectedStatus])
+  );
+
+  const loadDisputes = async (pageNum: number = 1) => {
+    try {
+      const status = selectedStatus === 'ALL' ? undefined : selectedStatus;
+      const result = await getMyDisputes(pageNum, 10, status);
+
+      if (result) {
+        if (pageNum === 1) {
+          setDisputes(result.disputes);
+        } else {
+          setDisputes(prev => [...prev, ...result.disputes]);
+        }
+        setHasMore(result.pagination.page < result.pagination.totalPages);
+        setPage(pageNum);
+      }
+    } catch (err) {
+      console.error('Error loading disputes:', err);
     }
-  }, [autoResolve, dispute]);
+  };
 
-  useEffect(() => {
-    if (error) {
-      Alert.alert('Error', error, [{ text: 'OK', onPress: clearError }]);
-    }
-  }, [error, clearError]);
-
-  const fetchDisputeDetails = async () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    const result = await getDisputeById(disputeId);
-    if (result) {
-      setDispute(result);
-      setRefundAmount(result.order?.totalAmount?.toString() || '');
-    }
+    await loadDisputes(1);
     setRefreshing(false);
   };
 
-  const handleResolve = async (status: 'RESOLVED' | 'CANCELLED') => {
-    if (!resolution.trim()) {
-      Alert.alert('Error', 'Please provide resolution details');
-      return;
-    }
-
-    setActionLoading(true);
-
-    const refundAmountNum = refundAmount ? parseFloat(refundAmount) : undefined;
-
-    const result = await resolveDispute(disputeId, {
-      status,
-      resolution,
-      refundAmount: refundAmountNum,
-    });
-
-    setActionLoading(false);
-
-    if (result) {
-      if (result.requiresManualRefund) {
-        Alert.alert(
-          'Manual Refund Required',
-          'The dispute has been resolved, but funds were already released to the seller. Manual refund processing is required.',
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                setShowResolveModal(false);
-                fetchDisputeDetails();
-              },
-            },
-          ]
-        );
-      } else {
-        Alert.alert('Success', 'Dispute resolved successfully', [
-          {
-            text: 'OK',
-            onPress: () => {
-              setShowResolveModal(false);
-              fetchDisputeDetails();
-            },
-          },
-        ]);
-      }
+  const loadMore = () => {
+    if (!loading && hasMore) {
+      loadDisputes(page + 1);
     }
   };
 
-  const handleUpdate = async () => {
-    if (!additionalInfo.trim()) {
-      Alert.alert('Error', 'Please provide additional information');
-      return;
-    }
+  // Derive stats from local state — avoids a second API call
+  const stats = useMemo(() => ({
+    open: disputes.filter(d => d.status === 'OPEN').length,
+    resolved: disputes.filter(d => d.status === 'RESOLVED').length,
+    cancelled: disputes.filter(d => d.status === 'CANCELLED').length,
+  }), [disputes]);
 
-    setActionLoading(true);
-    const result = await updateDispute(disputeId, additionalInfo);
-    setActionLoading(false);
-
-    if (result) {
-      Alert.alert('Success', 'Dispute updated successfully', [
-        {
-          text: 'OK',
-          onPress: () => {
-            setShowUpdateModal(false);
-            setAdditionalInfo('');
-            fetchDisputeDetails();
-          },
-        },
-      ]);
-    }
+  const getDisputeTypeLabel = (type: DisputeType): string => {
+    const labels: Record<DisputeType, string> = {
+      REFUND_REQUEST: 'Refund Request',
+      ITEM_NOT_AS_DESCRIBED: 'Not as Described',
+      ITEM_NOT_RECEIVED: 'Not Received',
+      WRONG_ITEM_SENT: 'Wrong Item',
+      DAMAGED_ITEM: 'Damaged Item',
+      OTHER: 'Other',
+    };
+    return labels[type] || type;
   };
 
-  const handleCancel = async () => {
-    Alert.alert(
-      'Cancel Dispute',
-      'Are you sure you want to cancel this dispute?',
-      [
-        { text: 'No', style: 'cancel' },
-        {
-          text: 'Yes',
-          style: 'destructive',
-          onPress: async () => {
-            setActionLoading(true);
-            const result = await cancelDispute(disputeId, cancelReason);
-            setActionLoading(false);
-
-            if (result) {
-              Alert.alert('Success', 'Dispute cancelled successfully', [
-                {
-                  text: 'OK',
-                  onPress: () => {
-                    setShowCancelModal(false);
-                    fetchDisputeDetails();
-                  },
-                },
-              ]);
-            }
-          },
-        },
-      ]
-    );
+  const getDisputeTypeIcon = (type: DisputeType): string => {
+    const icons: Record<DisputeType, string> = {
+      REFUND_REQUEST: 'cash-outline',
+      ITEM_NOT_AS_DESCRIBED: 'alert-circle-outline',
+      ITEM_NOT_RECEIVED: 'cube-outline',
+      WRONG_ITEM_SENT: 'swap-horizontal-outline',
+      DAMAGED_ITEM: 'warning-outline',
+      OTHER: 'help-circle-outline',
+    };
+    return icons[type] || 'help-circle-outline';
   };
 
-  const getStatusColor = (status: DisputeStatus) => {
+  const getStatusColor = (status: DisputeStatus): string => {
     switch (status) {
-      case 'PENDING':
+      case 'OPEN':
         return Colors.warning;
       case 'RESOLVED':
         return Colors.success;
       case 'CANCELLED':
-        return Colors.error;
+        return Colors.gray400;
       default:
-        return Colors.gray500;
+        return Colors.gray400;
     }
   };
 
-  const getTypeLabel = (type: DisputeType) => {
-    return type.replace(/_/g, ' ');
+  const getStatusBgColor = (status: DisputeStatus): string => {
+    switch (status) {
+      case 'OPEN':
+        return Colors.warningLight;
+      case 'RESOLVED':
+        return Colors.successLight;
+      case 'CANCELLED':
+        return Colors.gray100;
+      default:
+        return Colors.gray100;
+    }
   };
 
-  const isAdmin = user?.role === 'ADMIN';
-  const isBuyer = dispute?.buyerId === user?.id;
-  const isSeller = dispute?.sellerId === user?.id;
-  const isPending = dispute?.status === 'PENDING';
-
-  if (loading && !dispute) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingText}>Loading dispute details...</Text>
+  const StatusFilter = ({ status, label, count }: {
+    status: DisputeStatus | 'ALL';
+    label: string;
+    count: number;
+  }) => (
+    <TouchableOpacity
+      style={[
+        styles.filterButton,
+        selectedStatus === status && styles.filterButtonActive,
+      ]}
+      onPress={() => setSelectedStatus(status)}
+    >
+      <Text
+        style={[
+          styles.filterButtonText,
+          selectedStatus === status && styles.filterButtonTextActive,
+        ]}
+      >
+        {label}
+      </Text>
+      <View
+        style={[
+          styles.filterBadge,
+          selectedStatus === status && styles.filterBadgeActive,
+        ]}
+      >
+        <Text
+          style={[
+            styles.filterBadgeText,
+            selectedStatus === status && styles.filterBadgeTextActive,
+          ]}
+        >
+          {count}
+        </Text>
       </View>
-    );
-  }
+    </TouchableOpacity>
+  );
 
-  if (!dispute) {
-    return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorTitle}>Dispute Not Found</Text>
-        <Text style={styles.errorText}>Unable to load dispute details</Text>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>Go Back</Text>
-        </TouchableOpacity>
+  const DisputeCard = ({ dispute }: { dispute: Dispute }) => (
+    <TouchableOpacity
+      style={styles.disputeCard}
+      onPress={() =>
+        (navigation as any).navigate('DisputeDetails', { disputeId: dispute.id })
+      }
+    >
+      <View style={styles.disputeHeader}>
+        <View style={styles.disputeTypeContainer}>
+          <View
+            style={[
+              styles.disputeTypeIcon,
+              { backgroundColor: getStatusBgColor(dispute.status) },
+            ]}
+          >
+            <Ionicons
+              name={getDisputeTypeIcon(dispute.type) as any}
+              size={20}
+              color={getStatusColor(dispute.status)}
+            />
+          </View>
+          <View style={styles.disputeHeaderText}>
+            <Text style={styles.disputeType}>
+              {getDisputeTypeLabel(dispute.type)}
+            </Text>
+            <Text style={styles.orderId}>
+              Order #{dispute.orderId.slice(0, 8)}
+            </Text>
+          </View>
+        </View>
+        <View
+          style={[
+            styles.statusBadge,
+            { backgroundColor: getStatusBgColor(dispute.status) },
+          ]}
+        >
+          <Text
+            style={[styles.statusText, { color: getStatusColor(dispute.status) }]}
+          >
+            {dispute.status}
+          </Text>
+        </View>
       </View>
-    );
-  }
+
+      <Text style={styles.description} numberOfLines={2}>
+        {dispute.description}
+      </Text>
+
+      {dispute.order && (
+        <View style={styles.orderInfo}>
+          <View style={styles.orderInfoRow}>
+            <Ionicons
+              name="storefront-outline"
+              size={16}
+              color={Colors.textSecondary}
+            />
+            <Text style={styles.orderInfoText}>
+              {dispute.order.store?.name || 'Unknown Store'}
+            </Text>
+          </View>
+          <View style={styles.orderInfoRow}>
+            <Ionicons
+              name="cash-outline"
+              size={16}
+              color={Colors.textSecondary}
+            />
+            <Text style={styles.orderInfoText}>
+              {dispute.order.currency || 'GHS'}{' '}
+              {dispute.order.totalAmount.toFixed(2)}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Outcome badge — only shown once resolved */}
+      {dispute.status === 'RESOLVED' && dispute.outcome && (
+        <View
+          style={[
+            styles.outcomeBadge,
+            {
+              backgroundColor:
+                dispute.outcome === 'BUYER_WON'
+                  ? Colors.successLight
+                  : Colors.warningLight,
+            },
+          ]}
+        >
+          <Ionicons
+            name={
+              dispute.outcome === 'BUYER_WON'
+                ? 'checkmark-circle-outline'
+                : 'storefront-outline'
+            }
+            size={14}
+            color={
+              dispute.outcome === 'BUYER_WON' ? Colors.success : Colors.warning
+            }
+          />
+          <Text
+            style={[
+              styles.outcomeText,
+              {
+                color:
+                  dispute.outcome === 'BUYER_WON'
+                    ? Colors.success
+                    : Colors.warning,
+              },
+            ]}
+          >
+            {dispute.outcome === 'BUYER_WON' ? 'Decided in your favour' : 'Decided for seller'}
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.disputeFooter}>
+        <View style={styles.dateContainer}>
+          <Ionicons name="calendar-outline" size={14} color={Colors.textTertiary} />
+          <Text style={styles.dateText}>
+            {new Date(dispute.createdAt).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            })}
+          </Text>
+        </View>
+        <View style={styles.viewDetails}>
+          <Text style={styles.viewDetailsText}>View Details</Text>
+          <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const EmptyState = () => (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconContainer}>
+        <MaterialIcons name="gavel" size={64} color={Colors.gray300} />
+      </View>
+      <Text style={styles.emptyTitle}>No Disputes Found</Text>
+      <Text style={styles.emptyMessage}>
+        {selectedStatus === 'ALL'
+          ? "You don't have any disputes yet."
+          : `You don't have any ${selectedStatus.toLowerCase()} disputes.`}
+      </Text>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <ActivityIndicator
-            refreshing={refreshing}
-            onRefresh={fetchDisputeDetails}
-            colors={[Colors.primary]}
+      {/* Header Stats */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statCard}>
+          <Ionicons name="time-outline" size={24} color={Colors.warning} />
+          <Text style={styles.statValue}>{stats.open}</Text>
+          <Text style={styles.statLabel}>Open</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Ionicons
+            name="checkmark-circle-outline"
+            size={24}
+            color={Colors.success}
           />
-        }
-      >
-        {/* Header Card */}
-        <View style={styles.card}>
-          <View style={styles.headerRow}>
-            <Text style={styles.disputeId}>Dispute #{dispute.id.slice(0, 8)}</Text>
-            <View
-              style={[
-                styles.statusBadge,
-                { backgroundColor: `${getStatusColor(dispute.status)}20` },
-              ]}
-            >
-              <Text style={[styles.statusText, { color: getStatusColor(dispute.status) }]}>
-                {dispute.status}
-              </Text>
-            </View>
-          </View>
+          <Text style={styles.statValue}>{stats.resolved}</Text>
+          <Text style={styles.statLabel}>Resolved</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Ionicons
+            name="close-circle-outline"
+            size={24}
+            color={Colors.gray400}
+          />
+          <Text style={styles.statValue}>{stats.cancelled}</Text>
+          <Text style={styles.statLabel}>Cancelled</Text>
+        </View>
+      </View>
 
-          <View style={styles.divider} />
+      {/* Status Filters */}
+      <View style={styles.filtersContainer}>
+        <StatusFilter
+          status="ALL"
+          label="All"
+          count={stats.open + stats.resolved + stats.cancelled}
+        />
+        <StatusFilter status="OPEN" label="Open" count={stats.open} />
+        <StatusFilter status="RESOLVED" label="Resolved" count={stats.resolved} />
+        <StatusFilter status="CANCELLED" label="Cancelled" count={stats.cancelled} />
+      </View>
 
-          <View style={styles.infoSection}>
-            <InfoRow label="Type" value={getTypeLabel(dispute.type)} />
-            <InfoRow
-              label="Created"
-              value={new Date(dispute.createdAt).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
+      {/* Disputes List */}
+      {loading && page === 1 ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+        </View>
+      ) : (
+        <FlatList
+          data={disputes}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => <DisputeCard dispute={item} />}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.primary}
             />
-            {dispute.resolvedAt && (
-              <InfoRow
-                label="Resolved"
-                value={new Date(dispute.resolvedAt).toLocaleString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              />
-            )}
-          </View>
-        </View>
-
-        {/* Order Information */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Order Information</Text>
-          <View style={styles.divider} />
-          <View style={styles.infoSection}>
-            <InfoRow label="Order ID" value={`#${dispute.orderId.slice(0, 8)}`} />
-            <InfoRow label="Order Status" value={dispute.order?.status || 'N/A'} />
-            <InfoRow
-              label="Amount"
-              value={`${dispute.order?.currency || '$'} ${dispute.order?.totalAmount?.toFixed(2) || '0.00'}`}
-              valueStyle={styles.amountValue}
-            />
-            {dispute.order?.payment && (
-              <>
-                <InfoRow label="Payment Status" value={dispute.order.payment.status} />
-                {dispute.order.payment.gatewayRef && (
-                  <InfoRow
-                    label="Payment Ref"
-                    value={dispute.order.payment.gatewayRef.slice(0, 16)}
-                  />
-                )}
-              </>
-            )}
-            {dispute.order?.escrow && (
-              <InfoRow
-                label="Escrow Status"
-                value={dispute.order.escrow.releaseStatus}
-                valueStyle={{
-                  color:
-                    dispute.order.escrow.releaseStatus === 'RELEASED'
-                      ? Colors.error
-                      : dispute.order.escrow.releaseStatus === 'REFUNDED'
-                      ? Colors.success
-                      : Colors.warning,
-                }}
-              />
-            )}
-          </View>
-        </View>
-
-        {/* Parties Information */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Parties Involved</Text>
-          <View style={styles.divider} />
-          <View style={styles.infoSection}>
-            <View style={styles.partySection}>
-              <Text style={styles.partyLabel}>Buyer</Text>
-              <Text style={styles.partyName}>
-                {dispute.order?.buyer?.firstName || 'N/A'}
-              </Text>
-              <Text style={styles.partyEmail}>{dispute.order?.buyer?.email || ''}</Text>
-            </View>
-            <View style={[styles.divider, { marginVertical: 12 }]} />
-            <View style={styles.partySection}>
-              <Text style={styles.partyLabel}>Seller</Text>
-              <Text style={styles.partyName}>{dispute.order?.store?.name || 'N/A'}</Text>
-              <Text style={styles.partyEmail}>
-                {dispute.order?.store?.user?.email || ''}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Description */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Description</Text>
-          <View style={styles.divider} />
-          <Text style={styles.descriptionText}>{dispute.description}</Text>
-        </View>
-
-        {/* Resolution (if resolved) */}
-        {dispute.resolution && (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Resolution</Text>
-            <View style={styles.divider} />
-            <Text style={styles.descriptionText}>{dispute.resolution}</Text>
-          </View>
-        )}
-
-        {/* Action Buttons */}
-        {isPending && (
-          <View style={styles.actionsCard}>
-            {isAdmin && (
-              <>
-                <TouchableOpacity
-                  style={styles.primaryButton}
-                  onPress={() => setShowResolveModal(true)}
-                >
-                  <Text style={styles.primaryButtonText}>Resolve Dispute</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {(isBuyer || isSeller) && (
-              <>
-                <TouchableOpacity
-                  style={styles.secondaryButton}
-                  onPress={() => setShowUpdateModal(true)}
-                >
-                  <Text style={styles.secondaryButtonText}>Add Information</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.dangerButton}
-                  onPress={() => setShowCancelModal(true)}
-                >
-                  <Text style={styles.dangerButtonText}>Cancel Dispute</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Resolve Modal (Admin Only) */}
-      <Modal
-        visible={showResolveModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowResolveModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Resolve Dispute</Text>
-
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Enter resolution details..."
-              placeholderTextColor={Colors.gray400}
-              value={resolution}
-              onChangeText={setResolution}
-              multiline
-              numberOfLines={4}
-            />
-
-            <TextInput
-              style={styles.input}
-              placeholder="Refund amount (optional)"
-              placeholderTextColor={Colors.gray400}
-              value={refundAmount}
-              onChangeText={setRefundAmount}
-              keyboardType="decimal-pad"
-            />
-
-            <Text style={styles.helperText}>
-              Leave refund amount empty to refund the full order amount
-            </Text>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowResolveModal(false)}
-                disabled={actionLoading}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={() => handleResolve('RESOLVED')}
-                disabled={actionLoading}
-              >
-                {actionLoading ? (
-                  <ActivityIndicator color={Colors.white} />
-                ) : (
-                  <Text style={styles.confirmButtonText}>Resolve</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Update Modal (Buyer/Seller) */}
-      <Modal
-        visible={showUpdateModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowUpdateModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Information</Text>
-
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Enter additional information..."
-              placeholderTextColor={Colors.gray400}
-              value={additionalInfo}
-              onChangeText={setAdditionalInfo}
-              multiline
-              numberOfLines={4}
-            />
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowUpdateModal(false)}
-                disabled={actionLoading}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={handleUpdate}
-                disabled={actionLoading}
-              >
-                {actionLoading ? (
-                  <ActivityIndicator color={Colors.white} />
-                ) : (
-                  <Text style={styles.confirmButtonText}>Submit</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Cancel Modal (Buyer/Seller) */}
-      <Modal
-        visible={showCancelModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowCancelModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Cancel Dispute</Text>
-
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              placeholder="Reason for cancellation (optional)..."
-              placeholderTextColor={Colors.gray400}
-              value={cancelReason}
-              onChangeText={setCancelReason}
-              multiline
-              numberOfLines={3}
-            />
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowCancelModal(false)}
-                disabled={actionLoading}
-              >
-                <Text style={styles.cancelButtonText}>Back</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.dangerButton]}
-                onPress={handleCancel}
-                disabled={actionLoading}
-              >
-                {actionLoading ? (
-                  <ActivityIndicator color={Colors.white} />
-                ) : (
-                  <Text style={styles.dangerButtonText}>Cancel Dispute</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+          }
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          ListEmptyComponent={EmptyState}
+          ListFooterComponent={
+            loading && page > 1 ? (
+              <View style={styles.footerLoader}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+              </View>
+            ) : null
+          }
+        />
+      )}
     </View>
   );
 };
-
-// Helper Component
-const InfoRow = ({
-  label,
-  value,
-  valueStyle,
-}: {
-  label: string;
-  value: string;
-  valueStyle?: any;
-}) => (
-  <View style={styles.infoRow}>
-    <Text style={styles.infoLabel}>{label}:</Text>
-    <Text style={[styles.infoValue, valueStyle]}>{value}</Text>
-  </View>
-);
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 40,
   },
-  scrollView: {
+  statsContainer: {
+    flexDirection: 'row',
+    padding: 16,
+    backgroundColor: Colors.white,
+    gap: 12,
+  },
+  statCard: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: Colors.backgroundSecondary,
+    borderRadius: 12,
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+    marginTop: 8,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 4,
+  },
+  filtersContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: 8,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: Colors.backgroundSecondary,
+    gap: 6,
+  },
+  filterButtonActive: {
+    backgroundColor: Colors.primary,
+  },
+  filterButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  filterButtonTextActive: {
+    color: Colors.white,
+  },
+  filterBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: Colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  filterBadgeActive: {
+    backgroundColor: Colors.primaryLight,
+  },
+  filterBadgeText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  filterBadgeTextActive: {
+    color: Colors.white,
+  },
+  listContent: {
+    padding: 16,
+    paddingBottom: 24,
+  },
+  disputeCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  disputeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  disputeTypeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
   },
-  scrollContent: {
-    padding: 16,
-    paddingTop: 60,
+  disputeTypeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  disputeHeaderText: {
+    flex: 1,
+  },
+  disputeType: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    marginBottom: 2,
+  },
+  orderId: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  description: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  orderInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+    marginBottom: 12,
+  },
+  orderInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  orderInfoText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  outcomeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginBottom: 12,
+    alignSelf: 'flex-start',
+  },
+  outcomeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  disputeFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dateContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  dateText: {
+    fontSize: 12,
+    color: Colors.textTertiary,
+  },
+  viewDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  viewDetailsText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 64,
+    paddingHorizontal: 32,
+  },
+  emptyIconContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: Colors.backgroundSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+    marginBottom: 8,
+  },
+  emptyMessage: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.backgroundSecondary,
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: Colors.textSecondary,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  footerLoader: {
+    paddingVertical: 20,
     alignItems: 'center',
-    backgroundColor: Colors.backgroundSecondary,
-    padding: 20,
-  },
-  errorTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 8,
-  },
-  errorText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  backButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-  },
-  backButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.white,
-  },
-  card: {
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  disputeId: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.border,
-    marginVertical: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginBottom: 16,
-  },
-  infoSection: {
-    gap: 12,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  infoLabel: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    fontWeight: '500',
-  },
-  infoValue: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    fontWeight: '600',
-    textAlign: 'right',
-    flex: 1,
-    marginLeft: 12,
-  },
-  amountValue: {
-    fontSize: 16,
-    color: Colors.primary,
-    fontWeight: '700',
-  },
-  partySection: {
-    gap: 4,
-  },
-  partyLabel: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  partyName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  partyEmail: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-  },
-  descriptionText: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    lineHeight: 20,
-  },
-  actionsCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    gap: 12,
-  },
-  primaryButton: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.white,
-  },
-  secondaryButton: {
-    backgroundColor: Colors.white,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.primary,
-  },
-  secondaryButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.primary,
-  },
-  dangerButton: {
-    backgroundColor: Colors.error,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  dangerButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.white,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: Colors.overlay,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 24,
-    width: '100%',
-    maxWidth: 400,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 20,
-  },
-  input: {
-    backgroundColor: Colors.gray50,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: Colors.textPrimary,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 12,
-  },
-  textArea: {
-    minHeight: 100,
-    textAlignVertical: 'top',
-  },
-  helperText: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    marginBottom: 20,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: Colors.gray100,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  cancelButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-  confirmButton: {
-    backgroundColor: Colors.primary,
-  },
-  confirmButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.white,
   },
 });
 
-export default DisputeDetailsScreen;
+export default DisputesScreen;

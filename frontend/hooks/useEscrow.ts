@@ -7,7 +7,7 @@ interface Escrow {
   amountHeld: number;
   currency: string;
   releaseDate: string;
-  releaseStatus: 'PENDING' | 'RELEASED' | 'FAILED';
+releaseStatus: 'HELD' | 'RELEASE_PENDING' | 'DISPUTED' | 'RELEASED' | 'REFUNDED' | 'FAILED' | 'CANCELLED'
   releaseReason?: string;
   releasedAt?: string;
   releasedTo?: string;
@@ -157,8 +157,9 @@ export const useEscrow = (): UseEscrowReturn => {
 
   const confirmOrderReceived = useCallback(
     async (orderId: string): Promise<ApiResponse<{ order: Order; escrow: Escrow }>> => {
+    console.log('Confirming order received for order ID:', orderId);
       return makeRequest<{ order: Order; escrow: Escrow }>(
-        `/${orderId}/confirm`,
+        `/${orderId}/confirm-order-received`,
         { method: 'POST' }
       );
     },

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,76 +8,57 @@ import {
   Image,
   RefreshControl,
   Modal,
-  ActivityIndicator,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useStore } from '../../hooks/useStore';
-import { useProduct } from '../../hooks/useProducts';
+import { useUserProducts, useSoftDeleteProduct } from '../../hooks/useProducts';
+import { Product } from '../../services/productApi';
 import { Colors } from '../../constants/colors';
 import { SellerStackParamList } from '../../types/navigation';
-
-interface Product {
-  id: string;
-  name: string;
-  description?: string;
-  price: number;
-  stock: number;
-  images: string[];
-  category?: string;
-  isActive: boolean;
-  quantityBought: number;
-  url?: string;
-}
+import { LoadingSpinner } from '../../components/LoadingSpinner';
 
 export default function ManageProductsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<SellerStackParamList>>();
-  const [refreshing, setRefreshing] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const { store, getUserStore, loading: storeLoading } = useStore();
-  const {
-    products,
-    pagination,
-    loading: productsLoading,
-    getUserProducts,
-    deleteProduct,
-  } = useProduct();
+  console.log('sore:', store)
 
   useEffect(() => {
-    loadData();
-  }, []);
+    getUserStore();
+  }, [getUserStore]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [])
-  );
+  // TanStack Query hooks
+  const { 
+    data: productData, 
+    isLoading: productsLoading, 
+    error,
+    refetch 
+  } = useUserProducts(1, 20);
+  
+  const deleteMutation = useSoftDeleteProduct();
 
-  const loadData = async () => {
-    const userStore = await getUserStore();
-    if (userStore) {
-      await getUserProducts(1, 20);
-    }
-  };
+  const products = productData?.products || [];
+  const pagination = productData?.pagination;
 
   const onRefresh = async () => {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
+    await refetch();
   };
 
   const handleAddProduct = () => {
     navigation.navigate('AddProduct');
   };
 
-const handleEditProduct = (product: Product) => {
-    navigation.navigate('EditProduct', { productId: product.id, initialProduct: product });
+  const handleEditProduct = (product: Product) => {
+    navigation.navigate('EditProduct', { 
+      productId: product.id, 
+      initialProduct: product 
+    });
   };
 
   const handleDeletePress = (product: Product) => {
@@ -85,22 +66,21 @@ const handleEditProduct = (product: Product) => {
     setDeleteModalVisible(true);
   };
 
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = () => {
     if (!selectedProduct) return;
 
-    setDeleting(true);
-    const success = await deleteProduct(selectedProduct.id);
-    setDeleting(false);
     setDeleteModalVisible(false);
 
-    if (success) {
-      Alert.alert('Success', 'Product deleted successfully');
-      await getUserProducts(1, 20);
-    } else {
-      Alert.alert('Error', 'Failed to delete product. Please try again.');
-    }
-
-    setSelectedProduct(null);
+    deleteMutation.mutate(selectedProduct.id, {
+      onSuccess: () => {
+        Alert.alert('Success', 'Product deleted successfully');
+        setSelectedProduct(null);
+      },
+      onError: () => {
+        // Error already handled in the mutation hook
+        setSelectedProduct(null);
+      },
+    });
   };
 
   const handleCancelDelete = () => {
@@ -113,7 +93,7 @@ const handleEditProduct = (product: Product) => {
   };
 
   // Loading state
-  if (storeLoading) {
+  if (storeLoading || (productsLoading && !productData)) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
@@ -124,8 +104,8 @@ const handleEditProduct = (product: Product) => {
           <View style={{ width: 24 }} />
         </View>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <LoadingSpinner size={40} color={Colors.primary} />
+          <Text style={styles.loadingText}>Loading products...</Text>
         </View>
       </SafeAreaView>
     );
@@ -192,6 +172,18 @@ const handleEditProduct = (product: Product) => {
     );
   }
 
+  const handleProductPress = (product: Product) => {
+    // Prevent navigation if product is still being created (temp URL)
+    if (product.url === 'temp-url') {
+      Alert.alert(
+        'Please Wait',
+        'Product is still being created. Please try again in a few seconds.'
+      );
+      return;
+    }
+    navigation.navigate('SellerProductDetails', { productUrl: product.url });
+  };
+
   // Products list
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -203,11 +195,19 @@ const handleEditProduct = (product: Product) => {
         <TouchableOpacity onPress={handleAddProduct}>
           <Ionicons name="add-circle" size={28} color={Colors.primary} />
         </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.navigate('DeletedProducts' as never)}>
+          <Ionicons name="trash-bin" size={24} color={Colors.textPrimary} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={
+          <RefreshControl 
+            refreshing={productsLoading && !!productData} 
+            onRefresh={onRefresh} 
+          />
+        }
         contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.statsBar}>
@@ -236,7 +236,7 @@ const handleEditProduct = (product: Product) => {
             <View key={product.id} style={styles.productCard}>
               <TouchableOpacity
                 style={styles.productImageContainer}
-                onPress={() => navigation.navigate('SellerProductDetails', { productUrl: product.url })}
+                onPress={() => handleProductPress(product)}
               >
                 {product.images && product.images.length > 0 ? (
                   <Image
@@ -261,7 +261,7 @@ const handleEditProduct = (product: Product) => {
               </TouchableOpacity>
 
               <View style={styles.productInfo}>
-                <TouchableOpacity onPress={() => navigation.navigate('SellerProductDetails', { productUrl: product.url })}>
+                <TouchableOpacity onPress={() => handleProductPress(product)}>
                   <Text style={styles.productName} numberOfLines={2}>
                     {product.name}
                   </Text>
@@ -304,6 +304,7 @@ const handleEditProduct = (product: Product) => {
                 <TouchableOpacity
                   style={[styles.actionButton, styles.deleteButton]}
                   onPress={() => handleDeletePress(product)}
+                  disabled={deleteMutation.isPending}
                 >
                   <Ionicons name="trash-outline" size={20} color={Colors.error} />
                 </TouchableOpacity>
@@ -335,28 +336,25 @@ const handleEditProduct = (product: Product) => {
             </View>
             <Text style={styles.modalTitle}>Delete Product?</Text>
             <Text style={styles.modalMessage}>
-              Are you sure you want to delete "{selectedProduct?.name}"? This action cannot be
-              undone.
+              Are you sure you want to delete "{selectedProduct?.name}"? This product will be moved to trash.
             </Text>
 
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={handleCancelDelete}
-                disabled={deleting}
+                disabled={deleteMutation.isPending}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.deleteModalButton]}
                 onPress={handleConfirmDelete}
-                disabled={deleting}
+                disabled={deleteMutation.isPending}
               >
-                {deleting ? (
-                  <ActivityIndicator size="small" color={Colors.white} />
-                ) : (
-                  <Text style={styles.deleteButtonText}>Delete</Text>
-                )}
+                <Text style={styles.deleteButtonText}>
+                  {deleteMutation.isPending ? 'Deleting...' : 'Move to Trash'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -390,10 +388,11 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
+    gap: 16,
   },
   loadingText: {
     fontSize: 16,
+    fontWeight: '500',
     color: Colors.textSecondary,
   },
   emptyContainer: {

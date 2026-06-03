@@ -1,12 +1,11 @@
 // screens/SellerPublicProductsScreen.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
   Image,
-  ActivityIndicator,
   RefreshControl,
   TextInput,
   StyleSheet,
@@ -14,8 +13,10 @@ import {
   FlatList,
   Alert,
 } from 'react-native';
-import { useProduct } from '../../hooks/useProducts';
+import { useStoreProducts } from '../../hooks/useProducts';
 import { useCart } from '../../context/CartContext';
+import { LoadingSpinner } from '../../components/LoadingSpinner';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 
 const { width } = Dimensions.get('window');
@@ -36,73 +37,68 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
   navigation,
 }) => {
   const { storeUrl, storeName } = route.params;
-  const { getStoreProducts, products, pagination, loading, error } = useProduct();
-  const { addItem, loading: cartLoading } = useCart();
 
-  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [sortBy, setSortBy] = useState<'createdAt' | 'price' | 'name' | 'quantityBought'>('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [addingToCart, setAddingToCart] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchProducts();
-  }, [storeUrl, searchQuery, selectedCategory, sortBy, sortOrder, page]);
-
-  const fetchProducts = async () => {
-    const filters = {
-      page,
-      limit: 10,
-      search: searchQuery,
-      category: selectedCategory,
-      sortBy,
-      sortOrder,
-    };
-
-    await getStoreProducts(storeUrl, filters);
+  // Build filters object — React Query serialises the query key, so a plain
+  // object is fine here (same pattern as MarketplaceScreen).
+  const filters: any = {
+    page,
+    limit: 10,
+    search: searchQuery || undefined,
+    category: selectedCategory || undefined,
+    sortBy,
+    sortOrder,
   };
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    setPage(1);
-    await fetchProducts();
-    setRefreshing(false);
-  }, [storeUrl, searchQuery, selectedCategory, sortBy, sortOrder]);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  } = useStoreProducts(storeUrl, filters);
 
-  const loadMore = () => {
-    if (pagination && page < pagination.pages && !loadingMore) {
-      setLoadingMore(true);
-      setPage(page + 1);
-      setLoadingMore(false);
+  const products = data?.products ?? [];
+  const pagination = data?.pagination;
+  const { addItem } = useCart();
+
+  // --- handlers ---------------------------------------------------
+
+  const loadMore = useCallback(() => {
+    if (pagination && page < pagination.pages && !isFetching) {
+      setPage((prev) => prev + 1);
     }
-  };
+  }, [pagination, page, isFetching]);
 
-  const handleSearch = (text: string) => {
+  const handleSearch = useCallback((text: string) => {
     setSearchQuery(text);
     setPage(1);
-  };
+  }, []);
 
-  const toggleSort = () => {
-    setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+  const toggleSort = useCallback(() => {
+    setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
     setPage(1);
-  };
+  }, []);
 
-  const changeSortBy = (newSortBy: typeof sortBy) => {
+  const changeSortBy = useCallback((newSortBy: typeof sortBy) => {
     setSortBy(newSortBy);
     setPage(1);
-  };
+  }, []);
 
-  const handleProductPress = (product: any) => {
+  const handleProductPress = useCallback((product: any) => {
     navigation.navigate('SellerPublicProductDetails', {
       productUrl: product.url,
       storeUrl: storeUrl,
     });
-  };
+  }, [navigation, storeUrl]);
 
-  const handleAddToCart = async (product: any) => {
+  const handleAddToCart = useCallback(async (product: any) => {
     if (product.stock === 0) {
       Alert.alert('Out of Stock', 'This product is currently out of stock');
       return;
@@ -111,16 +107,16 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
     try {
       setAddingToCart(product.id);
       await addItem(product.id, 1);
-      
+
       Alert.alert(
         'Added to Cart',
         `${product.name} has been added to your cart!`,
         [
           { text: 'Continue Shopping', style: 'cancel' },
-          { 
-            text: 'View Cart', 
-            onPress: () => navigation.navigate('Cart')
-          }
+          {
+            text: 'View Cart',
+            onPress: () => navigation.navigate('Cart'),
+          },
         ]
       );
     } catch (error: any) {
@@ -132,7 +128,9 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
     } finally {
       setAddingToCart(null);
     }
-  };
+  }, [addItem, navigation]);
+
+  // --- render helpers ---------------------------------------------
 
   const renderProductCard = ({ item }: { item: any }) => {
     const isAddingThisProduct = addingToCart === item.id;
@@ -149,7 +147,7 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
             <Image source={{ uri: item.images[0] }} style={styles.productImage} />
           ) : (
             <View style={styles.placeholderImage}>
-              <Text style={styles.placeholderText}>No Image</Text>
+              <Ionicons name="image-outline" size={32} color={Colors.gray400} />
             </View>
           )}
           {item.stock === 0 && (
@@ -193,14 +191,16 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
           >
             {isAddingThisProduct ? (
               <View style={styles.addToCartBtnContent}>
-                <ActivityIndicator size="small" color={Colors.white} />
+                <LoadingSpinner size={16} color={Colors.white} />
                 <Text style={styles.addToCartText}>Adding...</Text>
               </View>
             ) : (
               <View style={styles.addToCartBtnContent}>
-                <Text style={styles.addToCartIcon}>
-                  {item.stock === 0 ? '🚫' : '🛒'}
-                </Text>
+                <Ionicons
+                  name={item.stock === 0 ? 'ban-outline' : 'cart-outline'}
+                  size={16}
+                  color={Colors.white}
+                />
                 <Text style={styles.addToCartText}>
                   {item.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
                 </Text>
@@ -226,7 +226,7 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
 
       {/* Search Bar */}
       <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
+        <Ionicons name="search" size={20} color={Colors.gray400} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search products..."
@@ -236,7 +236,7 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity onPress={() => handleSearch('')}>
-            <Text style={styles.clearIcon}>✕</Text>
+            <Ionicons name="close-circle" size={20} color={Colors.gray400} />
           </TouchableOpacity>
         )}
       </View>
@@ -304,9 +304,11 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.sortOrderBtn} onPress={toggleSort}>
-          <Text style={styles.sortOrderText}>
-            {sortOrder === 'asc' ? '↑' : '↓'}
-          </Text>
+          <Ionicons
+            name={sortOrder === 'asc' ? 'arrow-up' : 'arrow-down'}
+            size={18}
+            color={Colors.textPrimary}
+          />
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -314,7 +316,7 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
 
   const renderEmpty = () => (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyIcon}>📦</Text>
+      <Ionicons name="cube-outline" size={64} color={Colors.gray300} />
       <Text style={styles.emptyTitle}>No Products Found</Text>
       <Text style={styles.emptyText}>
         {searchQuery
@@ -325,30 +327,34 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
   );
 
   const renderFooter = () => {
-    if (!loadingMore) return null;
+    // Show a small spinner at the bottom while paginating
+    if (!isFetching || page === 1) return null;
     return (
       <View style={styles.footerLoader}>
-        <ActivityIndicator size="small" color={Colors.primary} />
+        <LoadingSpinner size={20} color={Colors.primary} />
       </View>
     );
   };
-
-  if (loading && !refreshing && page === 1) {
+  if (isLoading && !data) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
+        <LoadingSpinner size={40} color={Colors.primary} />
         <Text style={styles.loadingText}>Loading products...</Text>
       </View>
     );
   }
 
-  if (error && !refreshing) {
+  // Error state
+  if (error) {
     return (
       <View style={styles.centerContainer}>
-        <Text style={styles.errorIcon}>⚠️</Text>
+        <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
         <Text style={styles.errorTitle}>Error Loading Products</Text>
-        <Text style={styles.errorText}>{error}</Text>
-        <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+        <Text style={styles.errorText}>
+          {error instanceof Error ? error.message : 'Something went wrong'}
+        </Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={() => refetch()}>
+          <Ionicons name="refresh" size={20} color={Colors.white} />
           <Text style={styles.retryBtnText}>Retry</Text>
         </TouchableOpacity>
       </View>
@@ -368,8 +374,8 @@ const SellerPublicProductsScreen: React.FC<SellerPublicProductsScreenProps> = ({
         ListFooterComponent={renderFooter}
         refreshControl={
           <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
+            refreshing={isFetching && !!data}
+            onRefresh={refetch}
             colors={[Colors.primary]}
             tintColor={Colors.primary}
           />
@@ -387,6 +393,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.backgroundSecondary,
+    marginTop: 8,
   },
   centerContainer: {
     flex: 1,
@@ -443,7 +450,7 @@ const styles = StyleSheet.create({
   storeTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: Colors.textPrimary,
+    color: Colors.primary,
     marginBottom: 4,
   },
   productCount: {
@@ -459,7 +466,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   searchIcon: {
-    fontSize: 18,
     marginRight: 8,
   },
   searchInput: {
@@ -467,11 +473,6 @@ const styles = StyleSheet.create({
     height: 44,
     fontSize: 16,
     color: Colors.textPrimary,
-  },
-  clearIcon: {
-    fontSize: 20,
-    color: Colors.gray500,
-    padding: 4,
   },
   sortContainer: {
     flexDirection: 'row',
@@ -502,10 +503,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.backgroundSecondary,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  sortOrderText: {
-    fontSize: 18,
-    color: Colors.textPrimary,
   },
   row: {
     paddingHorizontal: 16,
@@ -539,10 +536,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.gray200,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  placeholderText: {
-    fontSize: 12,
-    color: Colors.gray500,
   },
   outOfStockBadge: {
     position: 'absolute',

@@ -1,4 +1,3 @@
-// screens/OrderDetails.tsx
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -9,35 +8,79 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from '@react-navigation/native';
 import { Colors } from '../../constants/colors';
-import { useOrders, Order } from '../../hooks/useOrder';
-import { Ionicons } from '@expo/vector-icons';
+import {
+  useOrder,
+  useCancelOrder,
+  formatCurrency,
+} from '../../hooks/useOrder';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Order, OrderStatus } from '../../types/order';
+import { useChatContext } from '../../context/ChatContext';
+import { useEscrow } from '../../hooks/useEscrow';
+
+const { width } = Dimensions.get('window');
 
 interface OrderDetailsProps {
-  route: {
-    params: {
-      orderId: string;
-    };
-  };
+  route: { params: { orderId: string } };
   navigation: any;
+}
+
+interface TimelineStep {
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon: string;
+  completed: boolean;
+  active: boolean;
+  timestamp?: string;
 }
 
 const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
   const { orderId } = route.params;
-  const { loading, error, getOrderById, cancelOrder, updateOrderStatus } = useOrders();
-  const [order, setOrder] = useState<Order | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
 
+  const { data: order, isLoading, error, refetch } = useOrder(orderId);
+  const cancelOrder = useCancelOrder();
+  const { loading: escrowLoading, confirmOrderReceived } = useEscrow();
+  const { startDirectChat } = useChatContext();
+
+  const [processingConfirm, setProcessingConfirm] = useState(false);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      refetch();
+    }, [refetch])
+  );
+
+  // Poll while payment is pending
   useEffect(() => {
-    fetchOrderDetails();
-  }, [orderId]);
+    if (!order) return;
+    if (order.status === 'PENDING_PAYMENT') {
+      const pollInterval = setInterval(() => refetch(), 5000);
+      const timeout = setTimeout(() => clearInterval(pollInterval), 120000);
+      return () => {
+        clearInterval(pollInterval);
+        clearTimeout(timeout);
+      };
+    }
+  }, [order?.status, refetch]);
 
-  const fetchOrderDetails = async () => {
-    const result = await getOrderById(orderId);
-    if (result) {
-      setOrder(result);
+  const isPaid = order?.status !== 'PENDING_PAYMENT';
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+
+  const handlePayNow = () => {
+    if (order) {
+      navigation.navigate('Payment', {
+        orderId: order.id,
+        amount: order.breakdown?.buyerTotal || order.totalAmount,
+        currency: order.currency,
+      });
     }
   };
 
@@ -50,17 +93,17 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
         {
           text: 'Yes, Cancel',
           style: 'destructive',
-          onPress: async () => {
-            setActionLoading(true);
-            const result = await cancelOrder(orderId, 'Cancelled by buyer');
-            setActionLoading(false);
-            if (result) {
-              Alert.alert('Success', 'Order cancelled successfully', [
-                { text: 'OK', onPress: () => navigation.goBack() },
-              ]);
-            } else {
-              Alert.alert('Error', error || 'Failed to cancel order');
-            }
+          onPress: () => {
+            cancelOrder.mutate(
+              { orderId, reason: 'Cancelled by buyer' },
+              {
+                onSuccess: () => {
+                  Alert.alert('Success', 'Order cancelled successfully', [
+                    { text: 'OK', onPress: () => navigation.navigate('BuyerOrderManagement') },
+                  ]);
+                },
+              }
+            );
           },
         },
       ]
@@ -70,20 +113,24 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
   const handleConfirmReceived = () => {
     Alert.alert(
       'Confirm Delivery',
-      'By confirming, you acknowledge that you have received this order in good condition. Payment will be released to the seller.',
+      'By confirming, you acknowledge that you have received this order. Payment will be released to the seller.',
       [
         { text: 'Not Yet', style: 'cancel' },
         {
           text: 'Confirm Receipt',
           onPress: async () => {
-            setActionLoading(true);
-            const result = await updateOrderStatus(orderId, 'COMPLETED', 'Confirmed by buyer');
-            setActionLoading(false);
-            if (result) {
-              Alert.alert('Success', 'Order confirmed! Payment has been released to the seller.');
-              fetchOrderDetails();
+            setProcessingConfirm(true);
+            const success = await confirmOrderReceived(orderId);
+            setProcessingConfirm(false);
+
+            if (success) {
+              Alert.alert(
+                'Success',
+                'Order confirmed! Payment has been released to the seller.'
+              );
+              refetch();
             } else {
-              Alert.alert('Error', error || 'Failed to confirm order');
+              Alert.alert('Error', 'Failed to confirm order. Please try again.');
             }
           },
         },
@@ -91,119 +138,216 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
     );
   };
 
-  const handleRequestRefund = () => {
-    Alert.alert(
-      'Request Refund',
-      'Please provide a reason for requesting a refund. Our team will review your request.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Contact Support',
-          onPress: () => {
-            // Navigate to support or chat
-            Alert.alert('Support', 'Redirecting to support...');
-          },
-        },
-      ]
-    );
+  const handleOpenDispute = () => {
+    navigation.navigate('CreateDispute', { orderId });
   };
 
-  const handleChatWithSeller = () => {
-    if (order?.store?.userId) {
+  const handleChatWithSeller = async () => {
+    const sellerUserId = order?.store?.userId;
+    if (!sellerUserId) {
+      Alert.alert('Error', 'Cannot start chat: seller information missing.');
+      return;
+    }
+    try {
+      const chatRoom = await startDirectChat(sellerUserId);
+      if (!chatRoom?.id) {
+        Alert.alert('Error', 'Failed to open chat room.');
+        return;
+      }
       navigation.navigate('Chat', {
-        sellerId: order.store.userId,
-        sellerName: order.store.name,
+        chatRoomId: chatRoom.id,
+        otherUserName: order?.store?.name || 'Seller',
+        otherUserAvatar: order?.store?.logo || null,
+        otherUserType: 'seller',
+        storeName: order?.store?.name || 'Seller',
+        storeLogo: order?.store?.logo || null,
+      });
+    } catch (err) {
+      Alert.alert('Error', 'Failed to start chat. Please try again later.');
+    }
+  };
+
+  const handleViewTracking = () => {
+    if (order?.deliveryInfo?.trackingNumber) {
+      navigation.navigate('TrackOrder', {
+        orderId: order.id,
+        trackingNumber: order.deliveryInfo.trackingNumber,
       });
     }
   };
 
-  const handleViewDeliveryDetails = () => {
-    navigation.navigate('DeliveryDetails', {
-      orderId: order?.id,
-      deliveryInfo: order?.deliveryInfo,
-    });
+  const handleAddReview = (
+    productId: string,
+    productName: string,
+    orderId: string,
+    productImage: string
+  ) => {
+    navigation.navigate('ManageReview', { orderId, productId, productName, productImage });
   };
 
-  const handleAddReview = (productId: string, productName: string, orderId: string, productImage: string) => {
-    navigation.navigate('ManageReview', {
-      orderId,
-      productId,
-      productName,
-      productImage
-    });
+  // ── Timeline ──────────────────────────────────────────────────────────────
+
+  const getTimelineSteps = (): TimelineStep[] => {
+    if (!order) return [];
+
+    const status = order.status;
+
+    const completedAfter = (s: OrderStatus) =>
+      (['PAID', 'PROCESSING', 'SHIPPED', 'COMPLETED'] as OrderStatus[]).indexOf(s) >=
+      (['PAID', 'PROCESSING', 'SHIPPED', 'COMPLETED'] as OrderStatus[]).indexOf(status);
+
+    return [
+      {
+        id: 'payment',
+        title: isPaid ? 'Payment Confirmed' : 'Awaiting Payment',
+        subtitle: isPaid
+          ? 'Payment received successfully'
+          : 'Complete payment to proceed',
+        icon: isPaid ? 'checkmark-circle' : 'card-outline',
+        completed: isPaid,
+        active: status === 'PENDING_PAYMENT',
+      },
+      {
+        id: 'processing',
+        title: 'Processing',
+        subtitle:
+          status === 'PROCESSING'
+            ? 'Seller is preparing your items'
+            : ['SHIPPED', 'COMPLETED'].includes(status)
+            ? 'Items prepared and dispatched'
+            : 'Waiting to start processing',
+        icon: 'cube-outline',
+        completed: ['SHIPPED', 'COMPLETED'].includes(status),
+        active: status === 'PROCESSING',
+        timestamp: status === 'PROCESSING' ? order.updatedAt : undefined,
+      },
+      {
+        id: 'shipped',
+        title: 'Shipped',
+        subtitle:
+          status === 'SHIPPED'
+            ? 'Package is on the way'
+            : status === 'COMPLETED'
+            ? 'Package delivered'
+            : 'Not yet shipped',
+        icon: 'send-outline',
+        completed: status === 'COMPLETED',
+        active: status === 'SHIPPED',
+        timestamp:
+          status === 'SHIPPED' || status === 'COMPLETED'
+            ? order.deliveryInfo?.dispatchedAt || order.updatedAt
+            : undefined,
+      },
+      {
+        id: 'completed',
+        title: 'Completed',
+        subtitle:
+          status === 'COMPLETED'
+            ? 'Order confirmed and payment released'
+            : 'Confirm receipt to complete',
+        icon: 'checkmark-circle-outline',
+        completed: status === 'COMPLETED',
+        active: false,
+        timestamp:
+          status === 'COMPLETED'
+            ? order.deliveryInfo?.buyerConfirmedAt || order.updatedAt
+            : undefined,
+      },
+    ];
   };
 
-  const getStepInfo = () => {
-    if (!order) return null;
+  // ── Status helpers ────────────────────────────────────────────────────────
 
-    const daysUntilAutoRelease = 4;
-    const deliveredDate = order.deliveredAt ? new Date(order.deliveredAt) : null;
-    const daysElapsed = deliveredDate
-      ? Math.floor((Date.now() - deliveredDate.getTime()) / (1000 * 60 * 60 * 24))
-      : 0;
-    const daysRemaining = Math.max(0, daysUntilAutoRelease - daysElapsed);
-
-    switch (order.status) {
-      case 'PENDING':
-        return {
-          step: 1,
-          title: 'Order Placed Successfully',
-          description: 'Your order has been received and is awaiting confirmation from the seller. You will be notified once the seller confirms your order.',
-          icon: 'cube-outline',
-          color: Colors.warning,
-          actions: ['cancel', 'chat'],
-        };
-      case 'CONFIRMED':
-        return {
-          step: 2,
-          title: 'Order Confirmed',
-          description: 'Great news! The seller has confirmed your order and is preparing it for shipment. You will receive delivery details soon.',
-          icon: 'checkmark-circle-outline',
-          color: Colors.info,
-          actions: ['cancel', 'chat'],
-        };
-      case 'SHIPPED':
-        return {
-          step: 3,
-          title: 'Order Shipped',
-          description: 'Your order is on its way! The seller has shipped your package. Track your delivery below.',
-          icon: 'car-outline',
-          color: Colors.primaryLight,
-          actions: ['delivery', 'chat'],
-        };
-      case 'DELIVERED':
-        return {
-          step: 4,
-          title: 'Order Delivered',
-          description: `Your order has been delivered! Please confirm receipt to release payment to the seller. If not confirmed within ${daysRemaining} day(s), funds will be automatically released.`,
-          icon: 'gift-outline',
-          color: Colors.success,
-          actions: ['confirm', 'refund', 'chat'],
-        };
-      case 'COMPLETED':
-        return {
-          step: 5,
-          title: 'Order Completed',
-          description: 'Thank you for your purchase! Your order is complete. Share your experience by reviewing the products you purchased and earn reward points.',
-          icon: 'star-outline',
-          color: Colors.successDark,
-          actions: ['review'],
-        };
-      case 'CANCELLED':
-        return {
-          step: 6,
-          title: 'Order Cancelled',
-          description: 'This order has been cancelled. If you were charged, your refund will be processed within 3-5 business days.',
-          icon: 'close-circle-outline',
-          color: Colors.error,
-          actions: [],
-        };
-      default:
-        return null;
+  const getStatusColor = (): string => {
+    switch (order?.status) {
+      case 'PENDING_PAYMENT': return Colors.error;
+      case 'PAID':            return Colors.info;
+      case 'PROCESSING':      return Colors.primary;
+      case 'SHIPPED':         return '#7C3AED';
+      case 'COMPLETED':       return Colors.success;
+      case 'DISPUTED':        return '#F97316';
+      case 'CANCELLED':       return Colors.error;
+      case 'REFUNDED':        return '#FF9500';
+      default:                return Colors.textSecondary;
     }
   };
 
-  if (loading) {
+  const getStatusMessage = (): {
+    title: string;
+    message: string;
+    icon: string;
+    color: string;
+  } => {
+    switch (order?.status) {
+      case 'PENDING_PAYMENT':
+        return {
+          title: 'Payment Required',
+          message: 'Complete your payment to start processing your order. Your items are reserved.',
+          icon: 'alert-circle-outline',
+          color: Colors.error,
+        };
+      case 'PAID':
+        return {
+          title: 'Payment Confirmed',
+          message: 'Payment received. Waiting for the seller to begin processing your order.',
+          icon: 'checkmark-circle-outline',
+          color: Colors.info,
+        };
+      case 'PROCESSING':
+        return {
+          title: 'Order Processing',
+          message: 'The seller is preparing your items for shipment.',
+          icon: 'cube-outline',
+          color: Colors.primary,
+        };
+      case 'SHIPPED':
+        return {
+          title: 'On The Way',
+          message: 'Your package has been dispatched and is on its way to you.',
+          icon: 'send-outline',
+          color: '#7C3AED',
+        };
+      case 'COMPLETED':
+        return {
+          title: 'Order Completed',
+          message: 'Thank you! Share your experience by leaving a review.',
+          icon: 'star-outline',
+          color: Colors.success,
+        };
+      case 'DISPUTED':
+        return {
+          title: 'Dispute Under Review',
+          message: 'Your dispute is being reviewed. We\'ll notify you once a decision is made.',
+          icon: 'alert-circle-outline',
+          color: '#F97316',
+        };
+      case 'CANCELLED':
+        return {
+          title: 'Order Cancelled',
+          message: 'This order has been cancelled. Refund will be processed if applicable.',
+          icon: 'close-circle-outline',
+          color: Colors.error,
+        };
+      case 'REFUNDED':
+        return {
+          title: 'Refund Processed',
+          message: 'Your refund has been processed successfully.',
+          icon: 'cash-outline',
+          color: '#FF9500',
+        };
+      default:
+        return {
+          title: 'Order Status',
+          message: 'Processing your order...',
+          icon: 'information-circle-outline',
+          color: Colors.primary,
+        };
+    }
+  };
+
+  // ── Loading / Error ───────────────────────────────────────────────────────
+
+  if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
@@ -214,250 +358,432 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
     );
   }
 
-  if (!order) {
+  if (error || !order) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Order not found</Text>
+          <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
+          <Text style={styles.errorTitle}>Order Not Found</Text>
+          <Text style={styles.errorText}>
+            {error instanceof Error ? error.message : 'Unable to load order details'}
+          </Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.backToOrdersButton} onPress={() => navigation.goBack()}>
+            <Text style={styles.backToOrdersText}>Back to Orders</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  const stepInfo = getStepInfo();
-  const firstItem = order.items?.[0];
+  const safeItems = order.items || [];
+  const timelineSteps = getTimelineSteps();
+  const statusMessage = getStatusMessage();
+  const statusColor = getStatusColor();
+  const isActionLoading = cancelOrder.isPending || processingConfirm || escrowLoading;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Order Details</Text>
+        <TouchableOpacity onPress={handleChatWithSeller} style={styles.chatIconButton}>
+          <Ionicons name="chatbubble-ellipses-outline" size={24} color={Colors.primary} />
+        </TouchableOpacity>
+      </View>
+
       <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backButtonText}><Text style={styles.buttonArrow}><Ionicons name="arrow-back" size={24} color={Colors.textPrimary} /></Text></Text>
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Order Details</Text>
-          <View style={styles.placeholder} />
-        </View>
-
-        {/* Order Summary Card */}
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryHeader}>
-            <View>
-              <Text style={styles.orderNumber}>Order #{order.id.slice(-8).toUpperCase()}</Text>
-              <Text style={styles.orderDate}>
-                {new Date(order.createdAt).toLocaleDateString('en-US', {
-                  month: 'long',
-                  day: 'numeric',
-                  year: 'numeric',
-                })}
-              </Text>
+        {/* Status Banner */}
+        <LinearGradient
+          colors={[`${statusColor}20`, `${statusColor}05`]}
+          style={styles.statusBanner}
+        >
+          <View style={styles.statusBannerContent}>
+            <View style={[styles.statusIconCircle, { backgroundColor: `${statusColor}30` }]}>
+              <Ionicons name={statusMessage.icon as any} size={32} color={statusColor} />
             </View>
-            <View style={[styles.statusBadge, { backgroundColor: `${stepInfo?.color}20` }]}>
-              <Text style={[styles.statusText, { color: stepInfo?.color }]}>
-                {order.status}
-              </Text>
+            <View style={styles.statusTextContainer}>
+              <Text style={styles.statusBannerTitle}>{statusMessage.title}</Text>
+              <Text style={styles.statusBannerMessage}>{statusMessage.message}</Text>
             </View>
           </View>
+        </LinearGradient>
 
-          {/* Product Preview */}
-          <View style={styles.productPreview}>
-            <Image
-              source={{ uri: firstItem?.product?.images?.[0] || 'https://via.placeholder.com/80' }}
-              style={styles.productImage}
-            />
-            <View style={styles.productInfo}>
-              <Text style={styles.productName} numberOfLines={2}>
-                {firstItem?.product?.name || 'Product'}
-              </Text>
-              <Text style={styles.productQuantity}>Qty: {firstItem?.quantity || 1}</Text>
-              {order.items.length > 1 && (
-                <Text style={styles.moreItems}>+{order.items.length - 1} more item(s)</Text>
-              )}
+        {/* Payment Required Alert */}
+        {order.status === 'PENDING_PAYMENT' && (
+          <View style={styles.paymentAlert}>
+            <View style={styles.paymentAlertContent}>
+              <Ionicons name="warning" size={24} color={Colors.error} />
+              <View style={styles.paymentAlertText}>
+                <Text style={styles.paymentAlertTitle}>Payment Required</Text>
+                <Text style={styles.paymentAlertSubtitle}>
+                  Complete payment to start processing
+                </Text>
+              </View>
             </View>
+            <TouchableOpacity
+              style={styles.payNowButton}
+              onPress={handlePayNow}
+              disabled={isActionLoading}
+            >
+              <Text style={styles.payNowText}>Pay Now</Text>
+              <Text style={styles.payNowAmount}>
+                {formatCurrency(order.breakdown?.buyerTotal || order.totalAmount, order.currency)}
+              </Text>
+            </TouchableOpacity>
           </View>
+        )}
 
-          {/* Store Info */}
-          <View style={styles.storeInfo}>
-            <Text style={styles.storeLabel}>Store</Text>
-            <Text style={styles.storeName}>{order.store?.name || 'Store'}</Text>
+        {/* Order Info Card */}
+        <View style={styles.infoCard}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Order ID</Text>
+            <Text style={styles.infoValue}>#{order.id.slice(-8).toUpperCase()}</Text>
           </View>
-
-          {/* Order Total */}
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Order Total</Text>
-            <Text style={styles.totalAmount}>
-              {order.currency} {order.totalAmount.toFixed(2)}
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Order Date</Text>
+            <Text style={styles.infoValue}>
+              {new Date(order.createdAt).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
             </Text>
           </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Status</Text>
+            <View style={[styles.statusPill, { backgroundColor: `${statusColor}20` }]}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+              <Text style={[styles.statusPillText, { color: statusColor }]}>
+                {order.status?.replace('_', ' ')}
+              </Text>
+            </View>
+          </View>
         </View>
 
-        {/* Progress Steps */}
-        <View style={styles.progressCard}>
-          <View style={styles.progressHeader}>
-            <Text style={styles.progressTitle}>Order Progress</Text>
-            <Text style={styles.progressStep}>Step {stepInfo?.step}/5</Text>
-          </View>
-
-          <View style={styles.stepIndicator}>
-            {[1, 2, 3, 4, 5].map((step) => (
-              <View key={step} style={styles.stepContainer}>
-                <View
-                  style={[
-                    styles.stepDot,
-                    step <= (stepInfo?.step || 0) && step !== 6 && styles.stepDotActive,
-                    step === stepInfo?.step && { backgroundColor: stepInfo?.color },
-                  ]}
-                >
-                  {step === stepInfo?.step && <Text style={styles.stepDotText}>{step}</Text>}
-                </View>
-                {step < 5 && (
+        {/* Order Timeline */}
+        <View style={styles.timelineCard}>
+          <Text style={styles.sectionTitle}>Order Timeline</Text>
+          <View style={styles.timeline}>
+            {timelineSteps.map((step, index) => (
+              <View key={step.id} style={styles.timelineItem}>
+                <View style={styles.timelineLeftColumn}>
                   <View
                     style={[
-                      styles.stepLine,
-                      step < (stepInfo?.step || 0) && styles.stepLineActive,
+                      styles.timelineIconContainer,
+                      step.completed && styles.timelineIconCompleted,
+                      step.active && styles.timelineIconActive,
                     ]}
-                  />
-                )}
+                  >
+                    <Ionicons
+                      name={step.icon as any}
+                      size={20}
+                      color={
+                        step.completed
+                          ? Colors.white
+                          : step.active
+                          ? Colors.primary
+                          : Colors.textSecondary
+                      }
+                    />
+                  </View>
+                  {index < timelineSteps.length - 1 && (
+                    <View
+                      style={[
+                        styles.timelineLine,
+                        step.completed && styles.timelineLineCompleted,
+                      ]}
+                    />
+                  )}
+                </View>
+                <View style={styles.timelineContent}>
+                  <Text
+                    style={[
+                      styles.timelineTitle,
+                      (step.completed || step.active) && styles.timelineTitleActive,
+                    ]}
+                  >
+                    {step.title}
+                  </Text>
+                  <Text style={styles.timelineSubtitle}>{step.subtitle}</Text>
+                  {step.timestamp && (
+                    <Text style={styles.timelineTimestamp}>
+                      {new Date(step.timestamp).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  )}
+                </View>
               </View>
             ))}
           </View>
         </View>
 
-        {/* Status Card */}
-        <View style={[styles.statusCard, { borderLeftColor: stepInfo?.color }]}>
-          <Ionicons name={stepInfo?.icon as any} size={48} color={stepInfo?.color} style={styles.statusIcon} />
-          <Text style={styles.statusTitle}>{stepInfo?.title}</Text>
-          <Text style={styles.statusDescription}>{stepInfo?.description}</Text>
-        </View>
-
-        {/* Delivery Info (if available) */}
-        {order.deliveryInfo && order.status !== 'PENDING' && (
-          <View style={styles.infoCard}>
-            <Text style={styles.infoCardTitle}>Delivery Information</Text>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Recipient:</Text>
-              <Text style={styles.infoValue}>{order.deliveryInfo.recipient}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Phone:</Text>
-              <Text style={styles.infoValue}>{order.deliveryInfo.phone}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Address:</Text>
-              <Text style={styles.infoValue}>
-                {order.deliveryInfo.address}, {order.deliveryInfo.city}, {order.deliveryInfo.region}
-              </Text>
-            </View>
-            {order.deliveryInfo.trackingNumber && (
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Tracking:</Text>
-                <Text style={styles.infoValue}>{order.deliveryInfo.trackingNumber}</Text>
+        {/* Tracking Card */}
+        {order.status === 'SHIPPED' && order.deliveryInfo?.trackingNumber && (
+          <TouchableOpacity style={styles.trackingCard} onPress={handleViewTracking}>
+            <View style={styles.trackingContent}>
+              <View style={styles.trackingIcon}>
+                <MaterialCommunityIcons name="truck-delivery" size={28} color={Colors.primary} />
               </View>
-            )}
-          </View>
+              <View style={styles.trackingInfo}>
+                <Text style={styles.trackingTitle}>Track Your Package</Text>
+                <Text style={styles.trackingNumber}>
+                  Tracking: {order.deliveryInfo.trackingNumber}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color={Colors.textSecondary} />
+            </View>
+          </TouchableOpacity>
         )}
+
+        {/* Store Info */}
+        <View style={styles.storeCard}>
+          <View style={styles.storeHeader}>
+            <View style={styles.storeIconContainer}>
+              <Ionicons name="storefront" size={24} color={Colors.primary} />
+            </View>
+            <View style={styles.storeInfo}>
+              <Text style={styles.storeLabel}>Sold by</Text>
+              <Text style={styles.storeName}>{order.store?.name || 'Store'}</Text>
+            </View>
+            <TouchableOpacity onPress={handleChatWithSeller} style={styles.storeChatButton}>
+              <Ionicons name="chatbubble-outline" size={20} color={Colors.primary} />
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {/* Order Items */}
         <View style={styles.itemsCard}>
-          <Text style={styles.itemsCardTitle}>Order Items ({order.items.length})</Text>
-          {order.items.map((item: any, index: number) => (
-            <View key={index} style={styles.itemRow}>
+          <Text style={styles.sectionTitle}>
+            Order Items ({safeItems.length})
+          </Text>
+          {safeItems.map((item: any, index: number) => (
+            <View key={index} style={styles.productItem}>
               <Image
-                source={{ uri: item.product?.images?.[0] || 'https://via.placeholder.com/60' }}
-                style={styles.itemImage}
+                source={{ uri: item.product?.images?.[0] || 'https://via.placeholder.com/80' }}
+                style={styles.productImage}
               />
-              <View style={styles.itemDetails}>
-                <Text style={styles.itemName}>{item.product?.name || 'Product'}</Text>
-                <Text style={styles.itemPrice}>
-                  {order.currency} {item.price.toFixed(2)} × {item.quantity}
+              <View style={styles.productDetails}>
+                <Text style={styles.productName} numberOfLines={2}>
+                  {item.product?.name || item.productName || item.name || 'Product'}
+                </Text>
+                <Text style={styles.productQuantity}>Qty: {item.quantity}</Text>
+                <Text style={styles.productPrice}>
+                  {formatCurrency(item.price, order.currency)}
                 </Text>
               </View>
-              <Text style={styles.itemTotal}>
-                {order.currency} {item.total.toFixed(2)}
-              </Text>
+              <View style={styles.productTotal}>
+                <Text style={styles.productTotalText}>
+                  {formatCurrency(item.total, order.currency)}
+                </Text>
+              </View>
             </View>
           ))}
+
+          {/* Price Breakdown */}
+          <View style={styles.priceBreakdown}>
+            <View style={styles.priceRow}>
+              <Text style={styles.priceLabel}>Subtotal</Text>
+              <Text style={styles.priceValue}>
+                {formatCurrency(order.subtotal, order.currency)}
+              </Text>
+            </View>
+            {order.deliveryFee > 0 && (
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Delivery Fee</Text>
+                <Text style={styles.priceValue}>
+                  {formatCurrency(order.deliveryFee, order.currency)}
+                </Text>
+              </View>
+            )}
+            {order.taxAmount > 0 && (
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Tax</Text>
+                <Text style={styles.priceValue}>
+                  {formatCurrency(order.taxAmount, order.currency)}
+                </Text>
+              </View>
+            )}
+            {order.breakdown?.platformFee > 0 && (
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Platform Fee</Text>
+                <Text style={styles.priceValue}>
+                  {formatCurrency(order.breakdown.platformFee, order.currency)}
+                </Text>
+              </View>
+            )}
+            {order.breakdown?.paystackFee > 0 && (
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Transaction Fee</Text>
+                <Text style={styles.priceValue}>
+                  {formatCurrency(order.breakdown.paystackFee, order.currency)}
+                </Text>
+              </View>
+            )}
+            {order.discount > 0 && (
+              <View style={styles.priceRow}>
+                <Text style={[styles.priceLabel, { color: Colors.success }]}>Discount</Text>
+                <Text style={[styles.priceValue, { color: Colors.success }]}>
+                  -{formatCurrency(order.discount, order.currency)}
+                </Text>
+              </View>
+            )}
+            <View style={styles.priceDivider} />
+            <View style={styles.priceRow}>
+              <Text style={styles.priceTotalLabel}>
+                {isPaid ? 'Amount Paid' : 'Required Payment'}
+              </Text>
+              <Text style={styles.priceTotalValue}>
+                {formatCurrency(order.breakdown?.buyerTotal || order.totalAmount, order.currency)}
+              </Text>
+            </View>
+          </View>
         </View>
+
+        {/* Delivery Address */}
+        {order.deliveryInfo && (
+          <View style={styles.addressCard}>
+            <Text style={styles.sectionTitle}>Delivery Address</Text>
+            <View style={styles.addressContent}>
+              <View style={styles.addressIconContainer}>
+                <Ionicons name="location" size={24} color={Colors.primary} />
+              </View>
+              <View style={styles.addressDetails}>
+                <Text style={styles.addressName}>{order.deliveryInfo.recipient || 'N/A'}</Text>
+                <Text style={styles.addressPhone}>{order.deliveryInfo.phone || 'N/A'}</Text>
+                <Text style={styles.addressText}>{order.deliveryInfo.address || 'N/A'}</Text>
+                <Text style={styles.addressText}>
+                  {order.deliveryInfo.city}, {order.deliveryInfo.region},{' '}
+                  {order.deliveryInfo.country}
+                </Text>
+                {order.deliveryInfo.dispatchNote && (
+                  <Text style={styles.addressText}>
+                    📝 Note: {order.deliveryInfo.dispatchNote}
+                  </Text>
+                )}
+              </View>
+            </View>
+          </View>
+        )}
 
         {/* Action Buttons */}
         <View style={styles.actionsContainer}>
-          {stepInfo?.actions.includes('cancel') && (
+          {/* Pay Now */}
+          {order.status === 'PENDING_PAYMENT' && (
             <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={handleCancelOrder}
-              disabled={actionLoading}
+              style={styles.primaryButton}
+              onPress={handlePayNow}
+              disabled={isActionLoading}
             >
-              {actionLoading ? (
-                <ActivityIndicator size="small" color={Colors.white} />
-              ) : (
-                <Text style={styles.cancelButtonText}>Cancel Order</Text>
-              )}
-            </TouchableOpacity>
-          )}
-
-          {stepInfo?.actions.includes('delivery') && (
-            <TouchableOpacity
-              style={styles.deliveryButton}
-              onPress={handleViewDeliveryDetails}
-            >
-              <View style={styles.buttonContent}>
-                <Ionicons name="cube-outline" size={20} color={Colors.white} />
-                <Text style={styles.deliveryButtonText}>View Delivery Details</Text>
-              </View>
-            </TouchableOpacity>
-          )}
-
-          {stepInfo?.actions.includes('confirm') && (
-            <TouchableOpacity
-              style={styles.confirmButton}
-              onPress={handleConfirmReceived}
-              disabled={actionLoading}
-            >
-              {actionLoading ? (
+              {isActionLoading ? (
                 <ActivityIndicator size="small" color={Colors.white} />
               ) : (
                 <View style={styles.buttonContent}>
-                  <Ionicons name="checkmark-circle-outline" size={20} color={Colors.white} />
-                  <Text style={styles.confirmButtonText}>Confirm Receipt</Text>
+                  <Ionicons name="card" size={20} color={Colors.white} />
+                  <Text style={styles.primaryButtonText}>
+                    Pay Now ({formatCurrency(order.breakdown?.buyerTotal || order.totalAmount, order.currency)})
+                  </Text>
                 </View>
               )}
             </TouchableOpacity>
           )}
 
-          {stepInfo?.actions.includes('refund') && (
+          {/* Confirm Receipt — available from SHIPPED onward */}
+          {order.status === 'SHIPPED' && (
             <TouchableOpacity
-              style={styles.refundButton}
-              onPress={handleRequestRefund}
+              style={styles.primaryButton}
+              onPress={handleConfirmReceived}
+              disabled={isActionLoading}
             >
-              <Text style={styles.refundButtonText}>Request Refund</Text>
+              {processingConfirm || escrowLoading ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <View style={styles.buttonContent}>
+                  <Ionicons name="checkmark-circle" size={20} color={Colors.white} />
+                  <Text style={styles.primaryButtonText}>Confirm Receipt</Text>
+                </View>
+              )}
             </TouchableOpacity>
           )}
 
-          {stepInfo?.actions.includes('review') && (
+          {/* Write Review */}
+          {order.status === 'COMPLETED' && (
             <TouchableOpacity
-              style={styles.reviewButton}
-              onPress={() => handleAddReview(
-                order.items[0]?.product?.id || '',
-                order.items[0]?.product?.name || '',
-                order.id,
-                order.items[0]?.product?.images?.[0] || 'https://via.placeholder.com/100'
-              )}
+              style={styles.primaryButton}
+              onPress={() => {
+                const firstItem = safeItems[0];
+                handleAddReview(
+                  firstItem?.product?.id || firstItem?.productId || '',
+                  firstItem?.product?.name || firstItem?.productName || firstItem?.name || '',
+                  order.id,
+                  firstItem?.product?.images?.[0] || ''
+                );
+              }}
             >
               <View style={styles.buttonContent}>
-                <Ionicons name="star-outline" size={20} color={Colors.white} />
-                <Text style={styles.reviewButtonText}>Write a Review & Earn Points</Text>
+                <Ionicons name="star" size={20} color={Colors.white} />
+                <Text style={styles.primaryButtonText}>Write a Review</Text>
               </View>
             </TouchableOpacity>
           )}
 
-          {stepInfo?.actions.includes('chat') && (
-            <TouchableOpacity
-              style={styles.chatButton}
-              onPress={handleChatWithSeller}
-            >
-              <Text style={styles.chatButtonText}>💬 Chat with Seller</Text>
+          {/* Secondary Actions */}
+          <View style={styles.secondaryActions}>
+            {/* Track Order */}
+            {order.status === 'SHIPPED' && order.deliveryInfo?.trackingNumber && (
+              <TouchableOpacity style={styles.secondaryButton} onPress={handleViewTracking}>
+                <Ionicons name="navigate" size={20} color={Colors.primary} />
+                <Text style={styles.secondaryButtonText}>Track Order</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Open Dispute — available from SHIPPED onwards */}
+            {isPaid && ['SHIPPED', 'COMPLETED'].includes(order.status) && (
+              <TouchableOpacity style={styles.secondaryButton} onPress={handleOpenDispute}>
+                <Ionicons name="alert-circle-outline" size={20} color={Colors.error} />
+                <Text style={[styles.secondaryButtonText, { color: Colors.error }]}>
+                  Open Dispute
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Cancel Order */}
+            {order.status === 'PENDING_PAYMENT' && (
+              <TouchableOpacity
+                style={[styles.secondaryButton, styles.cancelButton]}
+                onPress={handleCancelOrder}
+                disabled={isActionLoading}
+              >
+                {cancelOrder.isPending ? (
+                  <ActivityIndicator size="small" color={Colors.error} />
+                ) : (
+                  <>
+                    <Ionicons name="close-circle" size={20} color={Colors.error} />
+                    <Text style={[styles.secondaryButtonText, { color: Colors.error }]}>
+                      Cancel Order
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {/* Chat with Seller */}
+            <TouchableOpacity style={styles.secondaryButton} onPress={handleChatWithSeller}>
+              <Ionicons name="chatbubbles" size={20} color={Colors.primary} />
+              <Text style={styles.secondaryButtonText}>Chat with Seller</Text>
             </TouchableOpacity>
-          )}
+          </View>
         </View>
 
         <View style={styles.bottomSpacing} />
@@ -478,17 +804,53 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   loadingText: {
-    fontSize: 14,
+    fontSize: 16,
     color: Colors.textSecondary,
+    marginTop: 8,
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    marginTop: 16,
+    marginBottom: 8,
   },
   errorText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  retryButton: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  retryButtonText: {
+    color: Colors.white,
     fontSize: 16,
-    color: Colors.error,
+    fontWeight: '600',
+  },
+  backToOrdersButton: {
+    backgroundColor: Colors.white,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  backToOrdersText: {
+    color: Colors.primary,
+    fontSize: 16,
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',
@@ -506,21 +868,106 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backButtonText: {
-    fontSize: 24,
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
     color: Colors.textPrimary,
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  placeholder: {
+  chatIconButton: {
     width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  summaryCard: {
+  statusBanner: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  statusBannerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+  },
+  statusIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  statusTextContainer: {
+    flex: 1,
+  },
+  statusBannerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 4,
+  },
+  statusBannerMessage: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  paymentAlert: {
     backgroundColor: Colors.white,
-    margin: 16,
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: Colors.error,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  paymentAlertContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  paymentAlertText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  paymentAlertTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.error,
+    marginBottom: 2,
+  },
+  paymentAlertSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  payNowButton: {
+    backgroundColor: Colors.error,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  payNowText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.white,
+  },
+  payNowAmount: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.white,
+  },
+  infoCard: {
+    backgroundColor: Colors.white,
+    marginHorizontal: 16,
+    marginTop: 16,
     padding: 20,
     borderRadius: 16,
     shadowColor: Colors.black,
@@ -529,199 +976,302 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  summaryHeader: {
+  infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 16,
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
-  orderNumber: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 4,
-  },
-  orderDate: {
-    fontSize: 13,
+  infoLabel: {
+    fontSize: 14,
     color: Colors.textSecondary,
+    fontWeight: '500',
   },
-  statusBadge: {
+  infoValue: {
+    fontSize: 14,
+    color: Colors.textPrimary,
+    fontWeight: '600',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 12,
+    borderRadius: 20,
+    gap: 6,
   },
-  statusText: {
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusPillText: {
     fontSize: 12,
     fontWeight: '700',
     textTransform: 'uppercase',
   },
-  productPreview: {
+  timelineCard: {
+    backgroundColor: Colors.white,
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 20,
+    borderRadius: 16,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 16,
+  },
+  timeline: {
+    paddingLeft: 4,
+  },
+  timelineItem: {
     flexDirection: 'row',
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
+    marginBottom: 4,
+  },
+  timelineLeftColumn: {
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  timelineIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.gray100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
     borderColor: Colors.border,
-    gap: 12,
+  },
+  timelineIconCompleted: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  timelineIconActive: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.primary,
+    borderWidth: 3,
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 4,
+  },
+  timelineLineCompleted: {
+    backgroundColor: Colors.primary,
+  },
+  timelineContent: {
+    flex: 1,
+    paddingBottom: 24,
+  },
+  timelineTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  timelineTitleActive: {
+    color: Colors.textPrimary,
+    fontWeight: '700',
+  },
+  timelineSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  timelineTimestamp: {
+    fontSize: 12,
+    color: Colors.primary,
+    fontWeight: '500',
+  },
+  trackingCard: {
+    backgroundColor: Colors.white,
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 16,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  trackingContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+  },
+  trackingIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: `${Colors.primary}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  trackingInfo: {
+    flex: 1,
+  },
+  trackingTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 4,
+  },
+  trackingNumber: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  storeCard: {
+    backgroundColor: Colors.white,
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 20,
+    borderRadius: 16,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  storeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  storeIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: `${Colors.primary}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  storeInfo: {
+    flex: 1,
+  },
+  storeLabel: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginBottom: 2,
+  },
+  storeName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  storeChatButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: `${Colors.primary}15`,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  itemsCard: {
+    backgroundColor: Colors.white,
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 20,
+    borderRadius: 16,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  productItem: {
+    flexDirection: 'row',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
   productImage: {
     width: 80,
     height: 80,
     borderRadius: 12,
     backgroundColor: Colors.gray100,
+    marginRight: 12,
   },
-  productInfo: {
+  productDetails: {
     flex: 1,
     justifyContent: 'center',
   },
   productName: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: Colors.textPrimary,
     marginBottom: 6,
+    lineHeight: 20,
   },
   productQuantity: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    marginBottom: 4,
-  },
-  moreItems: {
     fontSize: 13,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  storeInfo: {
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderColor: Colors.border,
-  },
-  storeLabel: {
-    fontSize: 12,
     color: Colors.textSecondary,
     marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
-  storeName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textPrimary,
+  productPrice: {
+    fontSize: 13,
+    color: Colors.textSecondary,
   },
-    buttonArrow: {
-    color: Colors.white,
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 16,
-  },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  totalAmount: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  progressCard: {
-    backgroundColor: Colors.white,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 20,
-    borderRadius: 16,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  progressHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  progressTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  progressStep: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.primary,
-  },
-  stepIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  stepContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  stepDot: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: Colors.gray200,
+  productTotal: {
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'flex-end',
   },
-  stepDotActive: {
-    backgroundColor: Colors.primary,
-  },
-  stepDotText: {
-    fontSize: 14,
+  productTotalText: {
+    fontSize: 16,
     fontWeight: '700',
-    color: Colors.white,
+    color: Colors.textPrimary,
   },
-  stepLine: {
-    flex: 1,
-    height: 3,
-    backgroundColor: Colors.gray200,
-    marginHorizontal: 4,
+  priceBreakdown: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 2,
+    borderTopColor: Colors.border,
   },
-  stepLineActive: {
-    backgroundColor: Colors.primary,
-  },
-  statusCard: {
-    backgroundColor: Colors.white,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 24,
-    borderRadius: 16,
-    borderLeftWidth: 4,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  statusIcon: {
-    fontSize: 48,
+  priceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 12,
   },
-  statusTitle: {
+  priceLabel: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  priceValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  priceDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 12,
+  },
+  priceTotalLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  priceTotalValue: {
     fontSize: 20,
     fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 8,
+    color: Colors.primary,
   },
-  statusDescription: {
-    fontSize: 15,
-    color: Colors.textSecondary,
-    lineHeight: 22,
-  },
-  infoCard: {
+  addressCard: {
     backgroundColor: Colors.white,
     marginHorizontal: 16,
-    marginBottom: 16,
+    marginTop: 16,
     padding: 20,
     borderRadius: 16,
     shadowColor: Colors.black,
@@ -730,160 +1280,93 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  infoCardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 16,
-  },
-  infoRow: {
+  addressContent: {
     flexDirection: 'row',
-    marginBottom: 12,
   },
-  infoLabel: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    width: 90,
-  },
-  infoValue: {
-    flex: 1,
-    fontSize: 14,
-    color: Colors.textPrimary,
-    fontWeight: '500',
-  },
-  itemsCard: {
-    backgroundColor: Colors.white,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 20,
-    borderRadius: 16,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  itemsCardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 16,
-  },
-  itemRow: {
-    flexDirection: 'row',
+  addressIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: `${Colors.primary}15`,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    gap: 12,
+    marginRight: 12,
   },
-  itemImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    backgroundColor: Colors.gray100,
-  },
-  itemDetails: {
+  addressDetails: {
     flex: 1,
   },
-  itemName: {
-    fontSize: 14,
-    fontWeight: '600',
+  addressName: {
+    fontSize: 15,
+    fontWeight: '700',
     color: Colors.textPrimary,
     marginBottom: 4,
   },
-  itemPrice: {
-    fontSize: 13,
+  addressPhone: {
+    fontSize: 14,
     color: Colors.textSecondary,
+    marginBottom: 8,
   },
-  itemTotal: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: Colors.textPrimary,
+  addressText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 20,
   },
   actionsContainer: {
-    paddingHorizontal: 16,
-    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 16,
   },
-  cancelButton: {
-    backgroundColor: Colors.error,
-    paddingVertical: 16,
+  primaryButton: {
+    backgroundColor: Colors.primary,
     borderRadius: 12,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 12,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  cancelButtonText: {
+  primaryButtonText: {
     fontSize: 16,
     fontWeight: '700',
     color: Colors.white,
-  },
-  deliveryButton: {
-    backgroundColor: Colors.primaryLight,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  deliveryButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.white,
-  },
-  confirmButton: {
-    backgroundColor: Colors.success,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  confirmButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.white,
-  },
-  refundButton: {
-    backgroundColor: Colors.white,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: Colors.error,
-  },
-  refundButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.error,
-  },
-  reviewButton: {
-    backgroundColor: Colors.warning,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  reviewButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.white,
-  },
-  chatButton: {
-    backgroundColor: Colors.white,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: Colors.primary,
-  },
-  chatButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  bottomSpacing: {
-    height: 32,
   },
   buttonContent: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  secondaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  secondaryButton: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: Colors.white,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+  },
+  secondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  cancelButton: {
+    borderColor: Colors.error,
+  },
+  bottomSpacing: {
+    height: 60,
   },
 });
 

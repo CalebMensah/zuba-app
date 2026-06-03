@@ -436,3 +436,4 @@ export const deleteAllReadNotifications = async (req, res) => {
     });
   }
 };
+

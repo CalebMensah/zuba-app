@@ -10,6 +10,7 @@ import {
   requestAccountDeletion,
   confirmAccountDeletion,
   cancelAccountDeletion,
+  refreshToken,
 } from '../controllers/authcontroller.js';
 import {
   validateSignup,
@@ -21,7 +22,7 @@ import {
   sanitizeInputs,
 } from '../middleware/authValidation.js';
 import { authenticateToken } from '../middleware/authmiddleware.js';
-import { googleAuth } from '../controllers/googleauth.js';
+
 
 const router = express.Router();
 
@@ -114,9 +115,11 @@ router.post(
   login
 );
 
-router.post('/google',
-  loginLimiter, 
-  googleAuth);
+router.post(
+  '/refresh',
+  sanitizeInputs,
+  refreshToken
+);
 
 // Protected routes (require authentication)
 router.post(

@@ -29,13 +29,22 @@ import deliveryRoutes from './routes/delivery.js';
 import escrowRoutes from './routes/escrow.js';
 import adminRoutes from './routes/admin.js';
 import adminAnalyticsRoutes from './routes/admindashboard.js';
+import search from './routes/search.js'
+import { TokenManager } from './utils/tokenManager.js';
+
+
 
 // Config imports
 import initializeSocket from './config/socket.js';
-//import { generalLimiter } from './middleware/rateLimiter.js';
+import { authenticateToken } from './middleware/authmiddleware.js';
 
 // Load environment variables
 dotenv.config();
+
+// Configuration constants (shared with TokenManager)
+const MAX_TOKENS_PER_USER = 10
+const MAX_FAILURE_COUNT = 3
+const CLEANUP_REVOKED_DAYS = 30
 
 const app = express();
 const httpServer = createServer(app);
@@ -95,27 +104,22 @@ app.use(cors({
   maxAge: 600
 }));
 
-// 4. Body parser with size limits (prevent large payload attacks)
+// Body parser with size limits (prevent large payload attacks)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 
-// 6. Disable X-Powered-By header
+//  Disable X-Powered-By header
 app.disable('x-powered-by');
 
-// 7. HTTP request logging
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 } else {
-  // In production, use a more detailed format and log to file
   app.use(morgan('combined'));
 }
 
-// 8. Make Socket.IO available to routes
 app.set('io', io);
 
-// 9. Apply general rate limiter to all API routes
-//app.use('/api', generalLimiter);
 
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -127,12 +131,220 @@ app.get('/health', (req, res) => {
   });
 });
 
+
+app.post('/api/register-fcm-token-firebase', authenticateToken, async (req, res) => {
+  try {
+    const { 
+      userId, 
+      fcmToken, 
+      platform,
+      deviceId,
+      deviceModel,
+      osVersion,
+      appVersion,
+      expiresAt
+    } = req.body;
+
+    // Validate required fields
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'VALIDATION_ERROR', 
+        message: 'userId is required' 
+      });
+    }
+    if (!fcmToken) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'VALIDATION_ERROR', 
+        message: 'fcmToken is required' 
+      });
+    }
+    if (!platform) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'VALIDATION_ERROR', 
+        message: 'platform is required (IOS, ANDROID, WEB)' 
+      });
+    }
+
+    // ✅ AUTO-DETECT TOKEN TYPE based on token format
+    let detectedTokenType;
+    if (fcmToken.startsWith('ExponentPushToken[')) {
+      detectedTokenType = 'EXPO';
+    } else if (fcmToken.includes(':')) {
+      // FCM tokens have format: {senderId}:APA91b...
+      detectedTokenType = 'FCM';
+    } else {
+      detectedTokenType = 'WEB_PUSH';
+    }
+
+    console.log(`🔍 Detected token type: ${detectedTokenType} for token: ${fcmToken.substring(0, 30)}...`);
+
+    // Register token using TokenManager
+    const registeredToken = await TokenManager.register({
+      userId,
+      token: fcmToken,
+      tokenType: detectedTokenType,
+      platform,
+      deviceId,
+      deviceModel,
+      osVersion,
+      appVersion,
+      expiresAt: detectedTokenType === 'EXPO' ? expiresAt : undefined
+    });
+
+    // Return the registered token data
+    res.json({ 
+      success: true, 
+      data: {
+        id: registeredToken.id,
+        tokenType: registeredToken.tokenType,
+        platform: registeredToken.platform,
+        deviceModel: registeredToken.deviceModel,
+        lastUsedAt: registeredToken.lastUsedAt,
+        createdAt: registeredToken.createdAt
+      },
+      message: 'Token registered successfully'
+    });
+  } catch (error) {
+    console.error(' Token registration error:', error);
+    
+    let statusCode = 500;
+    let errorCode = 'REGISTRATION_ERROR';
+    let message = error.message;
+
+    if (error.message.includes('Expo tokens require expiresAt')) {
+      statusCode = 400;
+      errorCode = 'VALIDATION_ERROR';
+    } else if (error.code === 'P2002') {
+      statusCode = 409;
+      errorCode = 'DUPLICATE_ENTRY';
+    } else if (error.code === 'P2003') {
+      statusCode = 404;
+      errorCode = 'USER_NOT_FOUND';
+      message = 'User not found';
+    }
+
+    res.status(statusCode).json({ 
+      success: false,
+      error: errorCode, 
+      message,
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    });
+  }
+});
+
+app.post('/api/unregister-fcm-token-firebase', authenticateToken, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+
+    if (!fcmToken) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'VALIDATION_ERROR', 
+        message: 'fcmToken is required' 
+      });
+    }
+
+    // Revoke the specific token
+    const result = await TokenManager.revoke(fcmToken);
+
+    if (result.count === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'TOKEN_NOT_FOUND',
+        message: 'Token not found or already revoked'
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      data: { revokedCount: result.count },
+      message: 'Token unregistered successfully'
+    });
+
+  } catch (error) {
+    console.error('Token unregistration error:', error.message);
+
+    res.status(500).json({ 
+      success: false,
+      error: 'UNREGISTRATION_ERROR', 
+      message: error.message,
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    });
+  }
+});
+
+// Optional: Revoke all tokens for a user (useful for logout)
+app.post('/api/revoke-all-tokens', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'VALIDATION_ERROR', 
+        message: 'userId is required' 
+      });
+    }
+
+    const result = await TokenManager.revokeAllForUser(userId);
+
+    console.log(`Revoked ${result.count} tokens for user ${userId}`);
+
+    res.json({ 
+      success: true, 
+      data: { revokedCount: result.count },
+      message: 'All tokens revoked successfully'
+    });
+
+  } catch (error) {
+    console.error('revoke all tokens error:', error.message);
+
+    res.status(500).json({ 
+      success: false,
+      error: 'REVOKE_ERROR', 
+      message: error.message,
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     success: true,
     message: 'API is healthy',
     timestamp: new Date().toISOString()
   });
+});
+
+// Admin endpoint to clean up invalid tokens
+app.post('/api/admin/cleanup-tokens', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user?.role !== 'ADMIN') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin privileges required.'
+      });
+    }
+
+    const result = await TokenManager.cleanup();
+    
+    res.json({
+      success: true,
+      message: `Cleaned up ${result.cleaned} invalid tokens`,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error cleaning up tokens:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clean up tokens',
+      error: error.message
+    });
+  }
 });
 
 
@@ -252,87 +464,14 @@ const { exec } = await import('child_process');
 
 function startServer() {
   httpServer.listen(PORT, () => {
-    console.log('========================================');
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔌 Socket.IO enabled and ready`);
-    console.log(`🔒 Security middleware active`);
-    console.log(`⏰ Started at: ${new Date().toISOString()}`);
-    console.log('========================================');
+    console.log(`Server running on port ${PORT}`);
+    console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Socket.IO enabled and ready`);
+    console.log(`Security middleware active`);
+    console.log(`Started at: ${new Date().toISOString()}`);
   });
 }
 
-
-// Handle port already in use
-httpServer.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(` Port ${PORT} is already in use`);
-    
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`🔧 Attempting to kill process on port ${PORT}...`);
-      const command = process.platform === 'win32'
-        ? `netstat -ano | findstr :${PORT}` // Windows
-        : `lsof -ti :${PORT} | xargs kill -9`; // Unix/Linux/Mac
-      
-      exec(command, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`❌ Error killing process on port ${PORT}:`, err.message);
-          console.log('💡 Please manually kill the process or use a different port');
-          process.exit(1);
-        } else {
-          console.log(`✅ Process(es) on port ${PORT} killed. Restarting...`);
-          setTimeout(startServer, 1000); // Wait 1 second before retrying
-        }
-      });
-    } else {
-      console.error('💡 In production, use a process manager like PM2');
-      process.exit(1);
-    }
-  } else {
-    console.error('❌ Server error:', error);
-    process.exit(1);
-  }
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Promise Rejection:', reason);
-  console.error('Promise:', promise);
-  // Close server gracefully
-  httpServer.close(() => {
-    console.log('🛑 Server closed due to unhandled rejection');
-    process.exit(1);
-  });
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  // Close server gracefully
-  httpServer.close(() => {
-    console.log('🛑 Server closed due to uncaught exception');
-    process.exit(1);
-  });
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('📡 SIGTERM signal received: closing HTTP server');
-  httpServer.close(() => {
-    console.log('✅ HTTP server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('\n📡 SIGINT signal received: closing HTTP server');
-  httpServer.close(() => {
-    console.log('✅ HTTP server closed');
-    process.exit(0);
-  });
-});
-
-// Start the server
 startServer();
 
 export default app;
