@@ -24,32 +24,32 @@ for (const envPath of possibleEnvPaths) {
   try {
     const result = dotenv.config({ path: envPath });
     if (!result.error) {
-      console.log(`✅ Loaded environment variables from: ${envPath}`);
+      console.log(`Loaded environment variables from: ${envPath}`);
       envLoaded = true;
       break;
     }
   } catch (err) {
-    console.log(`⚠️  Could not load from ${envPath}:`, err.message);
+    console.log(`Could not load from ${envPath}:`, err.message);
   }
 }
 
 // If no .env file was found, try default config
 if (!envLoaded) {
   dotenv.config();
-  console.log('✅ Loaded environment variables from default location');
+  console.log('Loaded environment variables from default location');
 }
 
 // Check if DATABASE_URL is available
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
-  console.error('❌ DATABASE_URL environment variable is not set');
+  console.error(' DATABASE_URL environment variable is not set');
   console.log('Available environment variables:', Object.keys(process.env).filter(key => 
     key.includes('DATABASE') || key.includes('DB') || key.includes('POSTGRES')
   ));
   throw new Error('DATABASE_URL environment variable is not set');
 }
 
-console.log('✅ Database URL loaded successfully');
+console.log('Database URL loaded successfully');
 
 // Create PostgreSQL pool
 const pool = new pg.Pool({
@@ -69,9 +69,9 @@ const prisma = new PrismaClient({
 async function testConnection() {
   try {
     await prisma.$connect();
-    console.log('✅ Database connection successful');
+    console.log('Database connection successful');
   } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
+    console.error('Database connection failed:', error.message);
     throw error;
   }
 }
