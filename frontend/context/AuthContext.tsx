@@ -22,7 +22,7 @@ interface AuthContextType {
   refreshAccessToken: () => Promise<string | null>;
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://d317-197-251-240-29.ngrok-free.app';
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{

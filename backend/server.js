@@ -83,12 +83,15 @@ app.use(helmet({
 // 3. CORS Configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : [process.env.FRONTEND_URL || 'http://localhost:3000'];
+  : ['http://localhost:3000'];
 
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
+    
+    // Allow all origins if wildcard is set
+    if (allowedOrigins.includes('*')) return callback(null, true);
     
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
@@ -168,7 +171,7 @@ app.post('/api/register-fcm-token-firebase', authenticateToken, async (req, res)
       });
     }
 
-    // ✅ AUTO-DETECT TOKEN TYPE based on token format
+    //  AUTO-DETECT TOKEN TYPE based on token format
     let detectedTokenType;
     if (fcmToken.startsWith('ExponentPushToken[')) {
       detectedTokenType = 'EXPO';
