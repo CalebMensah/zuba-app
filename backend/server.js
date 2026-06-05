@@ -371,6 +371,15 @@ app.use('/api/escrow', escrowRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/analytics', adminAnalyticsRoutes);
 
+//route to check if indeed backend is working after render deployment
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    message: 'Welcome to the Express server API!',
+    version: '1.0.0',
+    documentation: '/api/health'
+  });
+});
+
 
 app.get('/', (req, res) => {
   res.json({ 
