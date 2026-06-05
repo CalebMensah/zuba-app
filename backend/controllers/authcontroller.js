@@ -246,6 +246,9 @@ export const resendVerificationCode = async (req, res) => {
       },
     });
 
+    //log user verification status
+    console.log(`Resend verification code requested for ${email}. User found: ${!!user}, Verification status: ${user ? user.verificationStatus : 'N/A'}`);
+
     if (!user) {
       // Generic message to prevent email enumeration
       return res.status(200).json({
@@ -276,6 +279,9 @@ export const resendVerificationCode = async (req, res) => {
         failedVerificationAttempts: 0,
       },
     });
+
+    //log data
+    console.log(`Resending verification code to ${user.email}. New code: ${newVerificationCode}`);
 
     // Send new verification email
     const mailOptions = {

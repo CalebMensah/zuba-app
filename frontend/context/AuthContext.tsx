@@ -22,7 +22,7 @@ interface AuthContextType {
   refreshAccessToken: () => Promise<string | null>;
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'https://d317-197-251-240-29.ngrok-free.app';
+const API_BASE_URL = 'https://zuba-app.onrender.com/api'
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{
@@ -32,7 +32,7 @@ export const AuthProvider: React.FC<{
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true); 
   const [hasSeenOnboarding, setHasSeenOnboardingState] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentPushToken, setCurrentPushToken] = useState<string | null>(null);

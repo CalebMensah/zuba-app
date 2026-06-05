@@ -29,7 +29,7 @@ const router = express.Router();
 // Rate limiters for different endpoints
 const signupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 requests per window
+  max: 15, // 5 requests per window
   message: {
     success: false,
     message: 'Too many signup attempts. Please try again later.',
