@@ -1,30 +1,18 @@
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { validationResult } from 'express-validator';
 import prisma from '../config/prisma.js';
 
-// Validate JWT_SECRET exists
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   throw new Error('JWT_SECRET must be set and at least 32 characters long');
 }
 
-// Configure email transporter
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_APP_PASSWORD,
-  },
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Helper function to generate secure random code
-const generateSecureCode = () => {
-  return crypto.randomInt(100000, 999999).toString();
-};
+const generateSecureCode = () => crypto.randomInt(100000, 999999).toString();
 
-// Helper function to handle validation errors
 const handleValidationErrors = (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -40,18 +28,27 @@ const handleValidationErrors = (req, res) => {
   return null;
 };
 
-// Dummy hash for timing attack prevention
 const DUMMY_HASH = '$2a$10$YourDummyHashHereToPreventTimingAttacks1234567890';
 
+const sendEmail = async ({ to, subject, html }) => {
+  const { data, error } = await resend.emails.send({
+    from: `Zuba <${process.env.EMAIL_ADDRESS}>`,
+    to,
+    subject,
+    html,
+  });
+
+  if (error) throw new Error(error.message);
+  return data;
+};
+
 export const signup = async (req, res) => {
-  // Check validation errors
   const validationError = handleValidationErrors(req, res);
   if (validationError) return;
 
   const { email, phone, firstName, lastName, password, role = 'BUYER' } = req.body;
 
   try {
-    // Check if user already exists
     const existingUser = await prisma.user.findFirst({
       where: {
         OR: [
@@ -62,24 +59,17 @@ export const signup = async (req, res) => {
     });
 
     if (existingUser) {
-      // Generic message to prevent email enumeration
       return res.status(400).json({
         success: false,
         message: 'Unable to create account. Please check your information.',
       });
     }
 
-    // Hash the password with higher cost factor
     const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Generate secure verification code
     const verificationCode = generateSecureCode();
     const verificationExpiry = new Date(Date.now() + 10 * 60 * 1000);
-
-    // Hash the verification code before storing
     const hashedVerificationCode = await bcrypt.hash(verificationCode, 10);
 
-    // Create user with PENDING verification status
     const user = await prisma.user.create({
       data: {
         email: email.toLowerCase(),
@@ -96,9 +86,7 @@ export const signup = async (req, res) => {
       },
     });
 
-    // Send verification email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
+    await sendEmail({
       to: user.email,
       subject: 'Email Verification Code',
       html: `
@@ -117,28 +105,25 @@ export const signup = async (req, res) => {
           <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
         </div>
       `,
-    };
+    });
 
-    await transporter.sendMail(mailOptions);
+    const { password: _, verificationCode: __, verificationExpiry: ___, ...rest } = user;
 
-    // Return success response without sensitive data
-    const { password: _, verificationCode: __, verificationExpiry: ___, ...userWithoutSensitiveData } = user;
-    
     res.status(201).json({
       success: true,
       message: 'User created successfully. Please check your email for verification code.',
       user: {
-        id: userWithoutSensitiveData.id,
-        email: userWithoutSensitiveData.email,
-        firstName: userWithoutSensitiveData.firstName,
-        lastName: userWithoutSensitiveData.lastName,
-        role: userWithoutSensitiveData.role,
+        id: rest.id,
+        email: rest.email,
+        firstName: rest.firstName,
+        lastName: rest.lastName,
+        role: rest.role,
       },
     });
 
   } catch (error) {
     console.error('Signup error:', error);
-    
+
     if (error.code === 'P2002') {
       return res.status(400).json({
         success: false,
@@ -160,14 +145,11 @@ export const verifyEmail = async (req, res) => {
   const { email, code } = req.body;
 
   try {
-    // Find user with pending verification
     const user = await prisma.user.findFirst({
       where: {
         email: email.toLowerCase(),
         verificationStatus: 'PENDING',
-        verificationExpiry: {
-          gte: new Date(),
-        },
+        verificationExpiry: { gte: new Date() },
       },
     });
 
@@ -178,7 +160,6 @@ export const verifyEmail = async (req, res) => {
       });
     }
 
-    // Check if user has too many failed verification attempts
     if (user.failedVerificationAttempts >= 5) {
       return res.status(429).json({
         success: false,
@@ -186,18 +167,12 @@ export const verifyEmail = async (req, res) => {
       });
     }
 
-    // Compare hashed verification code
     const isCodeValid = await bcrypt.compare(code, user.verificationCode);
 
     if (!isCodeValid) {
-      // Increment failed attempts
       await prisma.user.update({
         where: { id: user.id },
-        data: {
-          failedVerificationAttempts: {
-            increment: 1,
-          },
-        },
+        data: { failedVerificationAttempts: { increment: 1 } },
       });
 
       return res.status(400).json({
@@ -206,7 +181,6 @@ export const verifyEmail = async (req, res) => {
       });
     }
 
-    // Update user verification status
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -246,18 +220,13 @@ export const resendVerificationCode = async (req, res) => {
       },
     });
 
-    //log user verification status
-    console.log(`Resend verification code requested for ${email}. User found: ${!!user}, Verification status: ${user ? user.verificationStatus : 'N/A'}`);
-
     if (!user) {
-      // Generic message to prevent email enumeration
       return res.status(200).json({
         success: true,
         message: 'If an account exists with this email, a new verification code has been sent.',
       });
     }
 
-    // Check if user is rate limited (e.g., requested too recently)
     if (user.verificationExpiry && user.verificationExpiry > new Date(Date.now() + 8 * 60 * 1000)) {
       return res.status(429).json({
         success: false,
@@ -265,12 +234,10 @@ export const resendVerificationCode = async (req, res) => {
       });
     }
 
-    // Generate new secure verification code
     const newVerificationCode = generateSecureCode();
     const newVerificationExpiry = new Date(Date.now() + 10 * 60 * 1000);
     const hashedVerificationCode = await bcrypt.hash(newVerificationCode, 10);
 
-    // Update user with new verification code and reset failed attempts
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -280,12 +247,7 @@ export const resendVerificationCode = async (req, res) => {
       },
     });
 
-    //log data
-    console.log(`Resending verification code to ${user.email}. New code: ${newVerificationCode}`);
-
-    // Send new verification email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
+    await sendEmail({
       to: user.email,
       subject: 'New Email Verification Code',
       html: `
@@ -304,9 +266,7 @@ export const resendVerificationCode = async (req, res) => {
           <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
         </div>
       `,
-    };
-
-    await transporter.sendMail(mailOptions);
+    });
 
     res.status(200).json({
       success: true,
@@ -329,14 +289,10 @@ export const login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Find user by email
     const user = await prisma.user.findUnique({
-      where: {
-        email: email.toLowerCase(),
-      },
+      where: { email: email.toLowerCase() },
     });
 
-    // Check if account is locked
     if (user && user.accountLockedUntil && user.accountLockedUntil > new Date()) {
       const remainingMinutes = Math.ceil((user.accountLockedUntil - new Date()) / 60000);
       return res.status(429).json({
@@ -345,29 +301,21 @@ export const login = async (req, res) => {
       });
     }
 
-    // Perform password comparison even if user doesn't exist (timing attack prevention)
-    const isPasswordValid = user 
+    const isPasswordValid = user
       ? await bcrypt.compare(password, user.password)
       : await bcrypt.compare(password, DUMMY_HASH);
 
     if (!user || !isPasswordValid) {
-      // Increment failed attempts if user exists
       if (user) {
         const newFailedAttempts = (user.failedLoginAttempts || 0) + 1;
-        const updateData = {
-          failedLoginAttempts: newFailedAttempts,
-        };
+        const updateData = { failedLoginAttempts: newFailedAttempts };
 
-        // Lock account after 5 failed attempts
         if (newFailedAttempts >= 5) {
-          updateData.accountLockedUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
-          updateData.failedLoginAttempts = 0; // Reset counter
+          updateData.accountLockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+          updateData.failedLoginAttempts = 0;
         }
 
-        await prisma.user.update({
-          where: { id: user.id },
-          data: updateData,
-        });
+        await prisma.user.update({ where: { id: user.id }, data: updateData });
       }
 
       return res.status(401).json({
@@ -376,7 +324,6 @@ export const login = async (req, res) => {
       });
     }
 
-    // Check if email is verified
     if (user.verificationStatus !== 'APPROVED' || !user.isVerified) {
       return res.status(403).json({
         success: false,
@@ -385,35 +332,20 @@ export const login = async (req, res) => {
       });
     }
 
-    // Generate JWT tokens
     const token = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-      },
+      { userId: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
-      {
-        expiresIn: '10d', // Shorter access token expiry for better security
-      }
+      { expiresIn: '10d' }
     );
 
-    // Generate refresh token
     const refreshToken = jwt.sign(
-      {
-        userId: user.id,
-        tokenType: 'refresh',
-      },
+      { userId: user.id, tokenType: 'refresh' },
       process.env.JWT_SECRET,
-      {
-        expiresIn: '7d', // Longer refresh token expiry
-      }
+      { expiresIn: '7d' }
     );
 
-    // Hash the refresh token before storing
     const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
 
-    // Update user with refresh token and last login
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -421,15 +353,14 @@ export const login = async (req, res) => {
         failedLoginAttempts: 0,
         accountLockedUntil: null,
         refreshToken: hashedRefreshToken,
-        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         refreshTokenCreatedAt: new Date(),
         refreshTokenUsed: false,
         lastTokenRefreshAttempt: null,
       },
     });
 
-    // Remove sensitive data from response
-    const { password: _, verificationCode: __, verificationExpiry: ___, ...userWithoutSensitiveData } = user;
+    const { password: _, verificationCode: __, verificationExpiry: ___, ...rest } = user;
 
     res.status(200).json({
       success: true,
@@ -437,13 +368,13 @@ export const login = async (req, res) => {
       accessToken: token,
       refreshToken,
       user: {
-        id: userWithoutSensitiveData.id,
-        email: userWithoutSensitiveData.email,
-        firstName: userWithoutSensitiveData.firstName,
-        lastName: userWithoutSensitiveData.lastName,
-        role: userWithoutSensitiveData.role,
-        points: userWithoutSensitiveData.points,
-        isVerified: userWithoutSensitiveData.isVerified,
+        id: rest.id,
+        email: rest.email,
+        firstName: rest.firstName,
+        lastName: rest.lastName,
+        role: rest.role,
+        points: rest.points,
+        isVerified: rest.isVerified,
       },
     });
 
@@ -458,9 +389,6 @@ export const login = async (req, res) => {
 
 export const logout = async (req, res) => {
   try {
-    // If implementing token blacklisting, add token to blacklist here
-    // For JWT-based auth, logout is typically handled client-side
-    
     res.status(200).json({
       success: true,
       message: 'Logout successful',
@@ -476,20 +404,13 @@ export const logout = async (req, res) => {
 
 export const getCurrentUser = async (req, res) => {
   try {
-    const userId = req.user.userId;
-
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: req.user.userId },
       include: {
         store: {
-          select: {
-            id: true,
-            name: true,
-            url: true,
-            viewCount: true
-          },
-        }
-      }
+          select: { id: true, name: true, url: true, viewCount: true },
+        },
+      },
     });
 
     if (!user) {
@@ -499,21 +420,20 @@ export const getCurrentUser = async (req, res) => {
       });
     }
 
-    // Remove sensitive data
-    const { 
-      password: _, 
-      verificationCode: __, 
-      verificationExpiry: ___, 
-      deletionCode: ____, 
+    const {
+      password: _,
+      verificationCode: __,
+      verificationExpiry: ___,
+      deletionCode: ____,
       deletionExpiry: _____,
       failedLoginAttempts: ______,
       accountLockedUntil: _______,
-      ...userWithoutSensitiveData 
+      ...rest
     } = user;
 
     res.status(200).json({
       success: true,
-      user: userWithoutSensitiveData,
+      user: rest,
     });
 
   } catch (error) {
@@ -533,44 +453,28 @@ export const requestAccountDeletion = async (req, res) => {
   const userId = req.user.userId;
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await prisma.user.findUnique({ where: { id: userId } });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid password',
-      });
+      return res.status(401).json({ success: false, message: 'Invalid password' });
     }
 
-    // Generate secure deletion confirmation code
     const deletionCode = generateSecureCode();
     const deletionExpiry = new Date(Date.now() + 15 * 60 * 1000);
     const hashedDeletionCode = await bcrypt.hash(deletionCode, 10);
 
-    // Update user with deletion code
     await prisma.user.update({
       where: { id: userId },
-      data: {
-        deletionCode: hashedDeletionCode,
-        deletionExpiry,
-      },
+      data: { deletionCode: hashedDeletionCode, deletionExpiry },
     });
 
-    // Send confirmation email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
+    await sendEmail({
       to: user.email,
       subject: 'Account Deletion Confirmation',
       html: `
@@ -590,9 +494,7 @@ export const requestAccountDeletion = async (req, res) => {
           <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
         </div>
       `,
-    };
-
-    await transporter.sendMail(mailOptions);
+    });
 
     res.status(200).json({
       success: true,
@@ -601,10 +503,7 @@ export const requestAccountDeletion = async (req, res) => {
 
   } catch (error) {
     console.error('Request account deletion error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
@@ -616,13 +515,10 @@ export const confirmAccountDeletion = async (req, res) => {
   const userId = req.user.userId;
 
   try {
-    // Find user with valid deletion code
     const user = await prisma.user.findFirst({
       where: {
         id: userId,
-        deletionExpiry: {
-          gte: new Date(),
-        },
+        deletionExpiry: { gte: new Date() },
       },
     });
 
@@ -633,7 +529,6 @@ export const confirmAccountDeletion = async (req, res) => {
       });
     }
 
-    // Compare hashed deletion code
     const isCodeValid = await bcrypt.compare(code, user.deletionCode);
 
     if (!isCodeValid) {
@@ -643,15 +538,10 @@ export const confirmAccountDeletion = async (req, res) => {
       });
     }
 
-    // Delete user and all related data
-    await prisma.user.delete({
-      where: { id: userId },
-    });
+    await prisma.user.delete({ where: { id: userId } });
 
-    // Send goodbye email
     try {
-      const mailOptions = {
-        from: process.env.EMAIL_USER,
+      await sendEmail({
         to: user.email,
         subject: 'Account Deleted Successfully',
         html: `
@@ -666,9 +556,7 @@ export const confirmAccountDeletion = async (req, res) => {
             <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
           </div>
         `,
-      };
-
-      await transporter.sendMail(mailOptions);
+      });
     } catch (emailError) {
       console.error('Failed to send goodbye email:', emailError);
     }
@@ -680,10 +568,7 @@ export const confirmAccountDeletion = async (req, res) => {
 
   } catch (error) {
     console.error('Confirm account deletion error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
@@ -691,24 +576,15 @@ export const cancelAccountDeletion = async (req, res) => {
   const userId = req.user.userId;
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await prisma.user.findUnique({ where: { id: userId } });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Clear deletion code and expiry
     await prisma.user.update({
       where: { id: userId },
-      data: {
-        deletionCode: null,
-        deletionExpiry: null,
-      },
+      data: { deletionCode: null, deletionExpiry: null },
     });
 
     res.status(200).json({
@@ -718,10 +594,7 @@ export const cancelAccountDeletion = async (req, res) => {
 
   } catch (error) {
     console.error('Cancel account deletion error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
@@ -736,7 +609,6 @@ export const refreshToken = async (req, res) => {
       });
     }
 
-    // Verify the refresh token
     const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
 
     if (decoded.tokenType !== 'refresh') {
@@ -746,39 +618,23 @@ export const refreshToken = async (req, res) => {
       });
     }
 
-    // Find user and verify stored refresh token
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-    });
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
 
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not found',
-      });
+      return res.status(401).json({ success: false, message: 'User not found' });
     }
 
-    // Check if refresh token exists and hasn't expired
     if (!user.refreshToken || !user.refreshTokenExpiresAt || user.refreshTokenExpiresAt < new Date()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Refresh token has expired',
-      });
+      return res.status(401).json({ success: false, message: 'Refresh token has expired' });
     }
 
-    // Verify the stored refresh token
     const isRefreshTokenValid = await bcrypt.compare(refreshToken, user.refreshToken);
 
     if (!isRefreshTokenValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid refresh token',
-      });
+      return res.status(401).json({ success: false, message: 'Invalid refresh token' });
     }
 
-    // Check if token was already used (token rotation security)
     if (user.refreshTokenUsed) {
-      // Security: invalidate all tokens and force re-login
       await prisma.user.update({
         where: { id: user.id },
         data: {
@@ -796,39 +652,25 @@ export const refreshToken = async (req, res) => {
       });
     }
 
-    // Generate new tokens
     const newAccessToken = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-      },
+      { userId: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
-      {
-        expiresIn: '15m', // 15 minutes
-      }
+      { expiresIn: '15m' }
     );
 
     const newRefreshToken = jwt.sign(
-      {
-        userId: user.id,
-        tokenType: 'refresh',
-      },
+      { userId: user.id, tokenType: 'refresh' },
       process.env.JWT_SECRET,
-      {
-        expiresIn: '7d', // 7 days
-      }
+      { expiresIn: '7d' }
     );
 
-    // Hash the new refresh token
     const hashedNewRefreshToken = await bcrypt.hash(newRefreshToken, 10);
 
-    // Update user with new refresh token and mark old one as used
     await prisma.user.update({
       where: { id: user.id },
       data: {
         refreshToken: hashedNewRefreshToken,
-        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        refreshTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         refreshTokenCreatedAt: new Date(),
         refreshTokenUsed: false,
         lastTokenRefreshAttempt: new Date(),
@@ -845,22 +687,13 @@ export const refreshToken = async (req, res) => {
     console.error('Refresh token error:', error);
 
     if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid refresh token',
-      });
+      return res.status(401).json({ success: false, message: 'Invalid refresh token' });
     }
 
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Refresh token has expired',
-      });
+      return res.status(401).json({ success: false, message: 'Refresh token has expired' });
     }
 
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
