@@ -624,7 +624,7 @@ export default function SellerDashboardScreen() {
               icon="cube-outline"
               title="Product Analytics"
               linkLabel="All Products"
-              onPress={() => navigation.navigate('Products' as any)}
+              onPress={() => navigation.navigate('ManageProducts' as any)}
             />
 
             {/* Snapshot pills */}
@@ -690,7 +690,7 @@ export default function SellerDashboardScreen() {
             <Card style={{ marginTop: 10 }}>
               <View style={[styles.rowBetween, { marginBottom: 14 }]}>
                 <Text style={styles.cardMicroLabel}>Top Selling Products</Text>
-                <TouchableOpacity onPress={() => navigation.navigate('Products' as any)}>
+                <TouchableOpacity onPress={() => navigation.navigate('ManageProducts' as any)}>
                   <Text style={[styles.cardMicroLabel, { color: Colors.primary }]}>See all →</Text>
                 </TouchableOpacity>
               </View>

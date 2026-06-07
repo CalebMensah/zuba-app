@@ -551,7 +551,7 @@ export const getSellerOrders = async (req, res) => {
             product: { select: { id: true, name: true, images: true, price: true } }
           }
         },
-        deliveryInfo: { select: { status: true, trackingNumber: true, deliveryType: true } },
+        deliveryInfo: { select: { status: true, trackingNumber: true } },
         buyer: { select: { id: true, firstName: true, email: true } },
         payment: true,
         escrow: true

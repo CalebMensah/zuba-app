@@ -68,10 +68,10 @@ export const getDashboardSummary = async (req, res) => {
         where: { storeId, isActive: true }
       }),
       prisma.order.count({
-        where: { storeId, status: 'PENDING' }
+        where: { storeId, status: 'PENDING_PAYMENT' }
       }),
       prisma.order.count({
-        where: { storeId, status: 'DELIVERED' }
+        where: { storeId, status: 'COMPLETED' }
       })
     ]);
 
