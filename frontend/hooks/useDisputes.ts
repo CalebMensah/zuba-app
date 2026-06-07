@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 
-
 export type DisputeType =
   | 'REFUND_REQUEST'
   | 'ITEM_NOT_AS_DESCRIBED'
@@ -12,7 +11,7 @@ export type DisputeType =
   | 'DAMAGED_ITEM'
   | 'OTHER';
 
-type DisputeStatus = 'PENDING' | 'RESOLVED' | 'CANCELLED';
+export type DisputeStatus = 'PENDING' | 'RESOLVED' | 'CANCELLED';
 
 export interface Dispute {
   id: string;
@@ -48,13 +47,13 @@ export interface Dispute {
         email: string;
       };
     };
-payment?: {
-  id: string;
-  amount: number;
-  status: string;
-  currency: string;
-  createdAt: string;
-}[];
+    payment?: {
+      id: string;
+      amount: number;
+      status: string;
+      currency: string;
+      createdAt: string;
+    }[];
     escrow?: {
       id: string;
       releaseStatus: string;
@@ -89,7 +88,6 @@ interface ApiResponse<T> {
   data?: T;
   error?: string;
 }
-
 
 export const useDisputes = () => {
   const [loading, setLoading] = useState(false);
@@ -173,7 +171,11 @@ export const useDisputes = () => {
     setError(null);
 
     try {
-      const response = await makeRequest<void>(`/disputes/${disputeId}/resolve`, 'POST', resolutionData);
+      const response = await makeRequest<void>(
+        `/disputes/${disputeId}/resolve`,
+        'POST',
+        resolutionData
+      );
 
       if (response.success) return true;
       throw new Error(response.message || 'Failed to resolve dispute');
@@ -193,10 +195,7 @@ export const useDisputes = () => {
     setError(null);
 
     try {
-      const response = await makeRequest<Dispute>(
-        `/disputes/${disputeId}`,
-        'GET'
-      );
+      const response = await makeRequest<Dispute>(`/disputes/${disputeId}`, 'GET');
 
       if (response.success && response.data) return response.data;
       throw new Error(response.message || 'Failed to fetch dispute');
@@ -209,7 +208,7 @@ export const useDisputes = () => {
     }
   }, []);
 
-  const getMyDisputes = useCallback(async (
+  const getUserDisputes = useCallback(async (
     page: number = 1,
     limit: number = 10,
     status?: DisputeStatus,
@@ -246,7 +245,7 @@ export const useDisputes = () => {
       throw new Error(response.message || 'Failed to fetch disputes');
     } catch (err: any) {
       setError(err.message);
-      console.error('Get my disputes error:', err);
+      console.error('Get user disputes error:', err);
       return null;
     } finally {
       setLoading(false);
@@ -261,7 +260,11 @@ export const useDisputes = () => {
     setError(null);
 
     try {
-      const response = await makeRequest<void>(`/disputes/${disputeId}/cancel`, 'PATCH');
+      const response = await makeRequest<void>(
+        `/disputes/${disputeId}/cancel`,
+        'PATCH',
+        reason ? { reason } : undefined
+      );
 
       if (response.success) return true;
       throw new Error(response.message || 'Failed to cancel dispute');
@@ -280,13 +283,10 @@ export const useDisputes = () => {
     loading,
     error,
     clearError,
-    // Buyer
     openDispute,
     cancelDispute,
-    // Shared
     getDisputeById,
-    getMyDisputes,
-    // Admin
+    getUserDisputes,
     resolveDispute,
   };
 };

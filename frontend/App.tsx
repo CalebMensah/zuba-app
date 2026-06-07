@@ -1,4 +1,3 @@
-// App.tsx
 import React, { useEffect } from 'react';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
@@ -10,20 +9,22 @@ import { ChatProvider } from './context/ChatContext';
 import RootNavigator from './navigation/RootNavigator';
 import { forceNavigateToLogin } from './utils/handleAuthRedirect';
 import { QueryProvider } from './src/providers/QueryProviders';
+import { StoreProvider } from './context/StoreContext';
 
 const navigationRef = React.createRef<NavigationContainerRef<any>>();
 
-// ✅ Separate component so it can call useAuth() safely inside AuthProvider
+
 const AppContent: React.FC = () => {
   const { user } = useAuth();
-
   return (
-    <CartProvider>
-      <ChatProvider currentUserId={user?.id || ''}>
-        <StatusBar style="auto" />
-        <RootNavigator />
-      </ChatProvider>
-    </CartProvider>
+    <StoreProvider>
+      <CartProvider>
+        <ChatProvider currentUserId={user?.id || ''}>
+          <StatusBar style="auto" />
+          <RootNavigator />
+        </ChatProvider>
+      </CartProvider>
+    </StoreProvider>
   );
 };
 
@@ -55,9 +56,8 @@ export default function App() {
       try {
         switch (data.screen) {
           case 'Chat':
-            // ✅ fix params to match ChatScreen's RouteParams
             navigationRef.current.navigate('Chat', {
-              chatRoomId: data.chatRoomId,   // was data.chatId — wrong key
+              chatRoomId: data.chatRoomId, 
               otherUserName: data.otherUserName,
               otherUserAvatar: data.otherUserAvatar || null,
               otherUserType: data.otherUserType,

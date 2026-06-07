@@ -1,4 +1,3 @@
-// src/hooks/useProducts.ts
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Alert } from 'react-native';
 import {
@@ -13,84 +12,76 @@ import {
   TrendingFilters,
 } from '../services/productApi';
 
-// Query Keys - Centralized for easy cache management
 export const productKeys = {
   all: ['products'] as const,
   lists: () => [...productKeys.all, 'list'] as const,
   list: (filters?: ProductFilters) => [...productKeys.lists(), filters] as const,
-  userProducts: (page?: number, limit?: number) => 
+  userProducts: (page?: number, limit?: number) =>
     [...productKeys.all, 'user', page, limit] as const,
   storeProducts: (storeUrl: string, filters?: ProductFilters) =>
     [...productKeys.all, 'store', storeUrl, filters] as const,
   detail: (url: string) => [...productKeys.all, 'detail', url] as const,
   deleted: () => [...productKeys.all, 'deleted'] as const,
-  topSelling: (filters?: TopSellingFilters) => 
+  topSelling: (filters?: TopSellingFilters) =>
     [...productKeys.all, 'top-selling', filters] as const,
   recommended: (productUrl: string, filters?: RecommendedFilters) =>
     [...productKeys.all, 'recommended', productUrl, filters] as const,
-  youMayLike: (filters?: YouMayLikeFilters) => 
+  youMayLike: (filters?: YouMayLikeFilters) =>
     [...productKeys.all, 'you-may-like', filters] as const,
-  trending: (filters?: TrendingFilters) => 
+  trending: (filters?: TrendingFilters) =>
     [...productKeys.all, 'trending', filters] as const,
 };
 
- // Get user's products with pagination
 export const useUserProducts = (page: number = 1, limit: number = 20) => {
   return useQuery({
     queryKey: productKeys.userProducts(page, limit),
     queryFn: () => productAPI.getUserProducts(page, limit),
-    staleTime: 30000, // Fresh for 30 seconds
+    staleTime: 0,
   });
 };
 
-//Get all products with filters
 export const useAllProducts = (filters?: ProductFilters) => {
   return useQuery({
     queryKey: productKeys.list(filters),
     queryFn: () => productAPI.getAllProducts(filters),
-    staleTime: 60000, // Fresh for 1 minute
-  });
-};
-
-//Get store products
-export const useStoreProducts = (storeUrl: string, filters?: ProductFilters) => {
-  return useQuery({
-    queryKey: productKeys.storeProducts(storeUrl, filters),
-    queryFn: () => productAPI.getStoreProducts(storeUrl, filters),
-    enabled: !!storeUrl, // Only run if storeUrl exists
     staleTime: 60000,
   });
 };
 
-// Get single product by URL
+export const useStoreProducts = (storeUrl: string, filters?: ProductFilters) => {
+  return useQuery({
+    queryKey: productKeys.storeProducts(storeUrl, filters),
+    queryFn: () => productAPI.getStoreProducts(storeUrl, filters),
+    enabled: !!storeUrl,
+    staleTime: 60000,
+  });
+};
+
 export const useProduct = (productUrl: string) => {
   return useQuery({
     queryKey: productKeys.detail(productUrl),
     queryFn: () => productAPI.getProductByUrl(productUrl),
     enabled: !!productUrl,
-    staleTime: 120000, // Fresh for 2 minutes
+    staleTime: 120000,
   });
 };
 
-// Get deleted products
 export const useDeletedProducts = () => {
   return useQuery({
     queryKey: productKeys.deleted(),
     queryFn: () => productAPI.getDeletedProducts(),
-    staleTime: 30000,
+    staleTime: 0,
   });
 };
 
-//Get top selling products
 export const useTopSellingProducts = (filters?: TopSellingFilters) => {
   return useQuery({
     queryKey: productKeys.topSelling(filters),
     queryFn: () => productAPI.getTopSellingProducts(filters),
-    staleTime: 300000, // Fresh for 5 minutes
+    staleTime: 300000,
   });
 };
 
-//Get recommended products
 export const useRecommendedProducts = (productUrl: string, filters?: RecommendedFilters) => {
   return useQuery({
     queryKey: productKeys.recommended(productUrl, filters),
@@ -100,7 +91,6 @@ export const useRecommendedProducts = (productUrl: string, filters?: Recommended
   });
 };
 
-// Get products you may like
 export const useYouMayLikeProducts = (filters?: YouMayLikeFilters) => {
   return useQuery({
     queryKey: productKeys.youMayLike(filters),
@@ -109,7 +99,6 @@ export const useYouMayLikeProducts = (filters?: YouMayLikeFilters) => {
   });
 };
 
-// Get trending products
 export const useTrendingProducts = (filters?: TrendingFilters) => {
   return useQuery({
     queryKey: productKeys.trending(filters),
@@ -118,21 +107,17 @@ export const useTrendingProducts = (filters?: TrendingFilters) => {
   });
 };
 
-// Create a new product
 export const useCreateProduct = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (productData: CreateProductData) => productAPI.createProduct(productData),
-    
+
     onMutate: async (newProductData) => {
-      // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: productKeys.userProducts() });
 
-      // Snapshot the previous value
       const previousProducts = queryClient.getQueryData(productKeys.userProducts(1, 20));
 
-      // Optimistically update - Create temp product
       const tempProduct: Product = {
         id: 'temp-' + Date.now(),
         storeId: 'temp-store',
@@ -145,8 +130,6 @@ export const useCreateProduct = () => {
         tags: newProductData.tags || [],
         sizes: newProductData.sizes || [],
         color: newProductData.color || [],
-        weight: newProductData.weight,
-        sellerNote: newProductData.sellerNote,
         moq: newProductData.moq,
         url: 'temp-url',
         isActive: true,
@@ -156,16 +139,12 @@ export const useCreateProduct = () => {
         updatedAt: new Date().toISOString(),
       };
 
-      // Add to cache immediately
       queryClient.setQueryData(productKeys.userProducts(1, 20), (old: any) => {
         if (!old) return { products: [tempProduct], pagination: { page: 1, limit: 20, total: 1, pages: 1 } };
         return {
           ...old,
           products: [tempProduct, ...old.products],
-          pagination: {
-            ...old.pagination,
-            total: old.pagination.total + 1,
-          },
+          pagination: { ...old.pagination, total: old.pagination.total + 1 },
         };
       });
 
@@ -173,24 +152,19 @@ export const useCreateProduct = () => {
     },
 
     onError: (err, newProduct, context) => {
-      // Rollback on error
       if (context?.previousProducts) {
-        queryClient.setQueryData(
-          productKeys.userProducts(1, 20),
-          context.previousProducts
-        );
+        queryClient.setQueryData(productKeys.userProducts(1, 20), context.previousProducts);
       }
       console.error('Create product error:', err);
     },
 
     onSuccess: () => {
-      // Invalidate and refetch to get real server data
       queryClient.invalidateQueries({ queryKey: productKeys.userProducts() });
+      queryClient.invalidateQueries({ queryKey: productKeys.userProducts(1, 20) });
     },
   });
 };
 
-// Update a product
 export const useUpdateProduct = () => {
   const queryClient = useQueryClient();
 
@@ -202,7 +176,6 @@ export const useUpdateProduct = () => {
       await queryClient.cancelQueries({ queryKey: productKeys.userProducts() });
       const previousProducts = queryClient.getQueryData(productKeys.userProducts(1, 20));
 
-      // Optimistically update
       queryClient.setQueryData(productKeys.userProducts(1, 20), (old: any) => {
         if (!old) return old;
         return {
@@ -218,24 +191,19 @@ export const useUpdateProduct = () => {
 
     onError: (err, variables, context) => {
       if (context?.previousProducts) {
-        queryClient.setQueryData(
-          productKeys.userProducts(1, 20),
-          context.previousProducts
-        );
+        queryClient.setQueryData(productKeys.userProducts(1, 20), context.previousProducts);
       }
       console.error('Update product error:', err);
     },
 
-    onSuccess: (data, variables) => {
-      // Update the specific product detail cache
+    onSuccess: (data) => {
       queryClient.setQueryData(productKeys.detail(data.url), data);
-      // Invalidate user products list
       queryClient.invalidateQueries({ queryKey: productKeys.userProducts() });
+      queryClient.invalidateQueries({ queryKey: productKeys.userProducts(1, 20) });
     },
   });
 };
 
-// Soft delete a product
 export const useSoftDeleteProduct = () => {
   const queryClient = useQueryClient();
 
@@ -246,16 +214,12 @@ export const useSoftDeleteProduct = () => {
       await queryClient.cancelQueries({ queryKey: productKeys.userProducts() });
       const previousProducts = queryClient.getQueryData(productKeys.userProducts(1, 20));
 
-      // Remove from UI immediately
       queryClient.setQueryData(productKeys.userProducts(1, 20), (old: any) => {
         if (!old) return old;
         return {
           ...old,
           products: old.products.filter((p: Product) => p.id !== productId),
-          pagination: {
-            ...old.pagination,
-            total: old.pagination.total - 1,
-          },
+          pagination: { ...old.pagination, total: old.pagination.total - 1 },
         };
       });
 
@@ -264,23 +228,20 @@ export const useSoftDeleteProduct = () => {
 
     onError: (err, productId, context) => {
       if (context?.previousProducts) {
-        queryClient.setQueryData(
-          productKeys.userProducts(1, 20),
-          context.previousProducts
-        );
+        queryClient.setQueryData(productKeys.userProducts(1, 20), context.previousProducts);
       }
       Alert.alert('Error', 'Failed to delete product. Please try again.');
       console.error('Delete product error:', err);
     },
 
     onSuccess: () => {
-      // Invalidate deleted products list
       queryClient.invalidateQueries({ queryKey: productKeys.deleted() });
+      queryClient.invalidateQueries({ queryKey: productKeys.userProducts() });
+      queryClient.invalidateQueries({ queryKey: productKeys.userProducts(1, 20) });
     },
   });
 };
 
-// Hard delete a product
 export const useDeleteProduct = () => {
   const queryClient = useQueryClient();
 
@@ -291,7 +252,6 @@ export const useDeleteProduct = () => {
       await queryClient.cancelQueries({ queryKey: productKeys.deleted() });
       const previousDeletedProducts = queryClient.getQueryData(productKeys.deleted());
 
-      // Remove from deleted products list
       queryClient.setQueryData(productKeys.deleted(), (old: Product[] | undefined) => {
         if (!old) return old;
         return old.filter((p: Product) => p.id !== productId);
@@ -310,7 +270,6 @@ export const useDeleteProduct = () => {
   });
 };
 
-// Restore a deleted product
 export const useRestoreProduct = () => {
   const queryClient = useQueryClient();
 
@@ -321,7 +280,6 @@ export const useRestoreProduct = () => {
       await queryClient.cancelQueries({ queryKey: productKeys.deleted() });
       const previousDeletedProducts = queryClient.getQueryData(productKeys.deleted());
 
-      // Remove from deleted products list optimistically
       queryClient.setQueryData(productKeys.deleted(), (old: Product[] | undefined) => {
         if (!old) return old;
         return old.filter((p: Product) => p.id !== productId);
@@ -339,26 +297,21 @@ export const useRestoreProduct = () => {
     },
 
     onSuccess: () => {
-      // Invalidate user products to show the restored product
       queryClient.invalidateQueries({ queryKey: productKeys.userProducts() });
+      queryClient.invalidateQueries({ queryKey: productKeys.userProducts(1, 20) });
     },
   });
 };
 
-
-// Invalidate all product queries
 export const useInvalidateProducts = () => {
   const queryClient = useQueryClient();
-
   return () => {
     queryClient.invalidateQueries({ queryKey: productKeys.all });
   };
 };
 
-// Prefetch products (useful for performance optimization)
 export const usePrefetchUserProducts = () => {
   const queryClient = useQueryClient();
-
   return (page: number = 1, limit: number = 20) => {
     queryClient.prefetchQuery({
       queryKey: productKeys.userProducts(page, limit),
@@ -366,5 +319,3 @@ export const usePrefetchUserProducts = () => {
     });
   };
 };
-
-

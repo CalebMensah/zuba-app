@@ -20,14 +20,12 @@ import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { SellerStackParamList } from '../../types/navigation';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSellerDashboard } from '../../hooks/useSellerDashboard';
-import { useStore } from '../../hooks/useStore';
+import { useStore } from '../../context/StoreContext';
 import { Colors } from '../../constants/colors';
 
 const { width } = Dimensions.get('window');
 const CHART_WIDTH = width - 64;
 const CHART_HEIGHT = 120;
-
-// ─── Mini Bar Chart ───────────────────────────────────────────────────────────
 
 const MiniBarChart = ({
   data,
@@ -50,8 +48,6 @@ const MiniBarChart = ({
     </View>
   );
 };
-
-// ─── Mini Line Chart (SVG-free, pure RN) ─────────────────────────────────────
 
 const MiniSparkline = ({
   data,
@@ -114,7 +110,6 @@ const MiniSparkline = ({
   );
 };
 
-// ─── Donut Chart (CSS-free, RN View trick) ────────────────────────────────────
 
 const DonutSlice = ({ data, size = 80 }: { data: { value: number; color: string; label: string }[]; size?: number }) => {
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
@@ -143,8 +138,6 @@ const DonutSlice = ({ data, size = 80 }: { data: { value: number; color: string;
     </View>
   );
 };
-
-// ─── Section Header ───────────────────────────────────────────────────────────
 
 const SectionHeader = ({
   icon,

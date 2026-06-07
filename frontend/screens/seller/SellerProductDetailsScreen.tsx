@@ -234,7 +234,7 @@ const SellerProductDetailsScreen: React.FC<SellerProductDetailsScreenProps> = ({
           {/* Title and Price */}
           <View style={styles.header}>
             <Text style={styles.productName}>{product.name}</Text>
-            <Text style={styles.price}>GH₵{product.price.toFixed(2)}</Text>
+            <Text style={styles.price}>GH₵{parseFloat(String(product.price)).toFixed(2)}</Text>
           </View>
 
           {/* Stock Info */}

@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useStore } from '../../hooks/useStore';
+import { useStore } from '../../context/StoreContext';
 import { useUserProducts, useSoftDeleteProduct } from '../../hooks/useProducts';
 import { Product } from '../../services/productApi';
 import { Colors } from '../../constants/colors';

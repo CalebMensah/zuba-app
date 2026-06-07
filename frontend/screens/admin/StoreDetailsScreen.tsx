@@ -15,8 +15,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
-import { useStore } from '../../hooks/useStore';
-import { useProduct } from '../../hooks/useProducts';
+import { useStore } from '../../context/StoreContext';
+import { useStoreProducts } from '../../hooks/useProducts';
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
 import { useReviews } from '../../hooks/useReview';
 import { useAdmin } from '../../hooks/useAdmin';
@@ -37,7 +37,11 @@ export default function SellerPublicStoreScreen({
 }: SellerPublicStoreProps) {
   const { storeId } = route.params || {};
   const { store, loading, error, getStoreById, clearStore } = useStore();
-  const { products, loading: productsLoading, getStoreProducts } = useProduct();
+
+  const storeUrl = route?.params?.storeUrl ?? store?.url;
+  const storeProductsQuery = useStoreProducts(storeUrl, { page: 1, limit: 10 });
+  const products = storeProductsQuery.data?.products ?? [];
+  const productsLoading = storeProductsQuery.isLoading || storeProductsQuery.isFetching;
   const {
     loading: followLoading,
     followStore,
@@ -108,12 +112,9 @@ export default function SellerPublicStoreScreen({
     }
   };
 
-  const fetchProducts = async (storeUrl: string) => {
-    try {
-      await getStoreProducts(storeUrl, { page: 1, limit: 10 });
-    } catch (err) {
-      console.error('Error fetching products:', err);
-    }
+  // Products are fetched via useStoreProducts (TanStack Query)
+  const fetchProducts = async (_storeUrl: string) => {
+    // no-op (kept to avoid touching other refresh logic too much)
   };
 
   const fetchStoreReviews = async () => {

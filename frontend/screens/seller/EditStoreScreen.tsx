@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { useStore } from '../../hooks/useStore';
+import { useStore } from '../../context/StoreContext';
 import { Colors } from '../../constants/colors';
 
 // Region options based on Ghana's regions

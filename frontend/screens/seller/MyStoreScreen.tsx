@@ -15,7 +15,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SellerStackParamList } from '../../types/navigation';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useStore } from '../../hooks/useStore';
+import { useStore } from '../../context/StoreContext';
 import { Colors } from '../../constants/colors';
 
 const MyStoreScreen = () => {

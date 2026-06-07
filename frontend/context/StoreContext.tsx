@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Store, User, StoreVerification } from '../types/store';
@@ -28,17 +28,31 @@ interface ApiResponse<T> {
   error?: string;
 }
 
-// Configuration
+interface StoreContextValue {
+  store: Store | null;
+  loading: boolean;
+  error: string | null;
+  createStore: (data: CreateStoreData) => Promise<Store | null>;
+  updateStore: (storeId: string, data: UpdateStoreData) => Promise<Store | null>;
+  deleteStore: (storeId: string) => Promise<boolean>;
+  getStoreBySlug: (slug: string) => Promise<Store | null>;
+  getUserStore: () => Promise<Store | null>;
+  getStoreById: (id: string) => Promise<Store | null>;
+  clearError: () => void;
+  clearStore: () => void;
+}
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 const TOKEN_KEY = 'token';
 const USER_KEY = 'user';
 
-export const useStore = () => {
+const StoreContext = createContext<StoreContextValue | null>(null);
+
+export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [store, setStore] = useState<Store | null>(null);
 
-  // Helper function to get auth token
   const getAuthToken = async (): Promise<string | null> => {
     try {
       return await AsyncStorage.getItem(TOKEN_KEY);
@@ -48,40 +62,13 @@ export const useStore = () => {
     }
   };
 
-  // Helper function to get user data
-  const getUserData = async (): Promise<User | null> => {
-    try {
-      const userData = await AsyncStorage.getItem(USER_KEY);
-      return userData ? JSON.parse(userData) : null;
-    } catch (err) {
-      console.error('Error getting user data:', err);
-      return null;
-    }
-  };
-
-  // Helper function to get user ID
-  const getUserId = async (): Promise<string | null> => {
-    try {
-      const user = await getUserData();
-      return user?.id || null;
-    } catch (err) {
-      console.error('Error getting user ID:', err);
-      return null;
-    }
-  };
-
-  // Helper function to create FormData with image
   const createFormData = (data: any, imageField: string, image?: ImagePicker.ImagePickerAsset) => {
     const formData = new FormData();
-
-    // Add all text fields
     Object.keys(data).forEach(key => {
       if (data[key] !== undefined && key !== imageField) {
         formData.append(key, data[key]);
       }
     });
-
-    // Add image if provided
     if (image) {
       const imageFile: any = {
         uri: image.uri,
@@ -90,20 +77,15 @@ export const useStore = () => {
       };
       formData.append(imageField, imageFile);
     }
-
     return formData;
   };
 
-  // Create store
   const createStore = useCallback(async (storeData: CreateStoreData): Promise<Store | null> => {
     setLoading(true);
     setError(null);
-
     try {
       const token = await getAuthToken();
-      if (!token) {
-        throw new Error('Authentication required');
-      }
+      if (!token) throw new Error('Authentication required');
 
       const formData = createFormData(
         {
@@ -119,28 +101,20 @@ export const useStore = () => {
 
       const response = await fetch(`${API_BASE_URL}/stores`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          // Don't set Content-Type for FormData - fetch will set it with boundary
-        },
+        headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
 
       const result: ApiResponse<Store> = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to create store');
-      }
+      if (!response.ok || !result.success) throw new Error(result.message || 'Failed to create store');
 
       if (result.data) {
         setStore(result.data);
         return result.data;
       }
-
       return null;
     } catch (err: any) {
-      const errorMessage = err.message || 'An error occurred while creating the store';
-      setError(errorMessage);
+      setError(err.message || 'An error occurred while creating the store');
       console.error('Create store error:', err);
       return null;
     } finally {
@@ -148,19 +122,12 @@ export const useStore = () => {
     }
   }, []);
 
-  // Update store
-  const updateStore = useCallback(async (
-    storeId: string,
-    updateData: UpdateStoreData
-  ): Promise<Store | null> => {
+  const updateStore = useCallback(async (storeId: string, updateData: UpdateStoreData): Promise<Store | null> => {
     setLoading(true);
     setError(null);
-
     try {
       const token = await getAuthToken();
-      if (!token) {
-        throw new Error('Authentication required');
-      }
+      if (!token) throw new Error('Authentication required');
 
       const formData = createFormData(
         {
@@ -175,27 +142,20 @@ export const useStore = () => {
 
       const response = await fetch(`${API_BASE_URL}/stores/${storeId}`, {
         method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
 
       const result: ApiResponse<Store> = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to update store');
-      }
+      if (!response.ok || !result.success) throw new Error(result.message || 'Failed to update store');
 
       if (result.data) {
         setStore(result.data);
         return result.data;
       }
-
       return null;
     } catch (err: any) {
-      const errorMessage = err.message || 'An error occurred while updating the store';
-      setError(errorMessage);
+      setError(err.message || 'An error occurred while updating the store');
       console.error('Update store error:', err);
       return null;
     } finally {
@@ -203,36 +163,25 @@ export const useStore = () => {
     }
   }, []);
 
-  // Delete store
   const deleteStore = useCallback(async (storeId: string): Promise<boolean> => {
     setLoading(true);
     setError(null);
-
     try {
       const token = await getAuthToken();
-      if (!token) {
-        throw new Error('Authentication required');
-      }
+      if (!token) throw new Error('Authentication required');
 
       const response = await fetch(`${API_BASE_URL}/stores/${storeId}`, {
         method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
 
       const result: ApiResponse<null> = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to delete store');
-      }
+      if (!response.ok || !result.success) throw new Error(result.message || 'Failed to delete store');
 
       setStore(null);
       return true;
     } catch (err: any) {
-      const errorMessage = err.message || 'An error occurred while deleting the store';
-      setError(errorMessage);
+      setError(err.message || 'An error occurred while deleting the store');
       console.error('Delete store error:', err);
       return false;
     } finally {
@@ -240,34 +189,25 @@ export const useStore = () => {
     }
   }, []);
 
-  // Get store by slug
   const getStoreBySlug = useCallback(async (slug: string): Promise<Store | null> => {
     setLoading(true);
     setError(null);
-
     try {
       const response = await fetch(`${API_BASE_URL}/stores/s/${slug}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
 
       const result: ApiResponse<Store> = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Store not found');
-      }
+      if (!response.ok || !result.success) throw new Error(result.message || 'Store not found');
 
       if (result.data) {
         setStore(result.data);
         return result.data;
       }
-
       return null;
     } catch (err: any) {
-      const errorMessage = err.message || 'An error occurred while fetching the store';
-      setError(errorMessage);
+      setError(err.message || 'An error occurred while fetching the store');
       console.error('Get store by slug error:', err);
       return null;
     } finally {
@@ -275,29 +215,21 @@ export const useStore = () => {
     }
   }, []);
 
-  // Get user's store
   const getUserStore = useCallback(async (): Promise<Store | null> => {
     setLoading(true);
     setError(null);
-
     try {
       const token = await getAuthToken();
-      if (!token) {
-        throw new Error('Authentication required');
-      }
+      if (!token) throw new Error('Authentication required');
 
       const response = await fetch(`${API_BASE_URL}/stores/my-store`, {
         method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
 
       const result: ApiResponse<Store> = await response.json();
 
       if (!response.ok) {
-        // If 404, user doesn't have a store yet
         if (response.status === 404) {
           setStore(null);
           return null;
@@ -307,14 +239,11 @@ export const useStore = () => {
 
       if (result.data) {
         setStore(result.data);
-        console.log('user store details', result.data);
         return result.data;
       }
-
       return null;
     } catch (err: any) {
-      const errorMessage = err.message || 'An error occurred while fetching your store';
-      setError(errorMessage);
+      setError(err.message || 'An error occurred while fetching your store');
       console.error('Get user store error:', err);
       return null;
     } finally {
@@ -322,22 +251,13 @@ export const useStore = () => {
     }
   }, []);
 
-  // Get public store by ID
   const getStoreById = useCallback(async (id: string): Promise<Store | null> => {
     setLoading(true);
     setError(null);
-
     try {
       const token = await getAuthToken();
-      
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-      };
-
-      // Add token if available (for view tracking)
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
 
       const response = await fetch(`${API_BASE_URL}/stores/${id}`, {
         method: 'GET',
@@ -345,21 +265,15 @@ export const useStore = () => {
       });
 
       const result: ApiResponse<Store> = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Store not found');
-      }
+      if (!response.ok || !result.success) throw new Error(result.message || 'Store not found');
 
       if (result.data) {
         setStore(result.data);
-        console.log('seller store details', result.data);
         return result.data;
       }
-
       return null;
     } catch (err: any) {
-      const errorMessage = err.message || 'An error occurred while fetching the store';
-      setError(errorMessage);
+      setError(err.message || 'An error occurred while fetching the store');
       console.error('Get store by ID error:', err);
       return null;
     } finally {
@@ -367,27 +281,30 @@ export const useStore = () => {
     }
   }, []);
 
-  // Clear error
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
+  const clearError = useCallback(() => setError(null), []);
+  const clearStore = useCallback(() => setStore(null), []);
 
-  // Clear store
-  const clearStore = useCallback(() => {
-    setStore(null);
-  }, []);
+  return (
+    <StoreContext.Provider value={{
+      store,
+      loading,
+      error,
+      createStore,
+      updateStore,
+      deleteStore,
+      getStoreBySlug,
+      getUserStore,
+      getStoreById,
+      clearError,
+      clearStore,
+    }}>
+      {children}
+    </StoreContext.Provider>
+  );
+};
 
-  return {
-    store,
-    loading,
-    error,
-    createStore,
-    updateStore,
-    deleteStore,
-    getStoreBySlug,
-    getUserStore,
-    getStoreById,
-    clearError,
-    clearStore,
-  };
+export const useStore = (): StoreContextValue => {
+  const context = useContext(StoreContext);
+  if (!context) throw new Error('useStore must be used within a StoreProvider');
+  return context;
 };

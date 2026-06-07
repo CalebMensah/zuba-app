@@ -13,7 +13,7 @@ import {
   FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useStore } from '../../hooks/useStore';
+import { useStore } from '../../context/StoreContext';
 import { useStoreProducts } from '../../hooks/useProducts';
 
 import { useStoreFollowing } from '../../hooks/useStoreFollowings';
@@ -100,8 +100,6 @@ export default function SellerPublicStoreScreen({
       console.error('Error fetching follower count:', err);
     }
   };
-
-  // Products are fetched via react-query (useStoreProducts) once store?.url is available.
 
 
   const fetchStoreReviews = async () => {
