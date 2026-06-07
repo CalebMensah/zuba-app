@@ -451,7 +451,7 @@ export const getPaymentSummary = async (req, res) => {
       prisma.escrow.aggregate({
         _sum: { amountHeld: true },
         _count: { id: true },
-        where: { releaseStatus: 'PENDING', order: { storeId } }
+        where: { releaseStatus: 'HELD', order: { storeId } }
       }),
       // Escrow: funds released
       prisma.escrow.aggregate({
@@ -951,14 +951,14 @@ export const getEscrowOverview = async (req, res) => {
       prisma.escrow.aggregate({
         _sum: { amountHeld: true },
         _count: { id: true },
-        where: { releaseStatus: 'PENDING', order: { storeId } }
+        where: { releaseStatus: 'HELD', order: { storeId } }
       }),
       // Releasing within 48 hours
       prisma.escrow.aggregate({
         _sum: { amountHeld: true },
         _count: { id: true },
         where: {
-          releaseStatus: 'PENDING',
+          releaseStatus: 'HELD',
           order: { storeId },
           releaseDate: { lte: in48Hours }
         }
