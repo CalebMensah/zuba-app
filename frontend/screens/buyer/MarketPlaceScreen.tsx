@@ -198,7 +198,7 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
         )}
 
         <View style={styles.bottomRow}>
-          <Text style={styles.priceText}>GH₵{item.price.toFixed(2)}</Text>
+          <Text style={styles.priceText}>GH₵{parseFloat(item.price.toString()).toFixed(2)}</Text>
           {item.quantityBought > 0 && (
             <Text style={styles.soldText}>{item.quantityBought} sold</Text>
           )}
@@ -233,7 +233,6 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
     );
   }, [selectedCategory, handleCategorySelect]);
 
-  // FIX: Banner rendered via FlatList — no pagingEnabled + scrollTo conflict
   const renderBannerItem = useCallback(({ item }: { item: any }) => (
     <Image
       source={item}
@@ -244,16 +243,12 @@ const MarketplaceScreen: React.FC<MarketplaceScreenProps> = ({ navigation }) => 
 
   const bannerKeyExtractor = useCallback((_: any, index: number) => String(index), []);
 
-  // FIX: getItemLayout is required for scrollToIndex to work reliably
   const getBannerItemLayout = useCallback((_: any, index: number) => ({
     length: BANNER_WIDTH,
     offset: BANNER_WIDTH * index,
     index,
   }), []);
 
-  // FIX: useCallback with all dependencies so FlatList gets a stable header reference
-  // This prevents the header from unmounting/remounting on every activeBanner tick,
-  // which is what was causing the category ScrollView to reset its scroll position.
   const renderHeader = useCallback(() => (
     <View style={styles.headerContainer}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
