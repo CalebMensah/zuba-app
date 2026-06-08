@@ -104,6 +104,7 @@ export const processRefund = async ({
       toName: order.buyer.name,
       subject: 'Refund Processed',
       template: 'generic',
+      sender: 'no_reply',
       templateData: {
         title: 'Refund Processed',
         message: `Your refund of ${amount} ${currency} for order #${orderId} has been processed. It should appear in your account within 5-10 business days.`
@@ -124,6 +125,7 @@ export const processRefund = async ({
       toName: order.store.user.name,
       subject: 'Refund Issued',
       template: 'generic',
+      sender: 'no_reply',
       templateData: {
         title: 'Refund Issued',
         message: `A refund of ${amount} ${currency} has been issued for order #${orderId}. Reason: ${reason}`

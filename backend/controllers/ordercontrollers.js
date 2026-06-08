@@ -156,7 +156,7 @@ export const createOrder = async (req, res) => {
                 total: item.total,
                 price: item.price,
                 commission: item.commission,
-                sellerPayout: item.sellerPayout,  // Still per-item
+                sellerPayout: item.sellerPayout,
                 color: item.color || null,
                 size: item.size || null,
               }))
@@ -252,6 +252,7 @@ export const createOrder = async (req, res) => {
             toName: storeUser.firstName,
             subject: `New Order (#${order.id}) Received`,
             template: 'generic',
+            sender: 'orders',
             templateData: {
               title: 'New Order Alert!',
               message: `You have a new order (#${order.id}) from ${req.user.firstName}. Please check your dashboard to process it.`,
@@ -943,6 +944,7 @@ export const updateOrderStatus = async (req, res) => {
           toName: buyerName,
           subject: `Your Order (#${orderId}) has been Confirmed`,
           template: 'generic',
+          sender: 'orders',
           templateData: {
             title: 'Order Confirmed!',
             message: `Your order #${orderId} from ${storeName} has been confirmed. It will be processed and shipped soon.`,
@@ -1284,6 +1286,7 @@ export const cancelOrder = async (req, res) => {
         toName: cancelledForName,
         subject: `Order (#${orderId}) has been Cancelled`,
         template: 'generic',
+        sender: 'orders',
         templateData: {
           title: 'Order Cancelled',
           message: `Order #${orderId} has been cancelled by the ${cancelledBy}. ${reason ? `Reason: ${reason}` : ''}`,
@@ -1989,6 +1992,7 @@ export const acceptOrder = async (req, res) => {
         toName: buyerName,
         subject: `Your Order (#${orderId}) is Being Processed`,
         template: 'generic',
+        sender: 'orders',
         templateData: {
           title: 'Order Being Processed!',
           message: `Good news! Your order #${orderId} from ${storeName} has been accepted by the seller and is now being processed.`,
@@ -2259,6 +2263,7 @@ export const rejectOrder = async (req, res) => {
         to: order.buyer.email,
         toName: buyerName,
         subject: `Order (#${orderId}) Rejected - Refund Processed`,
+        sender: 'orders',
         template: 'generic',
         templateData: {
           title: 'Order Rejected',

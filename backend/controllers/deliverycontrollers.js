@@ -201,6 +201,7 @@ export const shipOrder = async (req, res) => {
         toName: order.buyer.firstName,
         subject: `Your Order (#${orderId}) Has Been Shipped!`,
         template: 'order_shipped',
+        sender:'orders',
         templateData: {
           orderId,
           courierService,
@@ -345,6 +346,7 @@ export const updateDeliveryInfo = async (req, res) => {
           toName: order.buyer.firstName,
           subject: `Tracking Updated for Order #${orderId}`,
           template: 'generic',
+          sender:'orders',
           templateData: {
             title: 'Tracking Information Updated',
             message: `Your order #${orderId} now has tracking number: ${trackingNumber}`,

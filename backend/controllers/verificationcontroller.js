@@ -12,13 +12,10 @@ const sanitizeVerificationForUser = (verification) => {
 };
 
 const sanitizeVerificationForAdmin = (verification) => {
-  // Admins get full access but we can still add signed URLs in the future
   return verification;
 };
 
-// Generate signed URLs for documents (implement this based on your Cloudinary setup)
 const generateSignedDocumentUrls = async (verification) => {
-  // This is a placeholder - implement actual Cloudinary signed URL generation
   return {
     ghanaCardFront: verification.ghanaCardFront,
     ghanaCardBack: verification.ghanaCardBack,
@@ -28,13 +25,11 @@ const generateSignedDocumentUrls = async (verification) => {
 };
 
 export const submitStoreVerification = async (req, res) => {
-  // Start transaction for atomicity
   const transaction = await prisma.$transaction(async (tx) => {
     try {
       const { rejectionReason } = req.body;
       const userId = req.user.userId;
 
-      // Find the user's store with transaction
       const store = await tx.store.findFirst({
         where: { userId },
         include: {
@@ -52,12 +47,10 @@ export const submitStoreVerification = async (req, res) => {
         throw new Error('STORE_NOT_FOUND');
       }
 
-      // Verify ownership (additional security layer)
       if (store.userId !== userId) {
         throw new Error('UNAUTHORIZED_STORE_ACCESS');
       }
 
-      // Check if verification already exists
       const existingVerification = await tx.storeVerification.findUnique({
         where: { storeId: store.id }
       });
@@ -66,7 +59,6 @@ export const submitStoreVerification = async (req, res) => {
         throw new Error('ALREADY_VERIFIED');
       }
 
-      // Check for recent submissions to prevent spam
       if (existingVerification && existingVerification.status === 'pending') {
         const hoursSinceSubmission = 
           (Date.now() - existingVerification.createdAt.getTime()) / (1000 * 60 * 60);
@@ -77,19 +69,16 @@ export const submitStoreVerification = async (req, res) => {
       }
 
       const { ghanaCardFront, ghanaCardBack, selfie, businessDoc } = req.files;
-
-      // Upload documents to Cloudinary with authenticated access
       let uploadedUrls = [];
       let ghanaCardFrontUrl, ghanaCardBackUrl, selfieUrl, businessDocUrl = null;
 
       try {
-        // Upload with authenticated access and transformations
         const frontRes = await uploadToCloudinary(
           ghanaCardFront[0].buffer, 
           { 
             folder: 'store-verifications/ghana-card',
             resource_type: 'image',
-            type: 'authenticated', // Important: authenticated access
+            type: 'authenticated',
             access_mode: 'authenticated',
             invalidate: true,
             transformation: [
@@ -183,7 +172,6 @@ export const submitStoreVerification = async (req, res) => {
       const isResubmission = !!existingVerification;
 
       if (existingVerification) {
-        // Delete old documents
         const oldUrls = [
           existingVerification.ghanaCardFront,
           existingVerification.ghanaCardBack,
@@ -191,7 +179,6 @@ export const submitStoreVerification = async (req, res) => {
           existingVerification.businessDoc
         ].filter(Boolean);
 
-        // Delete in background (don't block the response)
         Promise.all(oldUrls.map(url => 
           deleteFromCloudinary(url).catch(err => 
             console.error('Background deletion error:', err)
@@ -253,7 +240,6 @@ export const submitStoreVerification = async (req, res) => {
     cache.del(`store:${store.id}:verification`)
   ]);
 
-  // Send notifications (outside transaction, non-blocking)
   Promise.all([
     sendNotification(
       req.user.userId,
@@ -276,6 +262,7 @@ export const submitStoreVerification = async (req, res) => {
         ? 'Verification Documents Resubmitted'
         : 'Store Verification Submitted - Under Review',
       template: 'generic',
+      sender: 'no_reply',
       templateData: {
         title: isResubmission ? 'Documents Resubmitted ✓' : 'Verification Submitted ✓',
         message: isResubmission
@@ -668,6 +655,7 @@ export const updateVerificationStatus = asyncHandler(async (req, res) => {
         ? `${store.name} - Store Verified!` 
         : `${store.name} - Verification Update Required`,
       template: 'verification_status',
+      sender: 'no_reply',
       templateData: {
         storeName: store.name,
         status,

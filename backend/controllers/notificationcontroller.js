@@ -18,8 +18,6 @@ const invalidateNotificationCaches = async (userId) => {
     `notifications:user:${userId}:unread:count`
   ];
 
-  // Also invalidate paginated cache keys (delete pattern)
-  // Note: This is a simple approach. For production, consider using Redis SCAN
   for (let page = 1; page <= 10; page++) {
     for (const readFilter of ['true', 'false', 'undefined']) {
       cacheKeys.push(`notifications:user:${userId}:page:${page}:limit:10:read:${readFilter}`);
@@ -34,7 +32,6 @@ export const createNotification = async (req, res) => {
   try {
     const { userId, title, message, type, data } = req.body;
 
-    // Verify user exists (security check)
     const userExists = await prisma.user.findUnique({
       where: { id: userId },
       select: { id: true }
@@ -47,7 +44,6 @@ export const createNotification = async (req, res) => {
       });
     }
 
-    // Create notification
     const notification = await prisma.notification.create({
       data: {
         userId,

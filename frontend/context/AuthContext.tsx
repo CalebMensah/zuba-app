@@ -22,7 +22,7 @@ interface AuthContextType {
   refreshAccessToken: () => Promise<string | null>;
 }
 
-const API_BASE_URL = 'https://zuba-app.onrender.com/api'
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{

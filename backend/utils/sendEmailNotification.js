@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { cache } from '../config/redis.js';
 import dotenv from 'dotenv'
+import { EMAIL_SENDERS } from '../config/emailAddresses.js';
 
 dotenv.config()
 
@@ -350,6 +351,87 @@ const templates = {
     `;
     return baseTemplate(content, title || 'Notification from Zuba');
   },
+
+
+  verification_code: ({ toName, code }) => {
+    const content = `
+      <h2 style="color: ${BRAND_COLORS.primary}; margin: 0 0 20px 0; font-size: 24px;">
+        Email Verification
+      </h2>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 15px;">
+        Hi <strong>${toName}</strong>,
+      </p>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+        Thank you for signing up! Your verification code is:
+      </p>
+      <div style="text-align: center; margin: 30px 0;">
+        <span style="font-size: 32px; font-weight: bold; background: #EEF2FF; color: ${BRAND_COLORS.primary}; padding: 15px 30px; border-radius: 8px; letter-spacing: 6px;">
+          ${code}
+        </span>
+      </div>
+      <div style="background-color: #FEF3C7; border-left: 4px solid ${BRAND_COLORS.warning}; padding: 15px; margin-top: 25px;">
+        <p style="margin: 0; font-size: 14px; color: ${BRAND_COLORS.text};">
+          This code will expire in <strong>10 minutes</strong>.<br>
+          If you didn't request this, please ignore this email.
+        </p>
+      </div>
+    `;
+    return baseTemplate(content, 'Your Zuba verification code');
+  },
+
+  account_deletion: ({ toName, code }) => {
+    const content = `
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="display: inline-block; background-color: ${BRAND_COLORS.danger}; color: white; width: 64px; height: 64px; border-radius: 50%; line-height: 64px; font-size: 32px;">
+          &#9888;
+        </div>
+      </div>
+      <h2 style="color: ${BRAND_COLORS.danger}; margin: 0 0 20px 0; font-size: 24px;">
+        Account Deletion Request
+      </h2>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 15px;">
+        Hi <strong>${toName}</strong>,
+      </p>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+        We received a request to permanently delete your account. Use the code below to confirm:
+      </p>
+      <div style="text-align: center; margin: 30px 0;">
+        <span style="font-size: 32px; font-weight: bold; background: #FEF2F2; color: ${BRAND_COLORS.danger}; padding: 15px 30px; border-radius: 8px; letter-spacing: 6px;">
+          ${code}
+        </span>
+      </div>
+      <div style="background-color: #FEF2F2; border-left: 4px solid ${BRAND_COLORS.danger}; padding: 15px; margin-top: 25px;">
+        <p style="margin: 0; font-size: 14px; color: ${BRAND_COLORS.text};">
+          <strong>Warning:</strong> This action is permanent and cannot be undone.<br>
+          This code expires in <strong>15 minutes</strong>.<br>
+          If you didn't request this, please secure your account immediately.
+        </p>
+      </div>
+    `;
+    return baseTemplate(content, 'Confirm your account deletion');
+  },
+
+  account_deleted: ({ toName }) => {
+    const content = `
+      <h2 style="color: ${BRAND_COLORS.text}; margin: 0 0 20px 0; font-size: 24px;">
+        Account Deleted
+      </h2>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 15px;">
+        Hi <strong>${toName}</strong>,
+      </p>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 15px;">
+        Your account has been successfully deleted. We're sorry to see you go!
+      </p>
+      <p style="font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+        All your data has been permanently removed from our systems. 
+        If you ever change your mind, you're always welcome to create a new account.
+      </p>
+      <p style="font-size: 16px; line-height: 1.6; color: ${BRAND_COLORS.textLight};">
+        Thank you for being part of the Zuba community.
+      </p>
+    `;
+    return baseTemplate(content, 'Your Zuba account has been deleted');
+  },
 };
 
 const htmlToPlainText = (html) => {
@@ -367,6 +449,7 @@ export const sendEmailNotification = async ({
   subject,
   template,
   templateData = {},
+  sender = 'no_reply',
   retries = 3,
 }) => {
   const rateLimitKey = `email_rate_limit:${to}`;
@@ -390,7 +473,7 @@ export const sendEmailNotification = async ({
       const textContent = htmlToPlainText(htmlContent);
 
       const { data, error } = await resend.emails.send({
-        from: `Zuba <${process.env.EMAIL_ADDRESS}>`,
+        from: EMAIL_SENDERS[sender] || EMAIL_SENDERS.no_reply,
         to,
         subject,
         html: htmlContent,

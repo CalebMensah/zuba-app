@@ -4,12 +4,11 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { validationResult } from 'express-validator';
 import prisma from '../config/prisma.js';
+import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   throw new Error('JWT_SECRET must be set and at least 32 characters long');
 }
-
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 const generateSecureCode = () => crypto.randomInt(100000, 999999).toString();
 
@@ -29,18 +28,6 @@ const handleValidationErrors = (req, res) => {
 };
 
 const DUMMY_HASH = '$2a$10$YourDummyHashHereToPreventTimingAttacks1234567890';
-
-const sendEmail = async ({ to, subject, html }) => {
-  const { data, error } = await resend.emails.send({
-    from: `Zuba <${process.env.EMAIL_ADDRESS}>`,
-    to,
-    subject,
-    html,
-  });
-
-  if (error) throw new Error(error.message);
-  return data;
-};
 
 export const signup = async (req, res) => {
   const validationError = handleValidationErrors(req, res);
@@ -86,27 +73,14 @@ export const signup = async (req, res) => {
       },
     });
 
-    await sendEmail({
+    await sendEmailNotification({
       to: user.email,
+      toName: user.firstName,
       subject: 'Email Verification Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">Email Verification</h2>
-          <p>Hello ${user.firstName},</p>
-          <p>Thank you for signing up! Your verification code is:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <span style="font-size: 24px; font-weight: bold; background: #f0f0f0; padding: 10px 20px; border-radius: 5px; letter-spacing: 3px;">
-              ${verificationCode}
-            </span>
-          </div>
-          <p>This code will expire in 10 minutes.</p>
-          <p>If you didn't request this, please ignore this email.</p>
-          <hr style="margin: 20px 0;">
-          <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
-        </div>
-      `,
+      template: 'verification_code', 
+      sender: 'no_reply',
+      templateData: { code: verificationCode }
     });
-
     const { password: _, verificationCode: __, verificationExpiry: ___, ...rest } = user;
 
     res.status(201).json({
@@ -247,25 +221,13 @@ export const resendVerificationCode = async (req, res) => {
       },
     });
 
-    await sendEmail({
+    await sendEmailNotification({
       to: user.email,
+      toName: user.firstName,
       subject: 'New Email Verification Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">New Verification Code</h2>
-          <p>Hello ${user.firstName},</p>
-          <p>Your new verification code is:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <span style="font-size: 24px; font-weight: bold; background: #f0f0f0; padding: 10px 20px; border-radius: 5px; letter-spacing: 3px;">
-              ${newVerificationCode}
-            </span>
-          </div>
-          <p>This code will expire in 10 minutes.</p>
-          <p>If you didn't request this, please secure your account immediately.</p>
-          <hr style="margin: 20px 0;">
-          <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
-        </div>
-      `,
+      template: 'verification_code',
+      sender: 'no_reply',
+      templateData: { code: newVerificationCode }
     });
 
     res.status(200).json({
@@ -474,26 +436,13 @@ export const requestAccountDeletion = async (req, res) => {
       data: { deletionCode: hashedDeletionCode, deletionExpiry },
     });
 
-    await sendEmail({
+    await sendEmailNotification({
       to: user.email,
+      toName: user.firstName,
       subject: 'Account Deletion Confirmation',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #d32f2f;">Account Deletion Request</h2>
-          <p>Hello ${user.firstName},</p>
-          <p>We received a request to delete your account. If this was you, please use the confirmation code below:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <span style="font-size: 24px; font-weight: bold; background: #ffebee; color: #d32f2f; padding: 10px 20px; border-radius: 5px; letter-spacing: 3px;">
-              ${deletionCode}
-            </span>
-          </div>
-          <p><strong>Warning:</strong> This action is permanent and cannot be undone. All your data will be deleted.</p>
-          <p>This code will expire in 15 minutes.</p>
-          <p>If you didn't request this, please secure your account immediately.</p>
-          <hr style="margin: 20px 0;">
-          <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
-        </div>
-      `,
+      template: 'account_deletion', 
+      sender: 'no_reply',
+      templateData: { code: deletionCode }
     });
 
     res.status(200).json({
@@ -541,22 +490,14 @@ export const confirmAccountDeletion = async (req, res) => {
     await prisma.user.delete({ where: { id: userId } });
 
     try {
-      await sendEmail({
-        to: user.email,
-        subject: 'Account Deleted Successfully',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #333;">Account Deleted</h2>
-            <p>Hello ${user.firstName},</p>
-            <p>Your account has been successfully deleted. We're sorry to see you go!</p>
-            <p>All your data has been permanently removed from our systems.</p>
-            <p>If you change your mind, you're always welcome to create a new account.</p>
-            <p>Thank you for being part of our community.</p>
-            <hr style="margin: 20px 0;">
-            <p style="color: #666; font-size: 12px;">This is an automated message, please do not reply.</p>
-          </div>
-        `,
-      });
+        await sendEmailNotification({
+          to: user.email,
+          toName: user.firstName,
+          subject: 'Account Deleted Successfully',
+          template: 'account_deleted', 
+          sender: 'no_reply',
+          templateData: {}
+        });
     } catch (emailError) {
       console.error('Failed to send goodbye email:', emailError);
     }

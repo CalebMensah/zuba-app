@@ -13,13 +13,11 @@ const ESCROW_HOLD_DAYS = 4;
 const POINTS_PER_CURRENCY_UNIT = 10;
 const ALLOWED_CALLBACK_DOMAINS = [
   process.env.FRONTEND_URL,
-  'https://yourdomain.com'
+  'https://zubamobile.com'
 ].filter(Boolean);
 
-// Fees imported from utils/fees.js
 import { PLATFORM_FEE_PERCENT, PAYSTACK_COLLECTION_PERCENT } from '../utils/fees.js';
 
-// Utility: Timing-safe string comparison
 function timingSafeCompare(a, b) {
   try {
     const bufA = Buffer.from(a);
@@ -31,7 +29,6 @@ function timingSafeCompare(a, b) {
   }
 }
 
-// Utility: Validate callback URL
 function validateCallbackUrl(url) {
   if (!url) return true;
   try {
@@ -45,7 +42,6 @@ function validateCallbackUrl(url) {
   }
 }
 
-// Buyer pays: subtotal + platform 3% + paystack 1.95% on (subtotal + platform)
 function calculateFees(subtotal) {
   const platformFee = subtotal * PLATFORM_FEE_PERCENT;
   const taxableAmount = subtotal + platformFee;
@@ -61,7 +57,6 @@ function calculateFees(subtotal) {
   };
 }
 
-// Utility: Calculate order total from items
 async function calculateOrderTotal(orderId) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -79,7 +74,6 @@ async function calculateOrderTotal(orderId) {
   };
 }
 
-// Seller gets exactly 97% of subtotal (platform absorbs all transfer fees)
 async function calculateSellerPayouts(order) {
   const items = order.items || [];
   const subtotal = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -111,7 +105,6 @@ async function calculateSellerPayouts(order) {
   };
 }
 
-// Utility: Sanitize metadata
 function sanitizeMetadata(metadata) {
   const sanitized = {};
   const allowedKeys = ['checkoutSessionId', 'orderIds', 'buyerId', 'sellerId', 'storeIds', 'orderCount'];
@@ -131,7 +124,6 @@ export const createCheckoutSession = async (req, res) => {
     const { orderIds, callbackUrl } = req.body;
     const userId = req.user.userId;
 
-    // ✅ Fetch real user email from database
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { email: true }
@@ -215,7 +207,7 @@ export const createCheckoutSession = async (req, res) => {
         throw new Error('One or more orders already have pending payments.');
       }
 
-      // Calculate new fees: subtotal + 3% platform + 1.95% paystack on (subtotal+platform)
+      // Calculate fees: subtotal + 3% platform + 1.95% paystack on (subtotal+platform)
       const subtotal = orders.reduce((sum, order) => sum + order.totalAmount, 0);
       const fees = calculateFees(subtotal);
       const buyerTotalAmount = fees.buyerTotal;
@@ -232,10 +224,9 @@ export const createCheckoutSession = async (req, res) => {
         orderCount: orders.length
       });
 
-      // ✅ Use the callback URL from request or construct deep link
       const finalCallbackUrl = `zuba://payment/success?session=${checkoutSessionId}`;
 
-      console.log('💳 Initializing Paystack transaction:', {
+      console.log(' Initializing Paystack transaction:', {
         email: realEmail,
         amount: buyerTotalAmount,
         amountInKobo: Math.round(buyerTotalAmount * 100),
@@ -244,15 +235,14 @@ export const createCheckoutSession = async (req, res) => {
         callbackUrl: finalCallbackUrl
       });
 
-      // Initialize Paystack transaction with REAL email
       const response = await paystack.transaction.initialize({
-        email: realEmail,  // ✅ Use real email from database
-        amount: Math.round(buyerTotalAmount * 100), // Convert to pesewas/kobo
+        email: realEmail, 
+        amount: Math.round(buyerTotalAmount * 100),
         currency: 'GHS',
         callback_url: finalCallbackUrl,
         metadata: {
           ...metadata,
-          buyerEmail: realEmail  // Include in metadata too
+          buyerEmail: realEmail
         }
       });
 
@@ -260,14 +250,12 @@ export const createCheckoutSession = async (req, res) => {
         throw new Error('Failed to initialize Paystack transaction');
       }
 
-      console.log('✅ Paystack transaction initialized:', {
+      console.log('Paystack transaction initialized:', {
         reference: response.data.reference,
         authorizationUrl: response.data.authorization_url
       });
 
-      // ✅ Create payment records - ONE per order with correct amounts
       const payments = await Promise.all(orders.map(async (order) => {
-        // Proportional fees per order
         const orderProportion = order.totalAmount / subtotal;
         const orderFees = {
           platformFee: fees.platformFee * orderProportion,
@@ -276,7 +264,7 @@ export const createCheckoutSession = async (req, res) => {
           netSeller: fees.netSellerPayout * orderProportion
         };
 
-        console.log(`💰 Creating payment for order ${order.id}:`, {
+        console.log(`Creating payment for order ${order.id}:`, {
           orderAmount: order.totalAmount,
           platformFee: orderFees.platformFee,
           paystackFee: orderFees.paystackFee,
@@ -305,7 +293,6 @@ export const createCheckoutSession = async (req, res) => {
           }
         });
 
-        // Update order with payment info
         await tx.order.update({
           where: { id: order.id },
           data: { 
@@ -340,7 +327,7 @@ export const createCheckoutSession = async (req, res) => {
       await cache.del(`store:${order.storeId}:orders`);
     }
 
-    console.log('✅ Checkout session created successfully:', {
+    console.log('Checkout session created successfully:', {
       reference: result.reference,
       totalAmount: result.totalAmount,
       orderCount: result.orders.length
@@ -352,7 +339,7 @@ export const createCheckoutSession = async (req, res) => {
       data: {
         checkoutSessionId: result.checkoutSessionId,
         authorizationUrl: result.authorizationUrl,
-        reference: result.reference, // ✅ This is the Paystack reference
+        reference: result.reference, 
         orderSubtotal: result.subtotal,
         paystackFee: result.paystackFee,  
         totalAmount: result.totalAmount,
@@ -377,7 +364,7 @@ export const createCheckoutSession = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error creating checkout session:', error);
+    console.error(' Error creating checkout session:', error);
     const message = ['Invalid orders', 'not found', 'pending payments'].some(msg => 
       error.message.includes(msg)
     ) ? error.message : 'Failed to create checkout session';
@@ -786,6 +773,7 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
             toName: fullPayment.order.buyer.firstName,
             subject: 'Payment Successful',
             template: 'generic',
+            sender: 'payment',
             templateData: {
               title: 'Payment Successful',
               message: `Your payment for order #${orderId} was successful.`,
@@ -807,6 +795,7 @@ async function handleSingleOrderPayment(reference, gatewayAmountKobo, orderId, g
             toName: fullPayment.order.store.user.firstName,
             subject: 'New Order Confirmed',
             template: 'generic',
+            sender: 'order',
             templateData: {
               title: 'New Order Confirmed',
               message: `You have a new confirmed order #${orderId}. Net payout: ${payoutCalculation.netSellerPayout.toFixed(2)} ${fullPayment.currency}`,
@@ -1012,6 +1001,7 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
                 toName: payment.order.store.user.firstName,
                 subject: 'New Order Confirmed',
                 template: 'generic',
+                sender: 'order',
                 templateData: {
                   title: 'New Order Confirmed',
                   message: `You have a new confirmed order #${payment.orderId}. Net payout: ${payoutCalculation.netSellerPayout.toFixed(2)} ${payment.currency}`,
@@ -1074,6 +1064,7 @@ async function handleMultiStorePayment(reference, gatewayAmountKobo, orderIds, c
               toName: buyerPayment.order.buyer.firstName,
               subject: 'Payment Successful',
               template: 'generic',
+              sender: 'payment',
               templateData: {
                 title: 'Payment Successful',
                 message: `Your payment for ${payments.length} order(s) was successful. Subtotal: ${orderSubtotals.toFixed(2)} ${payments[0].currency} + Fee: ${paystackFee.toFixed(2)} ${payments[0].currency}`,
@@ -1195,6 +1186,7 @@ async function handleFailedCharge(data) {
             toName: buyerName,
             subject: 'Payment Failed',
             template: 'generic',
+            sender: 'payment',
             templateData: {
               title: 'Payment Failed',
               message: `Your payment for ${payments.length} order(s) failed. Please try again.`,
@@ -1293,6 +1285,7 @@ async function handleSuccessfulTransfer(data) {
           toName: payout.order.store.user.firstName,
           subject: `Payment Transfer Successful`,
           template: 'generic',
+          sender: 'payment',
           templateData: {
             title: 'Payment Received!',
             message: `GHS ${payout.amount.toFixed(2)} has been successfully transferred to your account for order #${payout.orderId}.`,
@@ -1756,6 +1749,7 @@ export const verifyPayment = async (req, res) => {
                 toName: payment.order.buyer.firstName,
                 subject: 'Payment Successful',
                 template: 'generic',
+                sender: 'payment',
                 templateData: {
                   title: 'Payment Successful',
                   message: updatedPayments.length > 1
@@ -1780,6 +1774,7 @@ export const verifyPayment = async (req, res) => {
                 toName: payment.order.store.user.firstName,
                 subject: 'New Order Confirmed',
                 template: 'generic',
+                sender: 'order',
                 templateData: {
                   title: 'New Order Confirmed',
                   message: `You have a new confirmed order #${payment.orderId}.`,
@@ -1809,6 +1804,7 @@ export const verifyPayment = async (req, res) => {
               toName: payment.order.buyer.firstName,
               subject: 'Payment Failed',
               template: 'generic',
+              sender: 'payment',
               templateData: {
                 title: 'Payment Failed',
                 message: `Your payment for order #${payment.orderId} failed. Please try again.`,
@@ -1832,7 +1828,7 @@ export const verifyPayment = async (req, res) => {
       paid_at: verification.data.paid_at,
     };
 
-    console.log(`✅ VERIFY COMPLETE [${reference}]: Final status=${updatedPayments[0]?.status}, payments=${updatedPayments.length}`);
+    console.log(`VERIFY COMPLETE [${reference}]: Final status=${updatedPayments[0]?.status}, payments=${updatedPayments.length}`);
     
     res.status(200).json({
       success: true,
@@ -1856,7 +1852,7 @@ export const verifyPayment = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error verifying payment:', error);
+    console.error('Error verifying payment:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to verify payment'

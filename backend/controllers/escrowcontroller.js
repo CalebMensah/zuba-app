@@ -228,6 +228,7 @@ export const processEscrowRelease = async () => {
               toName: order.store.user.firstName,
               subject: 'Funds Released',
               template: 'generic',
+              sender: 'escrow',
               templateData: {
                 title: 'Funds Released',
                 message: `GHS ${amountToTransfer.toFixed(2)} for order #${order.id} has been released to your account.`,
@@ -406,6 +407,7 @@ export const confirmOrderReceived = async (req, res) => {
             toName: order.store.user.firstName,
             subject: 'Funds Released',
             template: 'generic',
+            sender: 'escrow',
             templateData: {
               title: 'Funds Released',
               message: `GHS ${amountToTransfer.toFixed(2)} for order #${order.id} has been released to your account.`,

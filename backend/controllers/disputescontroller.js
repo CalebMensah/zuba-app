@@ -5,11 +5,7 @@ import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { processRefund } from '../utils/refundUtils.js';
 import { transferFundsToSeller } from '../utils/transferUtils.js';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 const VALID_DISPUTE_OUTCOMES = ['BUYER_WON', 'SELLER_WON'];
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const sanitizeError = (error) => {
   if (process.env.NODE_ENV === 'production') {
@@ -24,8 +20,6 @@ const invalidateDisputeCaches = async (orderId, buyerId, sellerId) => {
     cache.del(`order:${orderId}:user:${sellerId}`)
   ]);
 };
-
-// ── POST /orders/:orderId/disputes ────────────────────────────────────────────
 
 export const openDispute = async (req, res) => {
   try {
@@ -132,6 +126,7 @@ export const openDispute = async (req, res) => {
             toName: order.store.user.firstName,
             subject: 'New Dispute Opened',
             template: 'generic',
+            sender:'disputes',
             templateData: {
               title: 'Dispute Opened',
               message: `A buyer opened a dispute for order #${orderId}.`,
@@ -157,8 +152,6 @@ export const openDispute = async (req, res) => {
     return res.status(500).json({ success: false, message: sanitizeError(error) });
   }
 };
-
-// ── POST /disputes/:disputeId/resolve (admin only) ────────────────────────────
 
 export const resolveDispute = async (req, res) => {
   try {
@@ -226,7 +219,6 @@ export const resolveDispute = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No escrow record found for this order.' });
     }
 
-    // ── BUYER WON → refund buyer ──────────────────────────────────────────────
     if (outcome === 'BUYER_WON') {
       const amount = refundAmount
         ? parseFloat(refundAmount)
@@ -274,7 +266,6 @@ export const resolveDispute = async (req, res) => {
       });
     }
 
-    // ── SELLER WON → release escrow and transfer funds ────────────────────────
     if (outcome === 'SELLER_WON') {
       const sellerPaymentAccount = order.store.paymentDetails;
 
@@ -366,6 +357,7 @@ export const resolveDispute = async (req, res) => {
             toName: order.buyer.firstName,
             subject: 'Dispute Resolved',
             template: 'generic',
+            sender:'disputes',
             templateData: {
               title: 'Dispute Resolved',
               message: buyerMessage,

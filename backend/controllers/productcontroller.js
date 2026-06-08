@@ -20,7 +20,7 @@ export const createProduct = async (req, res) => {
       moq
     } = req.body;
 
-    const userId = req.user.userId; // Get the authenticated user's ID
+    const userId = req.user.userId;
 
     // Fetch the user's store first
     const userStore = await prisma.store.findUnique({
@@ -34,7 +34,7 @@ export const createProduct = async (req, res) => {
       });
     }
 
-    const storeId = userStore.id; // Get the store ID
+    const storeId = userStore.id;
 
     // Validate required fields
     if (!name || price === undefined || stock === undefined) {
@@ -94,10 +94,8 @@ export const createProduct = async (req, res) => {
       }
     });
 
-    // Invalidate relevant store caches using userStore.url
-    await cache.del(`store:slug:${userStore.url}`); // Invalidate the store's main cache
-    await cache.del(`user:${userId}:store`); // Invalidate user's store cache
-    // Add other cache invalidations if needed
+    await cache.del(`store:slug:${userStore.url}`);
+    await cache.del(`user:${userId}:store`); 
 
     res.status(201).json({
       success: true,
@@ -114,7 +112,6 @@ export const createProduct = async (req, res) => {
   }
 };
 
-// Update an existing product
 export const updateProduct = async (req, res) => {
   try {
     const { productId } = req.params;
@@ -132,7 +129,6 @@ export const updateProduct = async (req, res) => {
     } = req.body;
 
     const userId = req.user.userId; 
-    // Fetch the user's store to get its ID and URL for cache invalidation
     const userStore = await prisma.store.findFirst({
       where: { userId }
     });
@@ -144,13 +140,12 @@ export const updateProduct = async (req, res) => {
       });
     }
 
-    const storeId = userStore.id; // Get the store ID
+    const storeId = userStore.id;
 
-    // Find the existing product to verify ownership and get current data
     const existingProduct = await prisma.product.findFirst({
       where: {
         id: productId,
-        storeId // Ensure the product belongs to the user's store
+        storeId 
       }
     });
 
@@ -161,7 +156,6 @@ export const updateProduct = async (req, res) => {
       });
     }
 
-    // Prepare update data object
     const updateData = {};
 
     if (name !== undefined) {
@@ -189,9 +183,8 @@ export const updateProduct = async (req, res) => {
     let imageUrls = [...existingProduct.images];
     let imagesToDeleteFromCloudinary = [];
 
-    // Handle image updates if files are provided
     if (req.files && req.files.length > 0) {
-      imagesToDeleteFromCloudinary = existingProduct.images; // Mark old images for deletion
+      imagesToDeleteFromCloudinary = existingProduct.images;
 
       try {
         const uploadResults = await uploadMultipleToCloudinary(
@@ -199,7 +192,7 @@ export const updateProduct = async (req, res) => {
           { ...uploadPresets.product, folder: 'products' }
         );
         imageUrls = uploadResults.map(result => result.secure_url);
-        updateData.images = imageUrls; // Update the images array in the data to be saved
+        updateData.images = imageUrls;
       } catch (uploadError) {
         console.error('Error uploading updated product images to Cloudinary:', uploadError);
         return res.status(500).json({
@@ -216,22 +209,19 @@ export const updateProduct = async (req, res) => {
       data: updateData
     });
 
-    // Delete old images from Cloudinary *after* the database update succeeds
     if (imagesToDeleteFromCloudinary.length > 0) {
       try {
         await deleteMultipleFromCloudinary(imagesToDeleteFromCloudinary);
       } catch (deleteError) {
         console.error('Error deleting old product images from Cloudinary:', deleteError);
-        // Log the error, but don't fail the request if deletion fails
       }
     }
 
-    // Invalidate relevant store caches using userStore.url
     await cache.del(`store:slug:${userStore.url}`);
     await cache.del(`user:${userId}:store`);
-    await cache.del(`product:url:${existingProduct.url}`); // Invalidate old product URL cache if URL changed
+    await cache.del(`product:url:${existingProduct.url}`); 
     if (updateData.url && updateData.url !== existingProduct.url) {
-        await cache.del(`product:url:${updateData.url}`); // Invalidate new product URL cache
+        await cache.del(`product:url:${updateData.url}`);
     }
 
     res.status(200).json({
@@ -252,9 +242,9 @@ export const updateProduct = async (req, res) => {
 // Get product by URL slug (public view)
 export const getSellerProductByIdForPublicUse = async (req, res) => {
   try {
-    const { productUrl } = req.params; // Get the product's URL slug from the route parameters
+    const { productUrl } = req.params;
 
-    const cacheKey = `product:public:v2:url:${productUrl}`; // Versioned cache key for public access
+    const cacheKey = `product:public:v2:url:${productUrl}`;
 
     // Try to get from cache first
     const cachedProduct = await cache.get(cacheKey);

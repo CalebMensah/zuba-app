@@ -285,6 +285,7 @@ export const redeemPointsForProduct = async (req, res) => {
         toName: sellerName,
         subject: `New Points Redemption Order (#${orderId})`,
         template: 'generic',
+        sender: 'order',
         templateData: {
           title: 'Points Redemption Order Received!',
           message: `${buyerName} has redeemed ${requiredPoints} points for ${quantity}x ${product.name}. The order has been automatically confirmed. Please prepare it for shipment.`,
@@ -306,6 +307,7 @@ export const redeemPointsForProduct = async (req, res) => {
         toName: buyerName,
         subject: `Points Redeemed Successfully - Order #${orderId}`,
         template: 'order_confirmation',
+        sender: 'order',
         templateData: {
           orderId,
           items: [{
