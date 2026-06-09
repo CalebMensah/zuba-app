@@ -433,7 +433,7 @@ const handleChatPress = async () => {
           <View style={styles.titleSection}>
             <Text style={styles.productName}>{product.name}</Text>
             <View style={styles.priceRow}>
-              <Text style={styles.productPrice}>GH₵ {product.price.toFixed(2)}</Text>
+              <Text style={styles.productPrice}>GH₵ {parseFloat(product.price.toString()).toFixed()}</Text>
               {product.moq && (
                 <Text style={styles.moqText}>MOQ: {product.moq} units</Text>
               )}
