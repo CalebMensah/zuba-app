@@ -650,7 +650,7 @@ const handleChatPress = async () => {
       <View style={styles.stickyBar}>
         <View style={styles.stickyPriceSection}>
           <Text style={styles.stickyPriceLabel}>Price</Text>
-          <Text style={styles.stickyPrice}>GH₵ {product.price.toFixed(2)}</Text>
+          <Text style={styles.stickyPrice}>GH₵ {parseFloat(product.price.toString()).toFixed(2)}</Text>
         </View>
 
         <TouchableOpacity
@@ -714,7 +714,7 @@ const handleChatPress = async () => {
                     {product.name}
                   </Text>
                   <Text style={styles.modalProductPrice}>
-                    GH₵ {product.price.toFixed(2)}
+                    GH₵ {parseFloat(product.price.toString()).toFixed(2)}
                   </Text>
                   <Text style={styles.modalProductStock}>
                     {product.stock} units available
@@ -827,7 +827,7 @@ const handleChatPress = async () => {
               <View style={styles.modalTotalSection}>
                 <Text style={styles.modalTotalLabel}>Total Price</Text>
                 <Text style={styles.modalTotalPrice}>
-                  GH₵ {(product.price * quantity).toFixed(2)}
+                  GH₵ {parseFloat((product.price * quantity).toString()).toFixed(2)}
                 </Text>
               </View>
             </ScrollView>
