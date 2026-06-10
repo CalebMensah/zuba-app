@@ -33,7 +33,7 @@ const PaymentSuccessScreen = ({ route, navigation }: any) => {
   }, []);
 
   const formatPrice = (price: number) => {
-    return `GH₵ ${price.toFixed(2)}`;
+    return `GH₵ ${parseFloat(price.toString()).toFixed(2)}`;
   };
 
   return (

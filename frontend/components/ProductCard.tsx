@@ -94,7 +94,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
         </Text>
 
         {/* Price */}
-        <Text style={styles.productPrice}>GH₵ {product.price.toFixed(2)}</Text>
+        <Text style={styles.productPrice}>GH₵ {parseFloat(product.price.toString()).toFixed(2)}</Text>
 
         {/* Stats Row */}
         <View style={styles.statsRow}>

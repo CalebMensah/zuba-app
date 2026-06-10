@@ -48,7 +48,6 @@ const CheckoutScreen = ({ navigation, route }: any) => {
   const { getUserAddresses, loading: addressLoading } = useAddress();
   const { user } = useAuth();
 
-  // TanStack Query mutation
   const createOrderMutation = useCreateOrder();
   
   const { createCheckoutSession, loading: paymentLoading } = usePayment();
@@ -205,9 +204,9 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
         region: selectedAddress!.region,
         country: selectedAddress!.country || 'Ghana',
         postalCode: selectedAddress!.postalCode || undefined,
+        deliveryMethod: 'SELLER_DELIVERY' as const,
       };
 
-      // Prepare items in the format backend expects
       const items =
         cart?.items?.map((cartItem) => ({
           productId: cartItem.productId,
@@ -215,12 +214,10 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
           price: cartItem.product.price,
         })) || [];
 
-      // Generate checkout session ID
       const checkoutSession = `cs_${Date.now()}_${Math.random()
         .toString(36)
         .substr(2, 9)}`;
 
-      // Create order data (backend will handle multi-seller grouping)
       const orderData = {
         items,
         deliveryInfo,
@@ -231,17 +228,14 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
         checkoutSession,
       };
 
-      // Step 1: Create orders using TanStack Query mutation
       const orderResult = await createOrderMutation.mutateAsync(orderData);
 
       if (!orderResult || !orderResult.orders || orderResult.orders.length === 0) {
         throw new Error('Failed to create orders');
       }
 
-      // Step 2: Get user email from order, auth context, or empty
       const userEmail = orderResult.orders[0]?.buyer?.realEmail || user?.email || '';
 
-      // Step 3: Create checkout session for payment
       const orderIds = orderResult.orders.map((order) => order.id);
       const paymentSessionData = {
         orderIds,
@@ -253,11 +247,8 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
       if (!paymentResult || !paymentResult.data) {
         throw new Error('Failed to create payment session');
       }
-
-      // Clear cart after successful operations
       await clearCart();
 
-      // Navigate directly to payment screen with both order and payment data
       navigation.navigate('Payment', {
         orders: orderResult.orders.map((order) => ({
           orderId: order.id,
@@ -296,10 +287,9 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
   };
 
   const formatPrice = (price: number) => {
-    return `GH₵ ${price.toFixed(2)}`;
+    return `GH₵ ${parseFloat(price.toString()).toFixed(2)}`;
   };
 
-  // Loading state - cart is loading
   if (cartLoading || !cart) {
     return (
       <View style={styles.loadingContainer}>
@@ -309,7 +299,6 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
     );
   }
 
-  // Empty cart state
   if (!cart.items || cart.items.length === 0) {
     return (
       <View style={styles.emptyContainer}>

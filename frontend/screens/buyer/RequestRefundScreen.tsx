@@ -35,7 +35,7 @@ export default function RequestRefundScreen() {
   // TanStack Query hook for order data
   const { data: order, isLoading, error, refetch } = useOrder(orderId);
 
-  const { requestRefund, loading: disputeLoading, error: disputeError, clearError } = useDisputes();
+  const { openDispute, loading: disputeLoading, error: disputeError, clearError } = useDisputes();
 
   const [selectedType, setSelectedType] = useState<DisputeType>('REFUND_REQUEST');
   const [reason, setReason] = useState('');
@@ -54,6 +54,12 @@ export default function RequestRefundScreen() {
       clearError();
     }
   }, [disputeError]);
+
+  useEffect(() => {
+    if (__DEV__ && order) {
+      console.log('🔍 RequestRefund - Order Payments:', JSON.stringify(order.payment, null, 2));
+    }
+  }, [order]);
 
 const formatDate = (dateString?: string) => {
     if (!dateString) return 'N/A';
@@ -117,7 +123,7 @@ const getStatusColor = (status?: string) => {
           onPress: async () => {
             setSubmitting(true);
             try {
-              const dispute = await requestRefund(orderId, {
+              const dispute = await openDispute(orderId, {
                 reason: reason.trim(),
                 type: selectedType,
               });
@@ -324,9 +330,7 @@ const getStatusColor = (status?: string) => {
                       {formatDate(payment.createdAt)}
                     </Text>
                   </View>
-                  {payment.metadata?.fees && (
-                    <View style={styles.divider} />
-                  )}
+                  {payment.metadata?.fees && <View style={styles.divider} />}
                   {payment.metadata?.fees && (
                     <>
                       <Text style={[styles.label, { marginTop: 8, marginBottom: 4 }]}>Fees Breakdown:</Text>
@@ -349,8 +353,7 @@ const getStatusColor = (status?: string) => {
             </View>
           </View>
         )}
-        {/* Debug log */}
-        {__DEV__ && order && console.log('🔍 RequestRefund - Order Payments:', JSON.stringify(order.payment, null, 2))}
+
 
         {/* Refund Request Form */}
         <View style={styles.section}>

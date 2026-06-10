@@ -72,8 +72,6 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
 
   const isPaid = order?.status !== 'PENDING_PAYMENT';
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
-
   const handlePayNow = () => {
     if (order) {
       navigation.navigate('Payment', {
@@ -185,7 +183,6 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
     navigation.navigate('ManageReview', { orderId, productId, productName, productImage });
   };
 
-  // ── Timeline ──────────────────────────────────────────────────────────────
 
   const getTimelineSteps = (): TimelineStep[] => {
     if (!order) return [];
@@ -256,7 +253,6 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
     ];
   };
 
-  // ── Status helpers ────────────────────────────────────────────────────────
 
   const getStatusColor = (): string => {
     switch (order?.status) {
@@ -344,8 +340,6 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
         };
     }
   };
-
-  // ── Loading / Error ───────────────────────────────────────────────────────
 
   if (isLoading) {
     return (

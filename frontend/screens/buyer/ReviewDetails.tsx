@@ -51,8 +51,6 @@ const ReviewDetails: React.FC = () => {
       console.log('Review Data:', data);
       console.log('product id:', data.product?.id);
       setLikeCount(data._count?.likes || 0);
-      // Check if current user has liked (you might need to implement this based on your auth)
-      // setIsLiked(data.likes?.some(like => like.userId === currentUserId));
     } catch (error) {
       Alert.alert('Error', 'Failed to load review details');
       navigation.goBack();

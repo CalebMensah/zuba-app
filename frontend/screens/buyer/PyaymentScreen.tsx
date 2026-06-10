@@ -72,20 +72,20 @@ const orderQueries = useQueries({
       const user = await AsyncStorage.getItem('user');
 
       if (!token || !user) {
-        console.log('❌ No authentication token or user data found');
+        console.log(' No authentication token or user data found');
         return false;
       }
 
       if (!token.startsWith('eyJ')) {
-        console.log('❌ Invalid token format');
+        console.log('Invalid token format');
         return false;
       }
 
       setIsAuthenticated(true);
-      console.log('✅ User authenticated');
+      console.log('User authenticated');
       return true;
     } catch (error) {
-      console.error('❌ Error checking authentication:', error);
+      console.error('Error checking authentication:', error);
       return false;
     }
   };
@@ -116,13 +116,12 @@ const orderQueries = useQueries({
         return;
       }
     } catch (error) {
-      console.error('❌ Error initializing payment screen:', error);
+      console.error('Error initializing payment screen:', error);
       Alert.alert('Error', 'Failed to initialize payment screen');
       navigation.goBack();
     }
   };
 
-  // Set email preferring auth user → order buyer → param
   const { user } = useAuth();
   useEffect(() => {
     if (orderDetails.length > 0 && !email) {
@@ -154,7 +153,7 @@ const orderQueries = useQueries({
         return;
       }
 
-      console.log('💳 Starting payment process with:', {
+      console.log('Starting payment process with:', {
         ordersCount: orders.length,
         totalAmount,
         email,
@@ -168,12 +167,12 @@ const orderQueries = useQueries({
       let authorizationUrl: string = '';
 
       if (paymentSession && reference) {
-        console.log('🔄 Using existing payment session with reference:', reference);
+        console.log('Using existing payment session with reference:', reference);
         paymentReference = reference;
         paymentAmount = totalAmount;
         authorizationUrl = paymentSession.authorizationUrl;
       } else {
-        console.log('🔄 Creating new checkout session');
+        console.log('Creating new checkout session');
         const orderIds = orders.map((order) => order.orderId);
 
         const response = await createCheckoutSession({
@@ -182,21 +181,20 @@ const orderQueries = useQueries({
         });
 
         if (response && response.data) {
-          console.log('✅ Checkout session created:', response.data);
+          console.log('Checkout session created:', response.data);
           paymentReference = response.data.reference;
           setPaymentAmount(response.data.totalAmount);
           paymentAmount = response.data.totalAmount;
           authorizationUrl = response.data.authorizationUrl;
           
-          // ✅ Conditional refetch: Skip if totalAmountParam provided (from CheckoutScreen)
           if (!totalAmountParam) {
-            console.log('🔄 Refetching orders for breakdown details...');
+            console.log('Refetching orders for breakdown details...');
             orderQueries.forEach((query) => query.refetch());
           } else {
-            console.log('✅ Using totalAmountParam from CheckoutScreen - skipping refetch');
+            console.log('Using totalAmountParam from CheckoutScreen - skipping refetch');
           }
         } else {
-          console.error('❌ No response data from checkout session creation');
+          console.error('No response data from checkout session creation');
           Alert.alert('Error', 'Failed to initiate payment. Please try again.');
           return;
         }
@@ -217,7 +215,7 @@ const orderQueries = useQueries({
         return;
       }
 
-      console.log('🚀 Opening Paystack payment page:', {
+      console.log('Opening Paystack payment page:', {
         reference: paymentReference,
         amount: paymentAmount,
         authorizationUrl,
@@ -226,7 +224,7 @@ const orderQueries = useQueries({
       setSessionReference(paymentReference);
       setAuthUrl(authorizationUrl);
     } catch (error: any) {
-      console.error('💥 Payment initiation error:', error);
+      console.error('Payment initiation error:', error);
 
       let errorMessage = 'Failed to initiate payment. Please try again.';
 
@@ -253,9 +251,8 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
     const { url, loading } = navState as { url?: string; loading?: boolean };
     if (!url || isVerifying) return;
 
-    console.log('🔍 WebView navigation:', { url, loading, isVerifying, sessionReference });
+    console.log('WebView navigation:', { url, loading, isVerifying, sessionReference });
 
-    // ✅ Enhanced Paystack detection patterns (tested)
     const isSuccessPage = 
       url.includes('/paystack/pay/complete/') ||
       url.includes('status=success') ||
@@ -269,10 +266,10 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
       url.includes('cancel');
 
     if (isSuccessPage || isCancelPage) {
-      console.log(`🎯 ${isSuccessPage ? 'SUCCESS' : 'CANCEL'} page detected:`, url);
+      console.log(`${isSuccessPage ? 'SUCCESS' : 'CANCEL'} page detected:`, url);
       
       if (isVerifying || !sessionReference) {
-        console.log('⚠️ Already processing, skipping');
+        console.log('Already processing, skipping');
         return;
       }
 
@@ -284,20 +281,20 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
       setSessionReference(null);
 
       try {
-        console.log('🔍 Auto-verifying payment:', referenceToVerify);
+        console.log('Auto-verifying payment:', referenceToVerify);
         await new Promise(resolve => setTimeout(resolve, 1500)); // Brief delay
 
         const verification = await verifyPayment(referenceToVerify);
         
         if (verification?.success) {
-          console.log('✅ Auto-verification SUCCESS!');
+          console.log('Auto-verification SUCCESS!');
           Alert.alert(
             'Payment Successful!',
             `Your payment has been verified successfully.\n\nRedirecting to Orders...`,
             [{ text: 'OK', onPress: () => navigation.replace('Orders') }]
           );
         } else {
-          console.warn('❌ Auto-verification failed:', verification);
+          console.warn('Auto-verification failed:', verification);
           setIsVerifying(false);
           Alert.alert(
             'Payment Pending',
@@ -306,7 +303,7 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
           );
         }
       } catch (err: any) {
-        console.error('❌ Auto-verification error:', err);
+        console.error('Auto-verification error:', err);
         setIsVerifying(false);
         Alert.alert(
           'Verification Issue',
@@ -317,7 +314,6 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
     }
   };
 
-  // ✅ Injected JS to detect Paystack success via DOM polling
   const injectedJavaScript = `
     (function() {
       function pollPaystackStatus() {
@@ -396,14 +392,13 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
     })();
   `;
 
-  // ✅ Message handler for injected JS
   const handleWebViewMessage = async (event: any) => {
     try {
       const message = JSON.parse(event.nativeEvent.data);
       console.log('📱 WebView message:', message);
       
       if (message.type === 'PAYMENT_SUCCESS' && !isVerifying && sessionReference) {
-        console.log('🎉 JS Success detection!');
+        console.log('JS Success detection!');
         setIsVerifying(true);
         const referenceToVerify = sessionReference;
         setAuthUrl(null);
@@ -417,7 +412,7 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
           ]);
         }
       } else if (message.type === 'PAYMENT_CANCEL') {
-        console.log('❌ JS Cancel detection');
+        console.log('JS Cancel detection');
         Alert.alert(
           'Payment Cancelled',
           'Payment was cancelled. You can try again anytime.',
@@ -429,13 +424,12 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
     }
   };
 
-  // ✅ Verification timeout fallback
   useEffect(() => {
     if (authUrl && sessionReference) {
       const timeout = setTimeout(async () => {
         if (isVerifying) return;
         
-        console.log('⏰ Verification timeout - checking status');
+        console.log('Verification timeout - checking status');
         setIsVerifying(true);
         
         try {
@@ -473,10 +467,9 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
   }, [authUrl, sessionReference, isVerifying]);
 
   const formatPrice = (price: number) => {
-    return `GH₵ ${price.toFixed(2)}`;
+    return `GH₵ ${parseFloat(price.toString()).toFixed(2)}`;
   };
 
-// 🛠️ DYNAMIC TOTAL: Prioritize param → paymentAmount state → order breakdown
   const totalAmount = totalAmountParam ?? 
                      (paymentAmount > 0 ? paymentAmount : 
                        orderDetails.reduce((sum, order) => {
@@ -487,9 +480,8 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
                        }, 0)
                      );
   
-  // 🐛 TEMP DEBUG LOGGING - Remove after verification
   useEffect(() => {
-    console.log('💰 TOTAL AMOUNT DEBUG:', {
+    console.log('TOTAL AMOUNT DEBUG:', {
       totalAmountParam,
       paymentAmount,
       orderDetailsCount: orderDetails.length,
@@ -506,9 +498,9 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
 
   // Log for debugging
   if (!totalAmountParam) {
-    console.warn('🟡 No totalAmountParam - using dynamic recalc');
+    console.warn('No totalAmountParam - using dynamic recalc');
   } else {
-    console.log('✅ Using totalAmountParam from CheckoutScreen:', totalAmount);
+    console.log('Using totalAmountParam from CheckoutScreen:', totalAmount);
   }
   
   // Keep breakdown calcs for display (backend provides details)

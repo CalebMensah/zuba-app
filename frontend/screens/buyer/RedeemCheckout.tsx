@@ -130,7 +130,7 @@ const RedeemCheckoutScreen = () => {
 
             if (result) {
               Alert.alert(
-                'Success! 🎉',
+                'Success! ',
                 `You've successfully redeemed ${result.redeemedPoints} points!\n\nYour order has been confirmed and will be processed shortly.`,
                 [
                   {
