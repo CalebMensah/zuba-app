@@ -127,6 +127,9 @@ export const createOrder = async (req, res) => {
         // --- Compute fees ---
         const orderSubtotal = sellerSubtotal + deliveryFee + taxAmount - discount;
         const fees = calculateOrderFees(orderSubtotal);
+
+        console.log('deliveryInfo.email received:', deliveryInfo?.email);
+
         
         // --- CREATE ORDER ---
         const order = await tx.order.create({

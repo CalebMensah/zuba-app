@@ -48,6 +48,8 @@ const CheckoutScreen = ({ navigation, route }: any) => {
   const { getUserAddresses, loading: addressLoading } = useAddress();
   const { user } = useAuth();
 
+  console.log('user email in checkout:', user?.email);
+
   const createOrderMutation = useCreateOrder();
   
   const { createCheckoutSession, loading: paymentLoading } = usePayment();
@@ -197,6 +199,8 @@ const PLATFORM_FEE_PERCENT = 0.03;  // 3% platform fee
       const deliveryInfo = {
         recipient: selectedAddress!.recipient,
         phone: selectedAddress!.phone,
+        // Backend expects deliveryInfo.email for DeliveryInfo record creation
+        email: user?.email ? user.email.trim() : undefined,
         address: `${selectedAddress!.addressLine1}${
           selectedAddress!.addressLine2 ? ', ' + selectedAddress!.addressLine2 : ''
         }`,
