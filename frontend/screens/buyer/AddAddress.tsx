@@ -12,6 +12,7 @@ import {
   Platform,
   SafeAreaView,
   Dimensions,
+  Modal,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useAddress } from '../../hooks/useAddress';
@@ -54,37 +55,11 @@ const GHANA_REGIONS = [
 ];
 
 export const AddAddressScreen = ({ navigation }: any) => {
-const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
 
-  useEffect(() => {
-    const fetchFullUser = async () => {
-      if (!user || fullUser || authLoading) return;
-      
-      try {
-        const token = await AsyncStorage.getItem('token');
-        if (!token) return;
-        
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/auth/me`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (!response.ok) return;
-        
-        const data = await response.json();
-        if (data.success && data.user && data.user.phone) {
-          setFullUser(data.user);
-        }
-      } catch (err) {
-        console.error('Failed to fetch full user:', err);
-      }
-    };
+  // FIX: fullUser declared before the useEffect that references it
+  const [fullUser, setFullUser] = useState(null);
 
-    if (user && !user.phone) {
-      fetchFullUser();
-    }
-  }, [user, authLoading]);
   const [formData, setFormData] = useState({
     recipient: '',
     phone: '',
@@ -99,14 +74,44 @@ const { user, isLoading: authLoading } = useAuth();
   const [showRegionPicker, setShowRegionPicker] = useState(false);
   const { loading, error, createAddress } = useAddress();
 
-  const [fullUser, setFullUser] = useState(null);
-
   const effectiveUser = fullUser || user;
-  const fullName = effectiveUser ? `${effectiveUser.firstName || ''} ${effectiveUser.lastName || ''}`.trim() : '';
+  const fullName = effectiveUser
+    ? `${effectiveUser.firstName || ''} ${effectiveUser.lastName || ''}`.trim()
+    : '';
+
+  useEffect(() => {
+    const fetchFullUser = async () => {
+      if (!user || fullUser || authLoading) return;
+
+      try {
+        const token = await AsyncStorage.getItem('token');
+        if (!token) return;
+
+        const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/auth/me`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!response.ok) return;
+
+        const data = await response.json();
+        if (data.success && data.user && data.user.phone) {
+          setFullUser(data.user);
+        }
+      } catch (err) {
+        console.error('Failed to fetch full user:', err);
+      }
+    };
+
+    if (user && !user.phone) {
+      fetchFullUser();
+    }
+  }, [user, authLoading]);
 
   useEffect(() => {
     if (effectiveUser && !authLoading && fullName) {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
         recipient: fullName,
         phone: effectiveUser.phone || '',
@@ -129,6 +134,11 @@ const { user, isLoading: authLoading } = useAuth();
     }
     if (!formData.addressLine1.trim()) {
       Alert.alert('Validation Error', 'Address line 1 is required');
+      return false;
+    }
+    // FIX: match backend minimum of 3 characters
+    if (formData.addressLine1.trim().length < 3) {
+      Alert.alert('Validation Error', 'Address line 1 must be at least 3 characters');
       return false;
     }
     if (!formData.city.trim()) {
@@ -170,178 +180,176 @@ const { user, isLoading: authLoading } = useAuth();
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, position: 'relative' }}>
+    <SafeAreaView style={{ flex: 1 }}>
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
-        <ScrollView 
+        <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={true}
         >
-{authLoading ? (
-    <ActivityIndicator size="large" color="#3B82F6" style={{ flex: 1 }} />
-  ) : user ? (
-    <View style={styles.userInfoContainer}>
-      <Text style={styles.userInfoTitle}>Using your account details:</Text>
-      <View style={styles.userInfoRow}>
-        <Ionicons name="person-outline" size={20} color="#3B82F6" />
-        <Text style={styles.userInfoName}>{fullName}</Text>
-      </View>
-      <View style={styles.userInfoRow}>
-        <Ionicons name="call-outline" size={20} color="#3B82F6" />
-      <Text style={styles.userInfoPhone}>{effectiveUser?.phone || 'No phone set'}</Text>
-      </View>
-      <Text style={styles.userInfoNote}>You can edit these details below if needed</Text>
-    </View>
-  ) : null}
-
-  <View style={styles.formContainer}>
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>
-              Recipient Name <Text style={styles.required}>*</Text>
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter recipient name"
-              value={formData.recipient}
-              onChangeText={(value) => handleInputChange('recipient', value)}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>
-              Phone Number <Text style={styles.required}>*</Text>
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="+233 XXX XXX XXX"
-              value={formData.phone}
-              onChangeText={(value) => handleInputChange('phone', value)}
-              keyboardType="phone-pad"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>
-              Address Line 1 <Text style={styles.required}>*</Text>
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Street address, P.O. box"
-              value={formData.addressLine1}
-              onChangeText={(value) => handleInputChange('addressLine1', value)}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Address Line 2</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Apartment, suite, unit, building, floor, etc."
-              value={formData.addressLine2}
-              onChangeText={(value) => handleInputChange('addressLine2', value)}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>
-              City <Text style={styles.required}>*</Text>
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter city"
-              value={formData.city}
-              onChangeText={(value) => handleInputChange('city', value)}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>
-              Region <Text style={styles.required}>*</Text>
-            </Text>
-            <TouchableOpacity
-              style={styles.pickerButton}
-              onPress={() => setShowRegionPicker(!showRegionPicker)}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.pickerButtonText,
-                  !formData.region && styles.placeholderText,
-                ]}
-              >
-                {formData.region || 'Select region'}
+          {authLoading ? (
+            <ActivityIndicator size="large" color="#3B82F6" style={{ flex: 1 }} />
+          ) : user ? (
+            <View style={styles.userInfoContainer}>
+              <Text style={styles.userInfoTitle}>Using your account details:</Text>
+              <View style={styles.userInfoRow}>
+                <Ionicons name="person-outline" size={20} color="#3B82F6" />
+                <Text style={styles.userInfoName}>{fullName}</Text>
+              </View>
+              <View style={styles.userInfoRow}>
+                <Ionicons name="call-outline" size={20} color="#3B82F6" />
+                <Text style={styles.userInfoPhone}>
+                  {effectiveUser?.phone || 'No phone set'}
+                </Text>
+              </View>
+              <Text style={styles.userInfoNote}>
+                You can edit these details below if needed
               </Text>
-              <Ionicons
-                name={showRegionPicker ? 'chevron-up' : 'chevron-down'}
-                size={20}
-                color="#757575"
-              />
-            </TouchableOpacity>
+            </View>
+          ) : null}
 
-            {showRegionPicker && (
-              <TouchableOpacity 
-                style={styles.pickerOverlay}
-                activeOpacity={1}
-                onPress={() => setShowRegionPicker(false)}
-              >
-                <View style={styles.pickerContainer}>
-                  <ScrollView 
-                    style={styles.pickerScroll}
-                    nestedScrollEnabled={false}
-                  >
-                    {GHANA_REGIONS.map((region) => (
-                      <TouchableOpacity
-                        key={region}
-                        style={[
-                          styles.pickerItem,
-                          formData.region === region && styles.pickerItemSelected,
-                        ]}
-                        onPress={() => {
-                          handleInputChange('region', region);
-                          setShowRegionPicker(false);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.pickerItemText,
-                            formData.region === region &&
-                              styles.pickerItemTextSelected,
-                          ]}
-                        >
-                          {region}
-                        </Text>
-                        {formData.region === region && (
-                          <Ionicons
-                            name="checkmark"
-                            size={20}
-                            color="#FF6B35"
-                          />
-                        )}
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              </TouchableOpacity>
-            )}
-          </View>
+          <View style={styles.formContainer}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>
+                Recipient Name <Text style={styles.required}>*</Text>
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter recipient name"
+                value={formData.recipient}
+                onChangeText={(value) => handleInputChange('recipient', value)}
+              />
+            </View>
 
             <View style={styles.inputGroup}>
-            <Text style={styles.label}>Postal Code</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter postal code"
-              value={formData.postalCode}
-              onChangeText={(value) => handleInputChange('postalCode', value)}
-            />
-          </View>
+              <Text style={styles.label}>
+                Phone Number <Text style={styles.required}>*</Text>
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="+233 XXX XXX XXX"
+                value={formData.phone}
+                onChangeText={(value) => handleInputChange('phone', value)}
+                keyboardType="phone-pad"
+              />
+            </View>
 
-          <View style={styles.checkboxContainer}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>
+                Address Line 1 <Text style={styles.required}>*</Text>
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Street address, P.O. box"
+                value={formData.addressLine1}
+                onChangeText={(value) => handleInputChange('addressLine1', value)}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Address Line 2</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Apartment, suite, unit, building, floor, etc."
+                value={formData.addressLine2}
+                onChangeText={(value) => handleInputChange('addressLine2', value)}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>
+                City <Text style={styles.required}>*</Text>
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter city"
+                value={formData.city}
+                onChangeText={(value) => handleInputChange('city', value)}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>
+                Region <Text style={styles.required}>*</Text>
+              </Text>
+              <TouchableOpacity
+                style={styles.pickerButton}
+                onPress={() => setShowRegionPicker(true)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.pickerButtonText,
+                    !formData.region && styles.placeholderText,
+                  ]}
+                >
+                  {formData.region || 'Select region'}
+                </Text>
+                <Ionicons name="chevron-down" size={20} color="#757575" />
+              </TouchableOpacity>
+
+              <Modal
+                visible={showRegionPicker}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowRegionPicker(false)}
+              >
+                <TouchableOpacity
+                  style={styles.modalOverlay}
+                  activeOpacity={1}
+                  onPress={() => setShowRegionPicker(false)}
+                >
+                  <View style={styles.modalContent}>
+                    <Text style={styles.modalTitle}>Select Region</Text>
+                    <ScrollView>
+                      {GHANA_REGIONS.map((region) => (
+                        <TouchableOpacity
+                          key={region}
+                          style={[
+                            styles.pickerItem,
+                            formData.region === region && styles.pickerItemSelected,
+                          ]}
+                          onPress={() => {
+                            handleInputChange('region', region);
+                            setShowRegionPicker(false);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.pickerItemText,
+                              formData.region === region &&
+                                styles.pickerItemTextSelected,
+                            ]}
+                          >
+                            {region}
+                          </Text>
+                          {formData.region === region && (
+                            <Ionicons name="checkmark" size={20} color="#FF6B35" />
+                          )}
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                </TouchableOpacity>
+              </Modal>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Postal Code</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter postal code"
+                value={formData.postalCode}
+                onChangeText={(value) => handleInputChange('postalCode', value)}
+              />
+            </View>
+
             <TouchableOpacity
-              style={{ flex: 1 }}
+              style={styles.checkboxContainer}
               onPress={() => handleInputChange('isDefault', !formData.isDefault)}
               activeOpacity={0.7}
             >
@@ -353,30 +361,27 @@ const { user, isLoading: authLoading } = useAuth();
               <Text style={styles.checkboxLabel}>Set as default address</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </ScrollView>
+        </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.submitButton}
-          onPress={handleSubmit}
-          disabled={loading}
-          activeOpacity={0.8}
-        >
-          {loading ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <>
-              <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
-              <Text style={styles.submitButtonText}>
-                {loading ? 'Adding...' : 'Add Address'}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
-  </SafeAreaView>
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={styles.submitButton}
+            onPress={handleSubmit}
+            disabled={loading}
+            activeOpacity={0.8}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
+                <Text style={styles.submitButtonText}>Add Address</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -384,7 +389,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
-    marginTop: 40
+    marginTop: 40,
   },
   scrollContent: {
     flexGrow: 1,
@@ -433,27 +438,25 @@ const styles = StyleSheet.create({
   placeholderText: {
     color: '#9E9E9E',
   },
-  pickerOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 1,
-    justifyContent: 'flex-start',
-    paddingTop: 50, // Account for button height
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
   },
-  pickerContainer: {
+  modalContent: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    marginTop: 8,
-    marginHorizontal: 0,
-    maxHeight: Dimensions.get('window').height * 0.4,
+    borderRadius: 12,
+    maxHeight: Dimensions.get('window').height * 0.6,
+    paddingBottom: 8,
   },
-  pickerScroll: {
-    maxHeight: Dimensions.get('window').height * 0.4,
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#212121',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
   userInfoContainer: {
     backgroundColor: '#E3F2FD',
@@ -534,7 +537,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#424242',
   },
-
   footer: {
     position: 'absolute',
     bottom: 0,
@@ -567,4 +569,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default AddAddressScreen
+export default AddAddressScreen;

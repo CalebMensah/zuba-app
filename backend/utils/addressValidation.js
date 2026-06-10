@@ -82,7 +82,7 @@ export const validateAddressData = (data, isUpdate = false) => {
     if (!isUpdate && !addressLine1) {
       errors.push('Address line 1 is required');
     } else if (addressLine1) {
-      if (addressLine1.length < 5) {
+      if (addressLine1.length < 3) {
         errors.push('Address line 1 must be at least 5 characters');
       }
       if (addressLine1.length > 200) {
@@ -169,10 +169,6 @@ export const validateAddressData = (data, isUpdate = false) => {
       if (postalCode.length > 20) {
         errors.push('Postal code must not exceed 20 characters');
       }
-      // Optional: Enable strict Ghana postal code validation
-      // if (!isValidPostalCode(postalCode)) {
-      //   errors.push('Invalid postal code format for Ghana');
-      // }
       sanitizedData.postalCode = postalCode;
     } else {
       sanitizedData.postalCode = null;
