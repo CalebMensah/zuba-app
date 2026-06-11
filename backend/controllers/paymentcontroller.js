@@ -278,7 +278,7 @@ export const createCheckoutSession = async (req, res) => {
             gateway: 'paystack',
             gatewayRef: response.data.reference,
             gatewayStatus: 'pending',
-            status: 'PENDING_PAYMENT',
+            status: 'PENDING',
             metadata: {
               ...metadata,
               authorizationUrl: response.data.authorization_url,
