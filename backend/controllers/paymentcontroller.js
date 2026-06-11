@@ -199,7 +199,7 @@ export const createCheckoutSession = async (req, res) => {
 
       // Check for existing pending payments
       const existingPayments = await tx.payment.findMany({ 
-        where: { orderId: { in: orderIds }, status: 'PENDING_PAYMENT' } 
+        where: { orderId: { in: orderIds }, status: 'PENDING' } 
       });
       if (existingPayments.length > 0) {
         throw new Error('One or more orders already have pending payments.');

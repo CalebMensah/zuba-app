@@ -6,6 +6,7 @@ import { processRefund, checkRefundEligibility } from '../utils/refundUtils.js';
 
 // Import shared fee calculator (must match paymentcontroller)
 import { PLATFORM_FEE_PERCENT, PAYSTACK_COLLECTION_PERCENT } from '../utils/fees.js';
+import { DeliveryMethod } from '@prisma/client';
 
 // Buyer pays subtotal + 3% platform + 1.95% paystack
 function calculateOrderFees(subtotal) {
@@ -441,7 +442,7 @@ export const getBuyerOrders = async (req, res) => {
             product: { select: { id: true, name: true, images: true, price: true } }
           }
         },
-        deliveryInfo: { select: { status: true, trackingNumber: true, deliveryType: true } },
+        deliveryInfo: { select: { status: true, trackingNumber: true, DeliveryMethod: true } },
         store: { select: { id: true, name: true, url: true, logo: true } },
         payment: true,
         escrow: true
@@ -566,7 +567,6 @@ export const getSellerOrders = async (req, res) => {
         buyerTotalAmount: order.totalAmount + (order.paystackFee || 0),
         breakdown: {
           subtotal: order.subtotal,
-          deliveryFee: order.deliveryFee || 0,
           taxAmount: order.taxAmount || 0,
           discount: order.discount || 0,
           orderSubtotal: order.totalAmount,
