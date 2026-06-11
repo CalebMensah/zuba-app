@@ -251,7 +251,7 @@ model DeliveryInfo {
   address                String
   email                  String
   city                   String
-  postalCode             String
+  postalCode             String?
   region                 String
   country                String            @default("Ghana")
   deliveryMethod         DeliveryMethod    @default(SELLER_DELIVERY)

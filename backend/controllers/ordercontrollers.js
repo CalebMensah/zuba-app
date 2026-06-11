@@ -174,12 +174,6 @@ export const createOrder = async (req, res) => {
                 region: deliveryInfo.region,
                 country: deliveryInfo.country || "Ghana",
                 postalCode: deliveryInfo.postalCode || null,
-                deliveryType: deliveryInfo.deliveryType || "STANDARD",
-                deliveryFee,
-                deliveryInstructions: deliveryInfo.deliveryInstructions || null,
-                preferredDeliveryDate: deliveryInfo.preferredDeliveryDate ? new Date(deliveryInfo.preferredDeliveryDate) : null,
-                preferredDeliveryTime: deliveryInfo.preferredDeliveryTime || null,
-                notes: deliveryInfo.notes || null
               }
             },
             billingInfo: !sameAsDelivery && billingInfo ? {
