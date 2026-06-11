@@ -185,7 +185,7 @@ export const createCheckoutSession = async (req, res) => {
       // Validate orders
       const invalidOrders = [];
       for (const order of orders) {
-        if (order.status !== 'PENDING_PAYMENT' || order.paymentStatus !== 'PENDING_PAYMENT') {
+        if (order.status !== 'PENDING_PAYMENT' || order.paymentStatus !== 'PENDING') {
           invalidOrders.push(order.id);
         }
         const totalCheck = await calculateOrderTotal(order.id);
@@ -419,7 +419,7 @@ export const initiatePayment = async (req, res) => {
       
       if (!order) throw new Error('Order not found.');
       if (order.buyerId !== userId) throw new Error('Unauthorized to initiate payment for this order.');
-      if (order.status !== 'PENDING' || order.paymentStatus !== 'PENDING') throw new Error('Invalid order status or payment already processed.');
+      if (order.status !== 'PENDING_PAYMENT' || order.paymentStatus !== 'PENDING') throw new Error('Invalid order status or payment already processed.');
 
       const totalCheck = await calculateOrderTotal(orderId);
       if (!totalCheck || !totalCheck.isValid) throw new Error('Order total validation failed.');
