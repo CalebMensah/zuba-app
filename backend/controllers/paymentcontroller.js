@@ -136,8 +136,6 @@ export const createCheckoutSession = async (req, res) => {
     }
     const realEmail = user.email.toLowerCase().trim();
 
-    console.log('👤 Using real buyer email:', realEmail);
-
     // Validation
     if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
       return res.status(400).json({ 
@@ -187,7 +185,7 @@ export const createCheckoutSession = async (req, res) => {
       // Validate orders
       const invalidOrders = [];
       for (const order of orders) {
-        if (order.status !== 'PENDING' || order.paymentStatus !== 'PENDING') {
+        if (order.status !== 'PENDING_PAYMENT' || order.paymentStatus !== 'PENDING_PAYMENT') {
           invalidOrders.push(order.id);
         }
         const totalCheck = await calculateOrderTotal(order.id);
@@ -201,7 +199,7 @@ export const createCheckoutSession = async (req, res) => {
 
       // Check for existing pending payments
       const existingPayments = await tx.payment.findMany({ 
-        where: { orderId: { in: orderIds }, status: 'PENDING' } 
+        where: { orderId: { in: orderIds }, status: 'PENDING_PAYMENT' } 
       });
       if (existingPayments.length > 0) {
         throw new Error('One or more orders already have pending payments.');
@@ -280,7 +278,7 @@ export const createCheckoutSession = async (req, res) => {
             gateway: 'paystack',
             gatewayRef: response.data.reference,
             gatewayStatus: 'pending',
-            status: 'PENDING',
+            status: 'PENDING_PAYMENT',
             metadata: {
               ...metadata,
               authorizationUrl: response.data.authorization_url,
