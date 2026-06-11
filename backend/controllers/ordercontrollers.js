@@ -1201,14 +1201,14 @@ export const cancelOrder = async (req, res) => {
     let cancelledForName = '';
     let cancelledForEmail = '';
 
-    if (order.buyerId === userId && order.status === 'PENDING') {
+    if (order.buyerId === userId && order.status === 'PENDING_PAYMENT') {
       canCancel = true;
       cancelledBy = 'buyer';
       cancelledByName = order.buyer.firstName;
       cancelledForId = order.store.userId;
       cancelledForName = order.store.user.firstName;
       cancelledForEmail = order.store.user.email;
-    } else if (order.store.userId === userId && ['PENDING', 'CONFIRMED'].includes(order.status)) {
+    } else if (order.store.userId === userId && ['PENDING_PAYMENT', 'CONFIRMED'].includes(order.status)) {
       canCancel = true;
       cancelledBy = 'seller';
       cancelledByName = order.store.user.firstName;
@@ -1254,7 +1254,7 @@ export const cancelOrder = async (req, res) => {
         });
       }
 
-      if (order.escrow && order.escrow.releaseStatus === 'PENDING') {
+      if (order.escrow && order.escrow.releaseStatus === 'HELD') {
         await tx.escrow.update({
           where: { id: order.escrow.id },
           data: { releaseStatus: 'CANCELLED', releaseReason: 'Order cancelled' }
@@ -1358,7 +1358,7 @@ export const getUnpaidOrders = async (req, res) => {
 
     const whereClause = {
       buyerId: userId,
-      status: 'PENDING',
+      status: 'PENDING_PAYMENT',
       paymentStatus: 'PENDING'
     };
 
@@ -1510,7 +1510,7 @@ export const getUnpaidOrderById = async (req, res) => {
       where: {
         id: orderId,
         buyerId: userId,
-        status: 'PENDING',
+        status: 'PENDING_PAYMENT',
         paymentStatus: 'PENDING'
       },
       include: {
@@ -1632,7 +1632,7 @@ export const getUnpaidOrdersSummary = async (req, res) => {
     const unpaidOrders = await prisma.order.findMany({
       where: {
         buyerId: userId,
-        status: 'PENDING',
+        status: 'PENDING_PAYMENT',
         paymentStatus: 'PENDING'
       },
       select: {
@@ -1711,7 +1711,7 @@ export const getUnpaidOrdersByStore = async (req, res) => {
     const unpaidOrders = await prisma.order.findMany({
       where: {
         buyerId: userId,
-        status: 'PENDING',
+        status: 'PENDING_PAYMENT',
         paymentStatus: 'PENDING'
       },
       include: {
@@ -1812,7 +1812,7 @@ export const cancelUnpaidOrder = async (req, res) => {
       where: {
         id: orderId,
         buyerId: userId,
-        status: 'PENDING',
+        status: 'PENDING_PAYMENT',
         paymentStatus: 'PENDING'
       },
       include: {
