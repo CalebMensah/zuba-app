@@ -249,6 +249,7 @@ model DeliveryInfo {
   recipient              String
   phone                  String
   address                String
+  email                  String
   city                   String
   region                 String
   country                String            @default("Ghana")
