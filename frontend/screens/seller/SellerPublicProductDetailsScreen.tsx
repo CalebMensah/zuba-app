@@ -23,6 +23,7 @@ import { Colors, Typography } from '../../constants/colors';
 import ProductReviewCard from '../../components/ProductReviewCard';
 import ProductCard from '../../components/ProductCard';
 import { useChatContext } from '../../context/ChatContext';
+import { useAuth } from '../../context/AuthContext';
 
 const { width, height } = Dimensions.get('window');
 
@@ -42,6 +43,7 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
   navigation,
 }) => {
   const { productUrl, storeUrl } = route.params;
+  const { isGuest } = useAuth();
   const { data: product, isLoading, error, refetch } = useProduct(productUrl);
   const {
     loading: likeLoading,
@@ -218,6 +220,22 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
       Alert.alert('Select Color', 'Please select a color before adding to cart.');
       return;
     }
+    
+    if (isGuest) {
+      Alert.alert(
+        'Sign In Required',
+        'You need to sign in to add items to your cart.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Sign In',
+            onPress: () => navigation.navigate('Login'),
+            style: 'default'
+          },
+        ]
+      );
+      return;
+    }
 
     setAddingToCart(true);
     try {
@@ -229,8 +247,8 @@ const SellerPublicProductDetailsScreen: React.FC<SellerPublicProductDetailsScree
       // Show success alert after modal closes
       setTimeout(() => {
         Alert.alert(
-          '✓ Added to Cart',
-          `${quantity} ${quantity > 1 ? 'items' : 'item'} of "${product.name}" added to your cart!`,
+          'Added to Cart Successfully',
+          `${product.name} has been added to your cart.`,
           [
             { 
               text: 'Continue Shopping', 

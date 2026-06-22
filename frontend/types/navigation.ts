@@ -86,6 +86,7 @@ export type BuyerStackParamList = {
   ReviewDetails: { reviewId: string };
   PaymentSuccess: { amount: number; orderCount: number; reference: string, checkoutSessionId: string; orderId?: string };
   SearchScreen: undefined;
+  Login: undefined;
 
   // Add more buyer-specific screens
 };

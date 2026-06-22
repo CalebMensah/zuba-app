@@ -41,8 +41,10 @@ export interface DeliveryInfo {
   recipient: string;
   phone: string;
   address: string;
+  emnail?: string | null;
   city: string;
   region: string;
+  postalCode?: string | null;
   country: string;
   deliveryMethod: DeliveryMethod;
   deliveryFee?: number | null;

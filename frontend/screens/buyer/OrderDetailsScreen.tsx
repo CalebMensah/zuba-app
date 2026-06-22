@@ -73,13 +73,22 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
   const isPaid = order?.status !== 'PENDING_PAYMENT';
 
   const handlePayNow = () => {
-    if (order) {
-      navigation.navigate('Payment', {
-        orderId: order.id,
-        amount: order.breakdown?.buyerTotal || order.totalAmount,
-        currency: order.currency,
-      });
-    }
+    if (!order) return;
+
+    const paymentAny = order.payment as any;
+    const paymentRef = paymentAny?.[0]?.gatewayRef || paymentAny?.gatewayRef;
+    const authorizationUrl = paymentAny?.[0]?.metadata?.authorizationUrl || paymentAny?.metadata?.authorizationUrl;
+
+
+    navigation.navigate('Payment', {
+      orderId: order.id,
+      amount: order.breakdown?.buyerTotal || order.totalAmount,
+      currency: order.currency,
+      // enable PaymentScreen reuse path
+      reference: paymentRef,
+      paymentSession: authorizationUrl ? { authorizationUrl } : undefined,
+      checkoutSessionId: order.checkoutSession,
+    });
   };
 
   const handleCancelOrder = () => {
@@ -648,8 +657,18 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
         {/* Delivery Address */}
         {order.deliveryInfo && (
           <View style={styles.addressCard}>
-            <Text style={styles.sectionTitle}>Delivery Address</Text>
-            <View style={styles.addressContent}>
+            <View style={styles.addressHeaderRow}>
+              <Text style={styles.sectionTitle}>Delivery Address</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('ManageAddresses')} style={styles.editAddressButton}>
+                <Text style={styles.editAddressText}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.addressContent}
+              onPress={() => navigation.navigate('ManageAddresses')}
+              activeOpacity={0.7}
+            >
               <View style={styles.addressIconContainer}>
                 <Ionicons name="location" size={24} color={Colors.primary} />
               </View>
@@ -663,11 +682,11 @@ const OrderDetails: React.FC<OrderDetailsProps> = ({ route, navigation }) => {
                 </Text>
                 {order.deliveryInfo.dispatchNote && (
                   <Text style={styles.addressText}>
-                    📝 Note: {order.deliveryInfo.dispatchNote}
+                    Note: {order.deliveryInfo.dispatchNote}
                   </Text>
                 )}
               </View>
-            </View>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1273,6 +1292,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 3,
+  },
+  addressHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  editAddressButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  editAddressText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.primary,
   },
   addressContent: {
     flexDirection: 'row',

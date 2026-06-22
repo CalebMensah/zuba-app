@@ -293,7 +293,7 @@ const CartScreen = () => {
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Sign In',
-            onPress: () => (navigation as any).navigate('Auth', { screen: 'Login' })
+            onPress: () => (navigation as any).navigate ('Login')
           },
         ]
       );

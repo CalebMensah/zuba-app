@@ -49,7 +49,7 @@ export const getRedeemableProducts = async (req, res) => {
     }
 
     const rawQuery = `
-      SELECT "id", "storeId", "name", "description", "price", "stock", "images", "category", "tags", "sizes", "color", "weight", "sellerNote", "moq", "quantityBought", "url", "isActive", "createdAt", "updatedAt"
+      SELECT "id", "storeId", "name", "description", "price", "stock", "images", "category", "tags", "sizes", "color", "moq", "quantityBought", "url", "isActive", "createdAt", "updatedAt"
       FROM "Product"
       WHERE "isActive" = true
         AND "price" <= $1

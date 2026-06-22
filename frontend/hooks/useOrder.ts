@@ -138,35 +138,43 @@ export const useUpdateCheckoutSession = () => {
 export const useCancelOrder = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ orderId, reason }: CancelOrderArg) => orderAPI.cancelOrder(orderId, reason),
-    onMutate: async (variables: CancelOrderArg) => {
-      const { orderId } = variables;
+    mutationFn: ({ orderId, reason }: CancelOrderArg) => 
+      orderAPI.cancelOrder(orderId, reason),
+    onMutate: async ({ orderId }: CancelOrderArg) => {
+      // cancel any in-flight list queries
       await queryClient.cancelQueries({ queryKey: orderKeys.lists() });
-      const previousOrder = queryClient.getQueryData(orderKeys.detail(orderId));
-      queryClient.setQueryData(orderKeys.detail(orderId), (old: any) => ({
-        ...old,
-        status: 'CANCELLED',
-        cancelledAt: new Date().toISOString(),
-      }));
-      return { previousOrder };
+
+      // snapshot current list
+      const previousList = queryClient.getQueryData(orderKeys.buyerOrders());
+
+      // optimistically remove from list immediately
+      queryClient.setQueryData(orderKeys.buyerOrders(), (old: any) => {
+        if (!old?.orders) return old;
+        return {
+          ...old,
+          orders: old.orders.filter((o: any) => o.id !== orderId),
+          pagination: {
+            ...old.pagination,
+            total: Math.max(0, (old.pagination?.total || 1) - 1),
+          }
+        };
+      });
+
+      return { previousList };
     },
-    onError: (err: any, variables: CancelOrderArg, context: any) => {
-      const { orderId } = variables;
-      if ((context as any)?.previousOrder) {
-        queryClient.setQueryData(orderKeys.detail(orderId), (context as any).previousOrder);
+    onError: (err, { orderId }, context: any) => {
+      // rollback on error
+      if (context?.previousList) {
+        queryClient.setQueryData(orderKeys.buyerOrders(), context.previousList);
       }
       Alert.alert('Error', (err as Error).message || 'Failed to cancel order');
     },
-    onSettled: (data: any, error: any, variables: CancelOrderArg, context: any) => {
-      const { orderId } = variables;
+    onSettled: () => {
+      // force refetch to sync with server
       queryClient.invalidateQueries({ queryKey: orderKeys.lists() });
-      if (data) {
-        queryClient.setQueryData(orderKeys.detail(orderId), data);
-      }
+      queryClient.refetchQueries({ queryKey: orderKeys.lists() });
     },
   });
-
-
 };
 
 export const useAcceptOrder = () => {

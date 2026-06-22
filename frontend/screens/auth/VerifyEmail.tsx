@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -114,15 +115,23 @@ const VerifyEmailScreen: React.FC<Props> = ({ navigation, route }) => {
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.iconContainer}>
-            <Text style={styles.emailIcon}>📧</Text>
+            <Image
+              source={require('../../assets/logo.png')}
+              style={styles.brandLogo}
+              resizeMode="contain"
+            />
           </View>
-          
+
           <View style={styles.brandContainer}>
-            <Text style={styles.brandName}>ZUBA</Text>
-            <View style={styles.brandAccent} />
+            <Image
+              source={require('../../assets/logo.png')}
+              style={styles.brandLogoSmall}
+              resizeMode="contain"
+            />
           </View>
 
           <Text style={styles.title}>Verify Your Email</Text>
+
           <Text style={styles.subtitle}>
             We sent a 6-digit verification code to
           </Text>
@@ -216,27 +225,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 24,
   },
-  emailIcon: {
-    fontSize: 40,
+  brandLogo: {
+    width: 70,
+    height: 70,
+  },
+  brandLogoSmall: {
+    width: 120,
+    height: 120,
   },
   brandContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 16,
-  },
-  brandName: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: Colors.primary,
-    letterSpacing: 1,
-  },
-  brandAccent: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: Colors.accent,
-    marginLeft: 4,
-    marginBottom: 12,
   },
   title: {
     fontSize: 26,

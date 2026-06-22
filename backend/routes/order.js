@@ -26,12 +26,8 @@ router.get('/my-orders', authenticateToken, authorizeRoles("BUYER"),getBuyerOrde
 
 router.get('/seller/seller-orders', authenticateToken,getSellerOrders);
 
-// UNPAID-SPECIFIC ROUTES (MUST BE BEFORE GENERIC /:orderId)
-router.get('/user/unpaid', authenticateToken, getUnpaidOrders);
-router.get('/unpaid/summary', authenticateToken, getUnpaidOrdersSummary);
-router.get('/unpaid/by-store', authenticateToken, getUnpaidOrdersByStore);
-router.get('/unpaid/:orderId', authenticateToken, getUnpaidOrderById);
-router.delete('/unpaid/:orderId', authenticateToken, cancelUnpaidOrder);
+// (Unpaid-specific routes removed - use buyer orders endpoint with status=PENDING_PAYMENT) 
+
 
 // GENERIC ROUTES (AFTER SPECIFIC ROUTES)
 router.get('/:orderId', authenticateToken, getOrderById); 

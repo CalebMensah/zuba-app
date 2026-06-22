@@ -21,8 +21,6 @@ interface Product {
   tags: string[];
   sizes?: string[];
   color?: string[];
-  weight?: number;
-  sellerNote?: string;
   moq?: number;
   quantityBought: number;
   url: string;

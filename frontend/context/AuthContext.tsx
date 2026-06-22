@@ -99,7 +99,7 @@ export const AuthProvider: React.FC<{
       return;
     }
 
-    // ✅ Get native FCM token instead of Expo token
+    // Get native FCM token instead of Expo token
     const pushTokenData = await Notifications.getDevicePushTokenAsync();
     const fcmToken = pushTokenData.data;
     
@@ -146,10 +146,10 @@ export const AuthProvider: React.FC<{
       throw new Error(`Failed to register token: ${response.status}`);
     }
 
-    console.log('[AuthContext] ✅ FCM token registered successfully');
+    console.log('[AuthContext] FCM token registered successfully');
     
   } catch (error: any) {
-    console.error('[AuthContext] ❌ Error registering FCM token:', error.message);
+    console.error('[AuthContext] Error registering FCM token:', error.message);
   }
 };
 
@@ -166,7 +166,7 @@ export const AuthProvider: React.FC<{
         body: JSON.stringify({ fcmToken: currentPushToken })
       });
       
-      console.log('[AuthContext] ✅ Token unregistered');
+      console.log('[AuthContext] Token unregistered');
     } catch (error) {
       console.error('[AuthContext] Error unregistering FCM token:', error);
     }

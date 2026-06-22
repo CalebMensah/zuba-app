@@ -18,7 +18,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
   useBuyerOrders,
-  useUnpaidOrdersSummary,
 } from '../../hooks/useOrder';
 import { useProductLike } from '../../hooks/useProductLikes';
 import { useNotifications } from '../../hooks/useNotifications';
@@ -33,7 +32,7 @@ const BuyerProfileScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user, logout } = useAuth();
 
-  const unpaidSummaryQuery = useUnpaidOrdersSummary();
+  const unpaidOrdersQuery = useBuyerOrders({ page: 1, limit: 10, status: 'PENDING_PAYMENT' });
   const pendingOrdersQuery = useBuyerOrders({ page: 1, limit: 1, status: 'PENDING' });
   const shippedOrdersQuery = useBuyerOrders({ page: 1, limit: 1, status: 'SHIPPED' });
   const deliveredOrdersQuery = useBuyerOrders({ page: 1, limit: 1, status: 'DELIVERED' });
@@ -52,21 +51,24 @@ const BuyerProfileScreen: React.FC = () => {
   const [slideAnim] = useState(new Animated.Value(width));
 
   const isLoadingQueries =
-    unpaidSummaryQuery.isLoading ||
+    unpaidOrdersQuery.isLoading ||
     pendingOrdersQuery.isLoading ||
     shippedOrdersQuery.isLoading ||
     deliveredOrdersQuery.isLoading;
 
   const isLoading = isLoadingQueries || loadingLegacyData;
   const hasData =
-    unpaidSummaryQuery.data ||
+    unpaidOrdersQuery.data ||
     pendingOrdersQuery.data ||
     shippedOrdersQuery.data ||
     deliveredOrdersQuery.data;
 
   // Derive data from queries
-  const unpaidCount = unpaidSummaryQuery.data?.totalUnpaidOrders || 0;
-  const unpaidAmount = unpaidSummaryQuery.data?.totalAmount || 0;
+  const unpaidCount = unpaidOrdersQuery.data?.pagination?.total || 0;
+  const unpaidAmount =
+    unpaidOrdersQuery.data?.orders?.reduce((sum: number, o: any) => sum + (o.buyerTotalAmount ?? o.totalAmount ?? 0), 0) ||
+    0;
+
   const orderCounts = {
     pending: pendingOrdersQuery.data?.pagination.total || 0,
     shipped: shippedOrdersQuery.data?.pagination.total || 0,
@@ -112,7 +114,7 @@ const BuyerProfileScreen: React.FC = () => {
 
   const handleRefresh = async () => {
     await Promise.all([
-      unpaidSummaryQuery.refetch(),
+      unpaidOrdersQuery.refetch(),
       pendingOrdersQuery.refetch(),
       shippedOrdersQuery.refetch(),
       deliveredOrdersQuery.refetch(),
@@ -187,7 +189,7 @@ const BuyerProfileScreen: React.FC = () => {
     );
   }
   const isRefreshing =
-    (unpaidSummaryQuery.isFetching && !!unpaidSummaryQuery.data) ||
+    (unpaidOrdersQuery.isFetching && !!unpaidOrdersQuery.data) ||
     (pendingOrdersQuery.isFetching && !!pendingOrdersQuery.data) ||
     (shippedOrdersQuery.isFetching && !!shippedOrdersQuery.data) ||
     (deliveredOrdersQuery.isFetching && !!deliveredOrdersQuery.data);
@@ -282,8 +284,9 @@ const BuyerProfileScreen: React.FC = () => {
               icon="pending-actions"
               label="Unpaid"
               count={unpaidCount}
-              onPress={() => (navigation as any).navigate('UnpaidOrders')}
+              onPress={() => (navigation as any).navigate('BuyerOrders', { status: 'PENDING_PAYMENT' })}
             />
+
             <OrderStatusCard
               icon="schedule"
               label="Pending"
@@ -314,8 +317,9 @@ const BuyerProfileScreen: React.FC = () => {
           {unpaidCount > 0 && (
             <TouchableOpacity
               style={styles.unpaidAlert}
-              onPress={() => (navigation as any).navigate('UnpaidOrders')}
+              onPress={() => (navigation as any).navigate('BuyerOrders', { status: 'PENDING_PAYMENT' })}
             >
+
               <Ionicons name="warning" size={20} color="#FF3B30" />
               <Text style={styles.unpaidAlertText}>
                 {`You have ${unpaidCount} unpaid order${

@@ -33,7 +33,7 @@ import PointsScreen from '../screens/buyer/RedeemPointsScreen';
 import PointsHistoryScreen from '../screens/buyer/PointsHistory';
 import DeliveryDetailsScreen from '../screens/buyer/DeliveryDetails';
 import ProductReviewsScreen from '../screens/buyer/ProductReviewScreen';
-import UnpaidOrdersScreen from '../screens/buyer/UnPaidOrders';
+
 import ManageReviewScreen from '../screens/buyer/ManageReview';
 import PaymentDetailsScreen from '../screens/shared/PaymentDetailsScreen';
 import PaymentsScreen from '../screens/shared/UserPaymentScreen';
@@ -46,6 +46,7 @@ import SellerStoreReviews from '../screens/buyer/StoreReviews';
 import ReviewDetails from '../screens/buyer/ReviewDetails';
 import PaymentSuccessScreen from '../screens/buyer/PaymentSuccessScreen';
 import SearchScreen from '../screens/buyer/SearchScreen';
+import LoginScreen from '../screens/auth/LoginScreen';
 
 
 const Tab = createBottomTabNavigator<BuyerStackParamList>();
@@ -127,8 +128,8 @@ const BuyerNavigator: React.FC = () => {
       <Stack.Screen name="CartScreen" component={CartScreen} />
       <Stack.Screen name="DeliveryDetails" component={DeliveryDetailsScreen} />
       <Stack.Screen name="ProductReviews" component={ProductReviewsScreen} />
-      <Stack.Screen name="UnpaidOrders" component={UnpaidOrdersScreen} />
       <Stack.Screen name="ManageReview" component={ManageReviewScreen} />
+
       <Stack.Screen name="PaymentsScreen" component={PaymentsScreen} />
       <Stack.Screen name="PaymentDetails" component={PaymentDetailsScreen} />
       <Stack.Screen name="About" component={AboutScreen} />
@@ -140,6 +141,7 @@ const BuyerNavigator: React.FC = () => {
       <Stack.Screen name="ReviewDetails" component={ReviewDetails} />
       <Stack.Screen name="PaymentSuccess" component={PaymentSuccessScreen} />
       <Stack.Screen name="SearchScreen" component={SearchScreen} />
+      <Stack.Screen name="Login" component={LoginScreen} />
     </Stack.Navigator>
   );
 };

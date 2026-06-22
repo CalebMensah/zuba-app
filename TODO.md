@@ -1,13 +1,9 @@
-- [x] Edit `frontend/screens/seller/SellerOrderDetails.tsx`
+# TODO
 
-  - [x] Remove obsolete imports and usage: `useUpdateOrderStatus`, `setDeliveryStatus`, `calculateOrderTotals`
+- [x] Remove unpaid-specific routes from backend: backend/routes/order.js
 
-  - [ ] Delete delivery-status modal state + handlers (`showStatusModal`, `handleUpdateDeliveryStatus`, `handleDeliveryStatusChange`) and modal JSX
-  - [ ] Update `renderStatusBadge` to use only valid `OrderStatus` values; add `PENDING_PAYMENT`, `PAID`, `DISPUTED`; remove dead statuses
-  - [ ] Update `renderActionButtons` switch: remove `CONFIRMED`, `OUT_FOR_DELIVERY`, `DELIVERED`; remove “Update Delivery Status” button for `SHIPPED`; keep only info message
-  - [ ] Update `handleMarkAsDelivered` navigation to `AddDeliveryInfo` with `{ orderId, isEdit: false }`
-  - [ ] Update `Delivery Information` fields: `recipientName/recipientPhone/recipientAddress` → `recipient/phone/address`; remove `deliveryInstructions` reference if present
-  - [ ] Remove `updateOrderStatus.isPending` from `isProcessing`
-- [ ] Run frontend TypeScript/typecheck or build to verify compilation
-- [ ] Search repo for remaining `setDeliveryStatus` or old field names to confirm cleanup
+- [x] Update BuyerProfileScreen to stop using unpaid summary hook and use unified BuyerOrders logic instead
+- [ ] Remove or stop using unpaid-specific hooks/screens if they become unused
+- [ ] Run typecheck/tests (frontend/backend) and verify navigation to Unpaid uses BuyerOrders with status PENDING_PAYMENT
+
 

@@ -29,6 +29,7 @@ interface PaymentOrder {
 const PaymentScreen = ({ route, navigation }: any) => {
   const {
     orders: ordersParam,
+    orderId,
     paymentSession,
     totalAmount: totalAmountParam,
     totalOrders,
@@ -37,7 +38,19 @@ const PaymentScreen = ({ route, navigation }: any) => {
     checkoutSessionId,
   } = route.params || {};
 
-  const orders: PaymentOrder[] = ordersParam || [];
+  // Support both navigation formats:
+  // 1) Multi-order: { orders: [{ orderId, ... }] }
+  // 2) Single order (OrderDetails -> Payment): { orderId: '...' }
+  const orders: PaymentOrder[] =
+    (ordersParam && Array.isArray(ordersParam) ? ordersParam : []).length > 0
+      ? (ordersParam as PaymentOrder[])
+      : orderId
+      ? [{
+          orderId: String(orderId),
+          storeName: '',
+          checkoutSession: '',
+        }]
+      : [];
 
   const { createCheckoutSession, verifyPayment, loading: paymentLoading } = usePayment();
 
@@ -48,7 +61,6 @@ const PaymentScreen = ({ route, navigation }: any) => {
 const [isVerifying, setIsVerifying] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
 
-// Use TanStack Query's useQueries to fetch multiple orders in parallel
 const orderQueries = useQueries({
   queries: orders.map((order) => ({
     queryKey: orderKeys.detail(order.orderId),
@@ -175,28 +187,42 @@ const orderQueries = useQueries({
         console.log('Creating new checkout session');
         const orderIds = orders.map((order) => order.orderId);
 
-        const response = await createCheckoutSession({
-          orderIds,
-          email: email.trim(),
-        });
+        // Guard against stale/invalid orders (already paid or already have pending payments)
+        try {
+          const response = await createCheckoutSession({
+            orderIds,
+            email: email.trim(),
+          });
 
-        if (response && response.data) {
-          console.log('Checkout session created:', response.data);
-          paymentReference = response.data.reference;
-          setPaymentAmount(response.data.totalAmount);
-          paymentAmount = response.data.totalAmount;
-          authorizationUrl = response.data.authorizationUrl;
-          
-          if (!totalAmountParam) {
-            console.log('Refetching orders for breakdown details...');
-            orderQueries.forEach((query) => query.refetch());
+          if (response && response.data) {
+            console.log('Checkout session created:', response.data);
+            paymentReference = response.data.reference;
+            setPaymentAmount(response.data.totalAmount);
+            paymentAmount = response.data.totalAmount;
+            authorizationUrl = response.data.authorizationUrl;
+
+            if (!totalAmountParam) {
+              console.log('Refetching orders for breakdown details...');
+              orderQueries.forEach((query) => query.refetch());
+            } else {
+              console.log('Using totalAmountParam from CheckoutScreen - skipping refetch');
+            }
           } else {
-            console.log('Using totalAmountParam from CheckoutScreen - skipping refetch');
+            console.error('No response data from checkout session creation');
+            Alert.alert('Error', 'Failed to initiate payment. Please try again.');
+            return;
           }
-        } else {
-          console.error('No response data from checkout session creation');
-          Alert.alert('Error', 'Failed to initiate payment. Please try again.');
-          return;
+        } catch (e: any) {
+          console.error('Checkout session creation failed:', e);
+          const msg: string = e?.message || '';
+          if (msg.includes('Invalid orders') || msg.includes('pending payments')) {
+            Alert.alert(
+              'Payment not available',
+              'This order has already been processed or already has a pending payment. Please check your Orders tab.'
+            );
+            return;
+          }
+          throw e;
         }
       }
 
@@ -423,48 +449,11 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
       console.log('Non-JSON message from WebView:', event.nativeEvent.data);
     }
   };
-
+  
   useEffect(() => {
-    if (authUrl && sessionReference) {
-      const timeout = setTimeout(async () => {
-        if (isVerifying) return;
-        
-        console.log('Verification timeout - checking status');
-        setIsVerifying(true);
-        
-        try {
-          const verification = await verifyPayment(sessionReference);
-          if (verification?.success) {
-            Alert.alert('Payment Complete', 'Payment processed successfully!', [
-              { text: 'View Orders', onPress: () => {
-                navigation.replace('Orders');
-                setAuthUrl(null);
-              }}
-            ]);
-          } else {
-            Alert.alert('Payment Status', 'Check your orders for payment status.', [
-              { text: 'View Orders', onPress: () => {
-                navigation.replace('Orders');
-                setAuthUrl(null);
-              }}
-            ]);
-          }
-        } catch (err) {
-          console.error('Timeout verification error:', err);
-          Alert.alert('Timeout', 'Payment may still be processing. Check Orders tab.', [
-            { text: 'View Orders', onPress: () => {
-              navigation.replace('Orders');
-              setAuthUrl(null);
-            }}
-          ]);
-        } finally {
-          setIsVerifying(false);
-        }
-      }, 30000); // 30 second timeout
-      
-      return () => clearTimeout(timeout);
-    }
-  }, [authUrl, sessionReference, isVerifying]);
+    // intentionally empty
+  }, []);
+
 
   const formatPrice = (price: number) => {
     return `GH₵ ${parseFloat(price.toString()).toFixed(2)}`;

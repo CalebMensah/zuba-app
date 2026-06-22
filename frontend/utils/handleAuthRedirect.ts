@@ -12,12 +12,15 @@ export function forceNavigateToLogin(
     if (!navigation) return;
 
     // Reset to RootNavigator's Auth route. RootNavigator itself is mounted as the app root.
-    navigation.dispatch(
-      CommonActions.reset({
-        index: 0,
-        routes: [{ name: 'Auth' }],
-      })
-    );
+    // Deferring avoids a race condition where the current navigator hasn't switched state yet.
+    setTimeout(() => {
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Auth' }],
+        })
+      );
+    }, 0);
   } catch {
     // no-op
   }
