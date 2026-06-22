@@ -56,6 +56,7 @@ model User {
   storeFollowers             StoreFollower[]
   userChatPreferences        UserChatPreference?
   verificationAudits         VerificationAuditLog[]
+  pointsLedger  PointsLedger[]
 
   @@index([email])
   @@index([phone])
@@ -411,6 +412,7 @@ model Order {
   payout                 Payout?
   reviews                Review[]
   statusHistory          StatusChange[]
+  pointsLedger  PointsLedger[]
 
   @@index([buyerId])
   @@index([storeId])
@@ -781,6 +783,25 @@ model Payout {
 
   @@index([sellerId])
   @@index([status])
+}
+
+model PointsLedger {
+  id           String   @id @default(cuid())
+  userId       String
+  orderId      String?
+  type         String   // EARN | REDEEM | REFUND | EXPIRE
+  points       Int      // positive for earn/refund, negative for redeem
+  balanceAfter Int
+  note         String?
+  createdAt    DateTime @default(now())
+  
+  user  User   @relation(fields: [userId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@index([userId])
+@@index([orderId])
+@@index([type])
+@@index([createdAt])
 }
 
 enum UserRole {

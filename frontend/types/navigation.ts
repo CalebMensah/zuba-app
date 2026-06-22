@@ -87,6 +87,13 @@ export type BuyerStackParamList = {
   PaymentSuccess: { amount: number; orderCount: number; reference: string, checkoutSessionId: string; orderId?: string };
   SearchScreen: undefined;
   Login: undefined;
+  RedeemCheckout: {
+  product: any; 
+  requiredPoints: number;
+  currentBalance: number;
+  selectedAddressId?: string;
+};
+
 
   // Add more buyer-specific screens
 };

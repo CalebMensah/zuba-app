@@ -3,6 +3,8 @@ import { cache } from '../config/redis.js';
 import { sendEmailNotification } from '../utils/sendEmailNotification.js';
 import { sendNotification } from '../utils/sendnotification.js';
 import { processRefund, checkRefundEligibility } from '../utils/refundUtils.js';
+import { refundPointsForOrder } from '../controllers/pointscontroller.js';
+
 
 // Import shared fee calculator (must match paymentcontroller)
 import { PLATFORM_FEE_PERCENT, PAYSTACK_COLLECTION_PERCENT } from '../utils/fees.js';
@@ -1265,6 +1267,10 @@ export const cancelOrder = async (req, res) => {
           data: { status: 'CANCELLED' }
         });
       }
+
+      if (order.paymentMethod === 'POINTS') {
+            await refundPointsForOrder(order.id, req.user.userId);
+          }
 
       return updated;
     });

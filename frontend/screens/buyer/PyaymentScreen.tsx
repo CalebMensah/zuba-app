@@ -7,11 +7,13 @@ import {
   StyleSheet,
   Alert,
   TextInput,
+  Platform,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
 import { useQueries, type UseQueryResult } from '@tanstack/react-query';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { OrderWithBreakdown } from '../../types/order';
 import { usePayment } from '../../hooks/usePayment';
 import { orderAPI } from '../../services/orderApi';
@@ -19,6 +21,29 @@ import { orderKeys } from '../../hooks/useOrder';
 import { useAuth } from '../../context/AuthContext';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { Colors } from '../../constants/colors';
+
+// ─── Design tokens ─────────────────────────────────────────────────────────
+const D = {
+  navy: '#0F172A',
+  navyMid: '#1E293B',
+  blue: '#3B82F6',
+  blueDark: '#2563EB',
+  blueLight: '#EFF6FF',
+  green: '#10B981',
+  greenLight: '#ECFDF5',
+  slate: '#64748B',
+  border: '#E2E8F0',
+  bg: '#F0F4FF',
+  surface: '#FFFFFF',
+  radius: { card: 20, btn: 14, pill: 100, input: 14 },
+  shadow: {
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+};
 
 interface PaymentOrder {
   orderId: string;
@@ -38,381 +63,184 @@ const PaymentScreen = ({ route, navigation }: any) => {
     checkoutSessionId,
   } = route.params || {};
 
-  // Support both navigation formats:
-  // 1) Multi-order: { orders: [{ orderId, ... }] }
-  // 2) Single order (OrderDetails -> Payment): { orderId: '...' }
   const orders: PaymentOrder[] =
     (ordersParam && Array.isArray(ordersParam) ? ordersParam : []).length > 0
       ? (ordersParam as PaymentOrder[])
       : orderId
-      ? [{
-          orderId: String(orderId),
-          storeName: '',
-          checkoutSession: '',
-        }]
+      ? [{ orderId: String(orderId), storeName: '', checkoutSession: '' }]
       : [];
 
   const { createCheckoutSession, verifyPayment, loading: paymentLoading } = usePayment();
+  const { user } = useAuth();
 
   const [email, setEmail] = useState(emailParam || '');
+  const [emailFocused, setEmailFocused] = useState(false);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [sessionReference, setSessionReference] = useState<string | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-const [isVerifying, setIsVerifying] = useState(false);
-  const [paymentAmount, setPaymentAmount] = useState<number>(0);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState(0);
 
-const orderQueries = useQueries({
-  queries: orders.map((order) => ({
-    queryKey: orderKeys.detail(order.orderId),
-    queryFn: () => orderAPI.getOrderById(order.orderId),
-    enabled: !!order.orderId,
-    staleTime: 60000,
-  })),
-}) as UseQueryResult<OrderWithBreakdown>[];
+  const orderQueries = useQueries({
+    queries: orders.map((order) => ({
+      queryKey: orderKeys.detail(order.orderId),
+      queryFn: () => orderAPI.getOrderById(order.orderId),
+      enabled: !!order.orderId,
+      staleTime: 60000,
+    })),
+  }) as UseQueryResult<OrderWithBreakdown>[];
 
-  // Derive loading and error states from all queries
-  const isLoadingOrders = orderQueries.some((query) => query.isLoading);
-  const hasErrors = orderQueries.some((query) => query.error);
+  const isLoadingOrders = orderQueries.some((q) => q.isLoading);
+  const hasErrors = orderQueries.some((q) => q.error);
   const orderDetails = orderQueries
-    .map((query) => query.data)
-    .filter((order): order is OrderWithBreakdown => Boolean(order)) as OrderWithBreakdown[];
+    .map((q) => q.data)
+    .filter((o): o is OrderWithBreakdown => Boolean(o));
 
-  // Check authentication status
   const checkAuthentication = async (): Promise<boolean> => {
     try {
       const token = await AsyncStorage.getItem('token');
       const user = await AsyncStorage.getItem('user');
-
-      if (!token || !user) {
-        console.log(' No authentication token or user data found');
-        return false;
-      }
-
-      if (!token.startsWith('eyJ')) {
-        console.log('Invalid token format');
-        return false;
-      }
-
+      if (!token || !user || !token.startsWith('eyJ')) return false;
       setIsAuthenticated(true);
-      console.log('User authenticated');
       return true;
-    } catch (error) {
-      console.error('Error checking authentication:', error);
+    } catch {
       return false;
     }
   };
 
-  useEffect(() => {
-    initializeScreen();
-  }, []);
+  useEffect(() => { initializeScreen(); }, []);
 
   const initializeScreen = async () => {
     try {
       const authenticated = await checkAuthentication();
       if (!authenticated) {
-        Alert.alert(
-          'Authentication Required',
-          'Please log in to continue with payment.',
-          [
-            { text: 'Cancel', onPress: () => navigation.goBack() },
-            { text: 'Log In', onPress: () => navigation.navigate('Login') },
-          ]
-        );
-        return;
-      }
-
-      if (!orders || orders.length === 0) {
-        Alert.alert('Error', 'No orders found', [
-          { text: 'OK', onPress: () => navigation.goBack() },
+        Alert.alert('Authentication Required', 'Please log in to continue.', [
+          { text: 'Cancel', onPress: () => navigation.goBack() },
+          { text: 'Log In', onPress: () => navigation.navigate('Login') },
         ]);
         return;
       }
-    } catch (error) {
-      console.error('Error initializing payment screen:', error);
+      if (!orders || orders.length === 0) {
+        Alert.alert('Error', 'No orders found', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      }
+    } catch {
       Alert.alert('Error', 'Failed to initialize payment screen');
       navigation.goBack();
     }
   };
 
-  const { user } = useAuth();
   useEffect(() => {
     if (orderDetails.length > 0 && !email) {
-      const orderEmail = orderDetails[0].buyer?.email || '';
-      const finalEmail = orderEmail || user?.email || emailParam || '';
-      setEmail(finalEmail);
+      setEmail(orderDetails[0].buyer?.email || user?.email || emailParam || '');
     }
   }, [orderDetails, user?.email, emailParam]);
+
+  const totalAmount =
+    totalAmountParam ??
+    (paymentAmount > 0
+      ? paymentAmount
+      : orderDetails.reduce((sum, o) => sum + (o.buyerTotalAmount ?? o.breakdown?.buyerTotal ?? o.totalAmount ?? 0), 0));
+
+  const formatPrice = (price: number) => `GH₵ ${parseFloat(price.toString()).toFixed(2)}`;
 
   const handlePayNow = async () => {
     try {
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        Alert.alert('Invalid Email', 'Please enter a valid email address');
+        Alert.alert('Invalid Email', 'Please enter a valid email address.');
         return;
       }
-
       if (totalAmount <= 0) {
-        Alert.alert('Invalid Amount', 'Cannot process payment with zero amount. Please check your orders.');
+        Alert.alert('Invalid Amount', 'Cannot process a zero amount.');
         return;
       }
-
       if (!orders || orders.length === 0) {
-        Alert.alert('Error', 'No orders found for payment');
+        Alert.alert('Error', 'No orders found for payment.');
         return;
       }
 
-      if (!totalAmount || totalAmount <= 0) {
-        Alert.alert('Error', 'Invalid payment amount');
-        return;
-      }
-
-      console.log('Starting payment process with:', {
-        ordersCount: orders.length,
-        totalAmount,
-        email,
-        hasPaymentSession: !!paymentSession,
-        hasReference: !!reference,
-        referenceValue: reference,
-      });
-
-      let paymentReference: string = '';
-      let paymentAmount: number = 0;
-      let authorizationUrl: string = '';
+      let paymentReference = '';
+      let resolvedAmount = 0;
+      let authorizationUrl = '';
 
       if (paymentSession && reference) {
-        console.log('Using existing payment session with reference:', reference);
         paymentReference = reference;
-        paymentAmount = totalAmount;
+        resolvedAmount = totalAmount;
         authorizationUrl = paymentSession.authorizationUrl;
       } else {
-        console.log('Creating new checkout session');
-        const orderIds = orders.map((order) => order.orderId);
-
-        // Guard against stale/invalid orders (already paid or already have pending payments)
         try {
-          const response = await createCheckoutSession({
-            orderIds,
-            email: email.trim(),
-          });
-
-          if (response && response.data) {
-            console.log('Checkout session created:', response.data);
+          const response = await createCheckoutSession({ orderIds: orders.map((o) => o.orderId), email: email.trim() });
+          if (response?.data) {
             paymentReference = response.data.reference;
             setPaymentAmount(response.data.totalAmount);
-            paymentAmount = response.data.totalAmount;
+            resolvedAmount = response.data.totalAmount;
             authorizationUrl = response.data.authorizationUrl;
-
-            if (!totalAmountParam) {
-              console.log('Refetching orders for breakdown details...');
-              orderQueries.forEach((query) => query.refetch());
-            } else {
-              console.log('Using totalAmountParam from CheckoutScreen - skipping refetch');
-            }
+            if (!totalAmountParam) orderQueries.forEach((q) => q.refetch());
           } else {
-            console.error('No response data from checkout session creation');
             Alert.alert('Error', 'Failed to initiate payment. Please try again.');
             return;
           }
         } catch (e: any) {
-          console.error('Checkout session creation failed:', e);
           const msg: string = e?.message || '';
           if (msg.includes('Invalid orders') || msg.includes('pending payments')) {
-            Alert.alert(
-              'Payment not available',
-              'This order has already been processed or already has a pending payment. Please check your Orders tab.'
-            );
+            Alert.alert('Payment Not Available', 'This order has already been processed or has a pending payment.');
             return;
           }
           throw e;
         }
       }
 
-      if (!paymentAmount || paymentAmount <= 0) {
-        Alert.alert('Invalid Amount', 'Payment amount is invalid');
+      if (!resolvedAmount || resolvedAmount <= 0 || !paymentReference || !authorizationUrl) {
+        Alert.alert('Error', 'Invalid payment details. Please try again.');
         return;
       }
-
-      if (!paymentReference || paymentReference.length < 5) {
-        Alert.alert('Invalid Reference', 'Payment reference is invalid');
-        return;
-      }
-
-      if (!authorizationUrl) {
-        Alert.alert('Error', 'Payment authorization URL not found');
-        return;
-      }
-
-      console.log('Opening Paystack payment page:', {
-        reference: paymentReference,
-        amount: paymentAmount,
-        authorizationUrl,
-      });
 
       setSessionReference(paymentReference);
       setAuthUrl(authorizationUrl);
     } catch (error: any) {
-      console.error('Payment initiation error:', error);
-
-      let errorMessage = 'Failed to initiate payment. Please try again.';
-
-      if (error.message.includes('Authentication required')) {
-        errorMessage = 'Please log in again to continue with payment.';
-      } else if (error.message.includes('Too many payment attempts')) {
-        errorMessage =
-          'Too many payment attempts. Please wait a few minutes before trying again.';
-      } else if (error.message.includes('Network error')) {
-        errorMessage =
-          'Network connection error. Please check your internet connection and try again.';
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-
-      Alert.alert('Payment Error', errorMessage, [
+      let msg = 'Failed to initiate payment. Please try again.';
+      if (error.message?.includes('Authentication required')) msg = 'Please log in again.';
+      else if (error.message?.includes('Too many payment attempts')) msg = 'Too many attempts. Wait a few minutes.';
+      else if (error.message?.includes('Network error')) msg = 'Check your internet connection.';
+      else if (error.message) msg = error.message;
+      Alert.alert('Payment Error', msg, [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Retry', onPress: () => handlePayNow() },
+        { text: 'Retry', onPress: handlePayNow },
       ]);
     }
   };
 
-const handleWebViewNavigationStateChange = async (navState: any) => {
-    const { url, loading } = navState as { url?: string; loading?: boolean };
+  const handleWebViewNavigationStateChange = async (navState: any) => {
+    const { url } = navState as { url?: string };
     if (!url || isVerifying) return;
-
-    console.log('WebView navigation:', { url, loading, isVerifying, sessionReference });
-
-    const isSuccessPage = 
-      url.includes('/paystack/pay/complete/') ||
-      url.includes('status=success') ||
-      url.includes('&trxref=') ||
-      url.includes('#success') ||
-      url.includes('payment-success');
-
-    const isCancelPage = 
-      url.includes('/paystack/pay/cancel/') ||
-      url.includes('status=cancelled') ||
-      url.includes('cancel');
-
-    if (isSuccessPage || isCancelPage) {
-      console.log(`${isSuccessPage ? 'SUCCESS' : 'CANCEL'} page detected:`, url);
-      
-      if (isVerifying || !sessionReference) {
-        console.log('Already processing, skipping');
-        return;
-      }
-
+    const isSuccess = url.includes('/paystack/pay/complete/') || url.includes('status=success') || url.includes('&trxref=') || url.includes('#success') || url.includes('payment-success');
+    const isCancel = url.includes('/paystack/pay/cancel/') || url.includes('status=cancelled') || url.includes('cancel');
+    if ((isSuccess || isCancel) && !isVerifying && sessionReference) {
       setIsVerifying(true);
-      const referenceToVerify = sessionReference!;
-      
-      // Hide WebView immediately
+      const ref = sessionReference;
       setAuthUrl(null);
       setSessionReference(null);
-
       try {
-        console.log('Auto-verifying payment:', referenceToVerify);
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Brief delay
-
-        const verification = await verifyPayment(referenceToVerify);
-        
+        await new Promise((r) => setTimeout(r, 1500));
+        const verification = await verifyPayment(ref);
         if (verification?.success) {
-          console.log('Auto-verification SUCCESS!');
-          Alert.alert(
-            'Payment Successful!',
-            `Your payment has been verified successfully.\n\nRedirecting to Orders...`,
-            [{ text: 'OK', onPress: () => navigation.replace('Orders') }]
-          );
+          Alert.alert('Payment Successful!', 'Your payment has been verified.', [{ text: 'View Orders', onPress: () => navigation.replace('Orders') }]);
         } else {
-          console.warn('Auto-verification failed:', verification);
           setIsVerifying(false);
-          Alert.alert(
-            'Payment Pending',
-            'Payment initiated but needs verification.\n\nCheck your Orders tab.',
-            [{ text: 'Go to Orders', onPress: () => navigation.replace('Orders') }]
-          );
+          Alert.alert('Payment Pending', 'Check your Orders tab for status.', [{ text: 'Go to Orders', onPress: () => navigation.replace('Orders') }]);
         }
-      } catch (err: any) {
-        console.error('Auto-verification error:', err);
+      } catch {
         setIsVerifying(false);
-        Alert.alert(
-          'Verification Issue',
-          'Please check your Orders tab for payment status.',
-          [{ text: 'Go to Orders', onPress: () => navigation.replace('Orders') }]
-        );
+        Alert.alert('Verification Issue', 'Check your Orders tab for payment status.', [{ text: 'Go to Orders', onPress: () => navigation.replace('Orders') }]);
       }
     }
   };
 
   const injectedJavaScript = `
     (function() {
-      function pollPaystackStatus() {
-        // Paystack success indicators
-        const successSelectors = [
-          '.checkout-success',
-          '[data-testid="success-screen"]',
-          '.payment-success',
-          '#success-message',
-          '.success-icon',
-          'h1:contains("Success")',
-          'h2:contains("Complete")',
-          '.checkmark-icon'
-        ];
-        
-        const cancelSelectors = [
-          '.checkout-cancel',
-          '[data-testid="cancel-screen"]',
-          '.payment-cancel',
-          '#cancel-message',
-          '.cancel-icon',
-          'h1:contains("Cancelled")',
-          '.error-icon'
-        ];
-        
-        const checkSuccess = () => {
-          for (let selector of successSelectors) {
-            if (document.querySelector(selector.split(':contains("')[0]) || 
-                document.body.textContent.includes('success') ||
-                document.body.textContent.includes('complete') ||
-                document.title.includes('Success')) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'PAYMENT_SUCCESS',
-                timestamp: Date.now()
-              }));
-              return true;
-            }
-          }
-          return false;
-        };
-        
-        const checkCancel = () => {
-          for (let selector of cancelSelectors) {
-            if (document.querySelector(selector.split(':contains("')[0]) || 
-                document.body.textContent.includes('cancelled') ||
-                document.body.textContent.includes('failed') ||
-                document.title.includes('Cancel')) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'PAYMENT_CANCEL',
-                timestamp: Date.now()
-              }));
-              return true;
-            }
-          }
-          return false;
-        };
-        
-        if (checkSuccess() || checkCancel()) return;
-        
-        // Poll every 2 seconds
-        setTimeout(pollPaystackStatus, 2000);
-      }
-      
-      // Initial check + start polling
-      pollPaystackStatus();
-      
-      // Listen for URL changes
       let currentUrl = window.location.href;
       setInterval(() => {
         if (window.location.href !== currentUrl) {
           currentUrl = window.location.href;
-          console.log('URL changed:', currentUrl);
-          checkSuccess() || checkCancel();
         }
       }, 1000);
     })();
@@ -421,232 +249,149 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
   const handleWebViewMessage = async (event: any) => {
     try {
       const message = JSON.parse(event.nativeEvent.data);
-      console.log('📱 WebView message:', message);
-      
       if (message.type === 'PAYMENT_SUCCESS' && !isVerifying && sessionReference) {
-        console.log('JS Success detection!');
         setIsVerifying(true);
-        const referenceToVerify = sessionReference;
+        const ref = sessionReference;
         setAuthUrl(null);
-        
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        const verification = await verifyPayment(referenceToVerify);
+        await new Promise((r) => setTimeout(r, 1000));
+        const verification = await verifyPayment(ref);
         if (verification?.success) {
-          Alert.alert('Success!', 'Payment verified. Redirecting...', [
-            { text: 'OK', onPress: () => navigation.replace('BuyerOrders') }
-          ]);
+          Alert.alert('Success!', 'Payment verified.', [{ text: 'OK', onPress: () => navigation.replace('BuyerOrders') }]);
         }
       } else if (message.type === 'PAYMENT_CANCEL') {
-        console.log('JS Cancel detection');
-        Alert.alert(
-          'Payment Cancelled',
-          'Payment was cancelled. You can try again anytime.',
-          [{ text: 'OK', onPress: () => setAuthUrl(null) }]
-        );
+        Alert.alert('Payment Cancelled', 'You can try again anytime.', [{ text: 'OK', onPress: () => setAuthUrl(null) }]);
       }
-    } catch (e) {
-      console.log('Non-JSON message from WebView:', event.nativeEvent.data);
-    }
-  };
-  
-  useEffect(() => {
-    // intentionally empty
-  }, []);
-
-
-  const formatPrice = (price: number) => {
-    return `GH₵ ${parseFloat(price.toString()).toFixed(2)}`;
+    } catch {}
   };
 
-  const totalAmount = totalAmountParam ?? 
-                     (paymentAmount > 0 ? paymentAmount : 
-                       orderDetails.reduce((sum, order) => {
-                         return sum + (order.buyerTotalAmount ?? 
-(order.breakdown?.buyerTotal ?? 
-                                      order.buyerTotalAmount ?? 
-                                      order.totalAmount ?? 0));
-                       }, 0)
-                     );
-  
-  useEffect(() => {
-    console.log('TOTAL AMOUNT DEBUG:', {
-      totalAmountParam,
-      paymentAmount,
-      orderDetailsCount: orderDetails.length,
-      orderDetails: orderDetails.map(o => ({
-        id: o.id,
-        buyerTotalAmount: o.buyerTotalAmount,
-        breakdownTotal: o.breakdown?.buyerTotal ?? o.buyerTotalAmount,
-        subtotal: o.breakdown?.subtotal
-      })),
-      calculatedTotal: orderDetails.reduce((sum, o) => sum + (o.buyerTotalAmount ?? 0), 0),
-      finalTotal: totalAmount
-    });
-  }, [totalAmount, orderDetails, totalAmountParam]);
-
-  // Log for debugging
-  if (!totalAmountParam) {
-    console.warn('No totalAmountParam - using dynamic recalc');
-  } else {
-    console.log('Using totalAmountParam from CheckoutScreen:', totalAmount);
-  }
-  
-  // Keep breakdown calcs for display (backend provides details)
-  const subtotal = orderDetails.reduce((sum, order) => sum + (order.breakdown?.subtotal ?? order.totalAmount ?? 0), 0);
-  const platformFeeTotal = orderDetails.reduce((sum, order) => sum + Number(order.breakdown?.platformFee ?? 0), 0);
-  const paystackFeeTotal = orderDetails.reduce((sum, order) => sum + Number(order.breakdown?.paystackFee ?? 0), 0);
-  const totalItems = orderDetails.reduce(
-    (sum, order) => sum + (order.items?.length || 0),
-    0
-  );
-
-  // Loading state - initial fetch only
+  // ─── Loading / Error states ────────────────────────────────────────────────
   if (isLoadingOrders && orderDetails.length === 0) {
     return (
-      <View style={styles.loadingContainer}>
-        <LoadingSpinner size={40} color={Colors.primary} />
-        <Text style={styles.loadingText}>Loading payment details...</Text>
-      </View>
+      <LinearGradient colors={[D.navy, D.navyMid]} style={styles.centeredScreen}>
+        <LoadingSpinner size={40} color="#FFFFFF" />
+        <Text style={styles.centeredText}>Loading payment details…</Text>
+      </LinearGradient>
     );
   }
 
-  // Error state
   if (hasErrors && orderDetails.length === 0) {
     return (
-      <View style={styles.loadingContainer}>
-        <Ionicons name="alert-circle-outline" size={64} color={Colors.error} />
-        <Text style={styles.errorText}>Failed to load order details</Text>
-        <TouchableOpacity
-          style={styles.retryButton}
-          onPress={() => {
-            orderQueries.forEach((query) => query.refetch());
-          }}
-        >
-          <Ionicons name="refresh" size={20} color={Colors.white} />
-          <Text style={styles.retryButtonText}>Retry</Text>
+      <LinearGradient colors={[D.navy, D.navyMid]} style={styles.centeredScreen}>
+        <Ionicons name="cloud-offline-outline" size={56} color="#94A3B8" />
+        <Text style={[styles.centeredText, { color: '#F87171', marginBottom: 8 }]}>Couldn't load order details</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={() => orderQueries.forEach((q) => q.refetch())}>
+          <Ionicons name="refresh" size={18} color={D.navy} />
+          <Text style={styles.retryBtnText}>Try Again</Text>
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
     );
   }
 
+  const subtotal = orderDetails.reduce((s, o) => s + Number(o.breakdown?.subtotal ?? o.totalAmount ?? 0), 0);
+  const deliveryFee = orderDetails.reduce((s, o) => s + Number(o.breakdown?.deliveryFee ?? 0), 0);
+  const platformFee = orderDetails.reduce((s, o) => s + Number(o.breakdown?.platformFee ?? 0), 0);
+  const paystackFee = orderDetails.reduce((s, o) => s + Number(o.breakdown?.paystackFee ?? 0), 0);
+
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+    <View style={styles.root}>
+      {/* ── Header ── */}
+      <LinearGradient colors={[D.navy, D.navyMid]} style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Payment</Text>
-        <View style={styles.placeholder} />
-      </View>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>Checkout</Text>
+          <Text style={styles.headerSub}>{orderDetails.length} order{orderDetails.length !== 1 ? 's' : ''} · {formatPrice(totalAmount)}</Text>
+        </View>
+        <View style={{ width: 38 }} />
+      </LinearGradient>
 
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.summaryCard}>
-          <View style={styles.iconContainer}>
-            <Ionicons name="card" size={48} color={Colors.primary} />
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
+        {/* ── Hero amount card ── */}
+        <View style={[styles.heroCard, D.shadow]}>
+          <View style={styles.heroIconWrap}>
+            <LinearGradient colors={[D.blue, D.blueDark]} style={styles.heroIcon}>
+              <Ionicons name="shield-checkmark" size={28} color="#FFFFFF" />
+            </LinearGradient>
           </View>
-          <Text style={styles.summaryTitle}>Complete Your Payment</Text>
-          <Text style={styles.summaryText}>Confirm {orderDetails.length} order(s)</Text>
-
-          <View style={styles.amountContainer}>
-            <Text style={styles.amountLabel}>Total Amount</Text>
-            <Text style={styles.amountValue}>{formatPrice(totalAmount)}</Text>
+          <Text style={styles.heroLabel}>Amount Due</Text>
+          <Text style={styles.heroAmount}>{formatPrice(totalAmount)}</Text>
+          <View style={styles.heroBadge}>
+            <Ionicons name="lock-closed" size={11} color={D.green} />
+            <Text style={styles.heroBadgeText}>Secured by Paystack</Text>
           </View>
-
           {orderDetails.length > 1 && (
-            <View style={styles.multiStoreIndicator}>
-              <Ionicons name="storefront" size={16} color={Colors.warning} />
+            <View style={styles.multiStoreBanner}>
+              <Ionicons name="storefront-outline" size={14} color="#D97706" />
               <Text style={styles.multiStoreText}>
-                Payment for {orderDetails.length} orders from different stores
+                Paying for {orderDetails.length} orders from different stores
               </Text>
             </View>
           )}
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Email Address</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="mail-outline" size={20} color={Colors.gray400} />
+        {/* ── Email ── */}
+        <View style={styles.sectionWrap}>
+          <Text style={styles.sectionLabel}>Receipt Email</Text>
+          <View style={[styles.inputRow, emailFocused && styles.inputRowFocused]}>
+            <Ionicons name="mail-outline" size={18} color={emailFocused ? D.blue : D.slate} />
             <TextInput
               style={styles.input}
               value={email}
               onChangeText={setEmail}
-              placeholder="Enter your email"
-              placeholderTextColor={Colors.gray400}
+              onFocus={() => setEmailFocused(true)}
+              onBlur={() => setEmailFocused(false)}
+              placeholder="your@email.com"
+              placeholderTextColor="#94A3B8"
               keyboardType="email-address"
               autoCapitalize="none"
             />
+            {email.includes('@') && (
+              <Ionicons name="checkmark-circle" size={18} color={D.green} />
+            )}
           </View>
-          <Text style={styles.inputHint}>Payment receipt will be sent to this email</Text>
+          <Text style={styles.inputHint}>Your receipt will be sent to this address</Text>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Order Summary</Text>
-          {orderDetails.map((order, index) => (
-            <View key={order.id} style={styles.orderCard}>
-              <View style={styles.orderHeader}>
-                <Text style={styles.orderTitle}>Order #{index + 1}</Text>
-                <Text style={styles.orderAmount}>
-                  {formatPrice(order.buyerTotalAmount)}
-                </Text>
-              </View>
-
-              <View style={styles.orderDetails}>
-                <View style={styles.detailRow}>
-                  <Ionicons name="storefront-outline" size={16} color={Colors.gray600} />
-                  <Text style={styles.detailText}>{order.store?.name || 'Store'}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Ionicons name="cube-outline" size={16} color={Colors.gray600} />
-                  <Text style={styles.detailText}>{order.items?.length || 0} item(s)</Text>
+        {/* ── Orders ── */}
+        <View style={styles.sectionWrap}>
+          <Text style={styles.sectionLabel}>Order Summary</Text>
+          <View style={[styles.card, D.shadow]}>
+            {orderDetails.map((order, idx) => (
+              <View key={order.id}>
+                {idx > 0 && <View style={styles.innerDivider} />}
+                <View style={styles.orderRow}>
+                  <View style={styles.orderIconWrap}>
+                    <Ionicons name="cube-outline" size={18} color={D.blue} />
+                  </View>
+                  <View style={styles.orderInfo}>
+                    <Text style={styles.orderTitle}>{order.store?.name || `Order ${idx + 1}`}</Text>
+                    <Text style={styles.orderMeta}>{order.items?.length || 0} item{order.items?.length !== 1 ? 's' : ''}</Text>
+                  </View>
+                  <Text style={styles.orderAmt}>{formatPrice(order.buyerTotalAmount)}</Text>
                 </View>
               </View>
-            </View>
-          ))}
+            ))}
+          </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Payment Breakdown</Text>
-          <View style={styles.breakdownCard}>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Subtotal</Text>
-              <Text style={styles.breakdownValue}>
-                {formatPrice(
-                  orderDetails.reduce((sum, o) => sum + Number(o.breakdown?.subtotal ?? o.totalAmount ?? 0), 0)
-                )}
-              </Text>
-            </View>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Delivery Fee</Text>
-              <Text style={styles.breakdownValue}>
-                {formatPrice(
-                  orderDetails.reduce((sum, o) => sum + Number(o.breakdown?.deliveryFee ?? 0), 0)
-                )}
-              </Text>
-            </View>
-            <View style={styles.breakdownRow}>
-            <Text style={styles.breakdownLabel}>Platform Fee (3%)</Text>
-              <Text style={styles.breakdownValue}>
-                {formatPrice(
-                  orderDetails.reduce(
-                    (sum, o) => sum + Number(o.breakdown?.platformFee ?? 0),
-                    0
-                  )
-                )}
-              </Text>
-            </View>
-            <View style={styles.breakdownRow}>
-            <Text style={styles.breakdownLabel}>Paystack Fee (1.95%)</Text>
-              <Text style={styles.breakdownValue}>
-                {formatPrice(
-                  orderDetails.reduce(
-                    (sum, o) => sum + Number(o.breakdown?.paystackFee ?? 0),
-                    0
-                  )
-                )}
-              </Text>
-            </View>
-            <View style={styles.divider} />
+        {/* ── Breakdown ── */}
+        <View style={styles.sectionWrap}>
+          <Text style={styles.sectionLabel}>Payment Breakdown</Text>
+          <View style={[styles.card, D.shadow]}>
+            {[
+              { label: 'Subtotal', value: subtotal },
+              { label: 'Delivery Fee', value: deliveryFee },
+              { label: 'Platform Fee (3%)', value: platformFee },
+              { label: 'Paystack Fee (1.95%)', value: paystackFee },
+            ].map(({ label, value }) => (
+              <View key={label} style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>{label}</Text>
+                <Text style={styles.breakdownValue}>{formatPrice(value)}</Text>
+              </View>
+            ))}
+            <View style={styles.totalDivider} />
             <View style={styles.breakdownRow}>
               <Text style={styles.totalLabel}>Total</Text>
               <Text style={styles.totalValue}>{formatPrice(totalAmount)}</Text>
@@ -654,54 +399,59 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
           </View>
         </View>
 
-        <View style={styles.bottomSpacer} />
+        {/* ── Security note ── */}
+        <View style={styles.securityRow}>
+          <Ionicons name="lock-closed-outline" size={13} color={D.slate} />
+          <Text style={styles.securityText}>Your payment is encrypted and secure</Text>
+        </View>
+
+        <View style={{ height: 120 }} />
       </ScrollView>
 
-      <View style={styles.bottomContainer}>
+      {/* ── Pay Button ── */}
+      <View style={styles.bottomBar}>
         <TouchableOpacity
-          style={[styles.payButton, paymentLoading && styles.payButtonDisabled]}
+          style={[styles.payBtn, paymentLoading && styles.payBtnDisabled]}
           onPress={handlePayNow}
           disabled={paymentLoading}
+          activeOpacity={0.85}
         >
           {paymentLoading ? (
-            <LoadingSpinner size={20} color={Colors.white} />
+            <LoadingSpinner size={20} color="#FFFFFF" />
           ) : (
             <>
-              <Ionicons name="lock-closed" size={20} color={Colors.white} />
-              <Text style={styles.payButtonText}>Pay {formatPrice(totalAmount)}</Text>
-              <Ionicons name="arrow-forward" size={20} color={Colors.white} />
+              <Ionicons name="lock-closed" size={18} color="#FFFFFF" />
+              <Text style={styles.payBtnText}>Pay {formatPrice(totalAmount)}</Text>
+              <Ionicons name="arrow-forward" size={18} color="rgba(255,255,255,0.7)" />
             </>
           )}
         </TouchableOpacity>
-        <Text style={styles.paystackBadge}>Powered by Paystack</Text>
+        <Text style={styles.poweredBy}>Powered by Paystack</Text>
       </View>
 
+      {/* ── WebView overlay ── */}
       {authUrl && (
-        <View style={styles.webviewContainer}>
-          <View style={styles.webviewHeader}>
+        <View style={styles.webviewOverlay}>
+          <LinearGradient colors={[D.navy, D.navyMid]} style={styles.webviewHeader}>
             <View>
-              <Text style={styles.webviewHeaderTitle}>Complete Payment</Text>
-              <Text style={styles.webviewHeaderAmount}>{formatPrice(totalAmount)}</Text>
+              <Text style={styles.webviewTitle}>Complete Payment</Text>
+              <Text style={styles.webviewAmt}>{formatPrice(totalAmount)}</Text>
             </View>
             <TouchableOpacity
-              style={styles.webviewClose}
+              style={styles.webviewCloseBtn}
               onPress={() => {
                 setAuthUrl(null);
                 setSessionReference(null);
                 setIsVerifying(false);
-                Alert.alert(
-                  'Payment Cancelled',
-                  'Your payment was cancelled. Would you like to try again?',
-                  [
-                    { text: 'No', style: 'cancel' },
-                    { text: 'Yes', onPress: () => handlePayNow() },
-                  ]
-                );
+                Alert.alert('Payment Cancelled', 'Would you like to try again?', [
+                  { text: 'Not Now', style: 'cancel' },
+                  { text: 'Retry', onPress: handlePayNow },
+                ]);
               }}
             >
-              <Ionicons name="close" size={22} color={Colors.textPrimary} />
+              <Ionicons name="close" size={20} color="#FFFFFF" />
             </TouchableOpacity>
-          </View>
+          </LinearGradient>
           <WebView
             source={{ uri: authUrl }}
             onNavigationStateChange={handleWebViewNavigationStateChange}
@@ -709,18 +459,16 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
             injectedJavaScript={injectedJavaScript}
             startInLoadingState
             renderLoading={() => (
-              <View style={styles.webviewLoadingContainer}>
-                <LoadingSpinner size={40} color={Colors.primary} />
-                <Text style={styles.loadingText}>Loading payment page...</Text>
+              <View style={styles.webviewLoading}>
+                <LoadingSpinner size={36} color={D.blue} />
+                <Text style={styles.webviewLoadingText}>Loading secure payment…</Text>
               </View>
             )}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            sharedCookiesEnabled={true}
-            style={styles.webview}
-            onError={(syntheticEvent) => {
-              const { nativeEvent } = syntheticEvent;
-              console.error('❌ WebView error:', nativeEvent);
+            javaScriptEnabled
+            domStorageEnabled
+            sharedCookiesEnabled
+            style={{ flex: 1, backgroundColor: '#fff' }}
+            onError={() => {
               Alert.alert('Error', 'Failed to load payment page. Please try again.');
               setAuthUrl(null);
               setIsVerifying(false);
@@ -733,330 +481,142 @@ const handleWebViewNavigationStateChange = async (navState: any) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    marginTop: 20,
+  root: { flex: 1, backgroundColor: D.bg },
+
+  // ─── Centered screens (loading/error) ─────────────────────────────────────
+  centeredScreen: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 },
+  centeredText: { fontSize: 15, color: '#94A3B8', fontWeight: '500' },
+  retryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#FFFFFF', paddingHorizontal: 24, paddingVertical: 12,
+    borderRadius: D.radius.btn, marginTop: 8,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    gap: 16,
-  },
-  loadingText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  errorText: {
-    fontSize: 16,
-    color: Colors.error,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  retryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  retryBtnText: { fontSize: 15, fontWeight: '700', color: D.navy },
+
+  // ─── Header ───────────────────────────────────────────────────────────────
   header: {
+    paddingTop: Platform.OS === 'ios' ? 56 : 40,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
   },
-  backButton: {
-    padding: 8,
+  backBtn: {
+    width: 38, height: 38, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#007AFF',
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.3 },
+  headerSub: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+
+  // ─── Scroll ───────────────────────────────────────────────────────────────
+  scroll: { flex: 1 },
+  scrollContent: { padding: 16 },
+
+  // ─── Hero card ────────────────────────────────────────────────────────────
+  heroCard: {
+    backgroundColor: D.surface, borderRadius: D.radius.card,
+    padding: 28, alignItems: 'center', marginBottom: 16,
   },
-  placeholder: {
-    width: 40,
+  heroIconWrap: { marginBottom: 16 },
+  heroIcon: { width: 64, height: 64, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  heroLabel: { fontSize: 13, color: D.slate, fontWeight: '500', marginBottom: 6 },
+  heroAmount: { fontSize: 38, fontWeight: '800', color: D.navy, letterSpacing: -1, marginBottom: 12 },
+  heroBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: D.greenLight, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 100,
   },
-  scrollView: {
-    flex: 1,
+  heroBadgeText: { fontSize: 11, fontWeight: '700', color: D.green },
+  multiStoreBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#FFFBEB', borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 8, marginTop: 14,
   },
-  summaryCard: {
-    backgroundColor: '#fff',
-    marginTop: 16,
-    marginHorizontal: 16,
-    padding: 24,
-    borderRadius: 16,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+  multiStoreText: { fontSize: 12, color: '#D97706', fontWeight: '500', flex: 1 },
+
+  // ─── Section ──────────────────────────────────────────────────────────────
+  sectionWrap: { marginBottom: 16 },
+  sectionLabel: { fontSize: 13, fontWeight: '700', color: D.slate, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.6 },
+
+  // ─── Input ────────────────────────────────────────────────────────────────
+  inputRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: D.surface, borderRadius: D.radius.input,
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderWidth: 1.5, borderColor: D.border,
   },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#E3F2FD',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
+  inputRowFocused: { borderColor: D.blue, backgroundColor: D.blueLight },
+  input: { flex: 1, fontSize: 15, color: D.navy, fontWeight: '500' },
+  inputHint: { fontSize: 11, color: '#94A3B8', marginTop: 6, marginLeft: 2 },
+
+  // ─── Card ─────────────────────────────────────────────────────────────────
+  card: { backgroundColor: D.surface, borderRadius: D.radius.card, overflow: 'hidden' },
+  innerDivider: { height: 1, backgroundColor: '#F1F5F9', marginHorizontal: 16 },
+
+  // ─── Order row ────────────────────────────────────────────────────────────
+  orderRow: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
+  orderIconWrap: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: D.blueLight, alignItems: 'center', justifyContent: 'center',
   },
-  summaryTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 8,
-  },
-  summaryText: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 24,
-  },
-  amountContainer: {
-    width: '100%',
-    padding: 16,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  amountLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
-  },
-  amountValue: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#007AFF',
-  },
-  multiStoreIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#FFF4E6',
-    borderRadius: 8,
-  },
-  multiStoreText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#D97706',
-  },
-  section: {
-    marginTop: 16,
-    paddingHorizontal: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 12,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  input: {
-    flex: 1,
-    marginLeft: 12,
-    fontSize: 16,
-    color: '#333',
-  },
-  inputHint: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 8,
-    marginLeft: 4,
-  },
-  orderCard: {
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  orderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  orderTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
-  },
-  orderAmount: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#007AFF',
-  },
-  orderDetails: {
-    gap: 8,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  detailText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  breakdownCard: {
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 12,
-  },
+  orderInfo: { flex: 1 },
+  orderTitle: { fontSize: 14, fontWeight: '700', color: D.navy },
+  orderMeta: { fontSize: 12, color: D.slate, marginTop: 2 },
+  orderAmt: { fontSize: 15, fontWeight: '800', color: D.blue },
+
+  // ─── Breakdown ────────────────────────────────────────────────────────────
   breakdownRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 12,
   },
-  breakdownLabel: {
-    fontSize: 14,
-    color: '#666',
+  breakdownLabel: { fontSize: 14, color: D.slate },
+  breakdownValue: { fontSize: 14, fontWeight: '600', color: D.navy },
+  totalDivider: { height: 1, backgroundColor: '#F1F5F9', marginHorizontal: 16 },
+  totalLabel: { fontSize: 16, fontWeight: '800', color: D.navy },
+  totalValue: { fontSize: 18, fontWeight: '800', color: D.blue },
+
+  // ─── Security note ────────────────────────────────────────────────────────
+  securityRow: { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: 4 },
+  securityText: { fontSize: 12, color: '#94A3B8' },
+
+  // ─── Bottom bar ───────────────────────────────────────────────────────────
+  bottomBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: D.surface,
+    paddingHorizontal: 16, paddingTop: 14,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    borderTopWidth: 1, borderTopColor: D.border,
+    shadowColor: '#1E3A8A', shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08, shadowRadius: 16, elevation: 12,
   },
-  breakdownValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+  payBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 10, paddingVertical: 16, borderRadius: D.radius.btn,
+    backgroundColor: D.blue,
+    shadowColor: D.blue, shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35, shadowRadius: 12, elevation: 6,
   },
-  divider: {
-    height: 1,
-    backgroundColor: '#e0e0e0',
-    marginVertical: 8,
-  },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
-  },
-  totalValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#007AFF',
-  },
-  bottomSpacer: {
-    height: 120,
-  },
-  bottomContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 32,
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  payButton: {
-    backgroundColor: '#007AFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 16,
-    borderRadius: 12,
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-    minHeight: 52,
-  },
-  payButtonDisabled: {
-    backgroundColor: '#ccc',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  payButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  paystackBadge: {
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#999',
-    marginTop: 8,
-  },
-  webviewContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#fff',
-    zIndex: 999,
-  },
+  payBtnDisabled: { backgroundColor: '#CBD5E1', shadowOpacity: 0, elevation: 0 },
+  payBtnText: { fontSize: 17, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.2 },
+  poweredBy: { textAlign: 'center', fontSize: 11, color: '#94A3B8', marginTop: 8 },
+
+  // ─── WebView overlay ──────────────────────────────────────────────────────
+  webviewOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#fff', zIndex: 999 },
   webviewHeader: {
-    height: 88,
-    paddingTop: 36,
-    paddingHorizontal: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 56 : 40,
+    paddingBottom: 16, paddingHorizontal: 20,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
-  webviewHeaderTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
+  webviewTitle: { fontSize: 16, fontWeight: '800', color: '#FFFFFF' },
+  webviewAmt: { fontSize: 13, color: '#94A3B8', marginTop: 2 },
+  webviewCloseBtn: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  webviewHeaderAmount: {
-    fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '700',
-    marginTop: 4,
-  },
-  webviewClose: {
-    padding: 8,
-  },
-  webview: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  webviewLoadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
-  },
+  webviewLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  webviewLoadingText: { fontSize: 14, color: D.slate },
 });
 
 export default PaymentScreen;

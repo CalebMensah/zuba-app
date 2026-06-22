@@ -47,6 +47,8 @@ import ReviewDetails from '../screens/buyer/ReviewDetails';
 import PaymentSuccessScreen from '../screens/buyer/PaymentSuccessScreen';
 import SearchScreen from '../screens/buyer/SearchScreen';
 import LoginScreen from '../screens/auth/LoginScreen';
+import RedeemCheckoutScreen from '../screens/buyer/RedeemCheckout';
+
 
 
 const Tab = createBottomTabNavigator<BuyerStackParamList>();
@@ -142,6 +144,7 @@ const BuyerNavigator: React.FC = () => {
       <Stack.Screen name="PaymentSuccess" component={PaymentSuccessScreen} />
       <Stack.Screen name="SearchScreen" component={SearchScreen} />
       <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="RedeemCheckout" component={RedeemCheckoutScreen} />
     </Stack.Navigator>
   );
 };
