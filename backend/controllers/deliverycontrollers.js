@@ -145,7 +145,7 @@ export const shipOrder = async (req, res) => {
     // Upload proof images to Cloudinary first
     const buffers = req.files.map(file => file.buffer);
     const uploads = await uploadMultipleToCloudinary(buffers, {
-      folder: 'delivery-proofs',
+      folder: 'delivery_proofs',
       resource_type: 'image'
     });
     const proofUrls = uploads.map(file => file.secure_url);
@@ -448,7 +448,7 @@ export const addDeliveryProof = async (req, res) => {
     // Upload to Cloudinary
     const buffers = req.files.map(file => file.buffer);
     const uploads = await uploadMultipleToCloudinary(buffers, {
-      folder: 'delivery-proofs',
+      folder: 'delivery_proofs',
       resource_type: 'image'
     });
     const proofUrls = uploads.map(file => file.secure_url);

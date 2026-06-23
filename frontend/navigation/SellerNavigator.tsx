@@ -42,6 +42,7 @@ import SellerDisputeManagement from '../screens/seller/SellerDisputeManagement';
 import PaymentAnalyticsScreen from '../screens/seller/PaymentAnalyticsScreen';
 import CustomerAnalyticsScreen from '../screens/seller/CustomerAnalyticsScreen';
 import StockAnalyticsScreen from '../screens/seller/StockAnalyticsScreen';
+import ShipOrderScreen from '../screens/seller/ShipOrderScreen';
 
 const Stack = createNativeStackNavigator<SellerStackParamList>();
 const Tab = createBottomTabNavigator<SellerStackParamList>();
@@ -132,6 +133,7 @@ const SellerNavigator: React.FC = () => {
           <Stack.Screen name="PaymentAnalytics" component={PaymentAnalyticsScreen} />
           <Stack.Screen name="CustomerAnalytics" component={CustomerAnalyticsScreen} />
           <Stack.Screen name="StockAnalytics" component={StockAnalyticsScreen} />
+          <Stack.Screen name="ShipOrderScreen" component={ShipOrderScreen} />
     </Stack.Navigator>
   );
 };

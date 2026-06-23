@@ -138,6 +138,7 @@ export type SellerStackParamList = {
     PaymentAnalytics: undefined
     CustomerAnalytics: undefined;
     StockAnalytics: undefined;
+    ShipOrderScreen: {orderId: string, isEdit: boolean}
   // Add more seller-specific screens
 };
 
