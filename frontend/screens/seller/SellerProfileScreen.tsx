@@ -270,7 +270,7 @@ const SellerProfileScreen: React.FC = () => {
               icon="time-outline"
               label="Pending"
               count={summary?.pendingOrders || 0}
-              onPress={() => (navigation as any).navigate('Orders', { status: 'PENDING' })}
+              onPress={() => (navigation as any).navigate('Orders', { status: 'PENDING_PAYMENT' })}
             />
             <OrderStatusCard
               icon="checkmark-done-outline"
