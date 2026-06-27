@@ -36,7 +36,7 @@ const ALLOWED_FORMATS = {
 
 
 const validateUploadOptions = (options) => {
-  const validFolders = ['avatars', 'products', 'store-logos', 'reviews', 'chat-media', 'uploads'];
+  const validFolders = ['avatars', 'products', 'store-logos', 'reviews', 'chat-media', 'uploads', 'delivery_proofs'];
   
   if (options.folder && !validFolders.includes(options.folder)) {
     throw new Error(`Invalid folder: ${options.folder}`);

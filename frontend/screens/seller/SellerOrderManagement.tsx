@@ -56,7 +56,6 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
   const [activeTab, setActiveTab] = useState<OrderStatus>('PAID');
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
 
-  // Shipping modal state
   const [shippingModalVisible, setShippingModalVisible] = useState(false);
   const [courierData, setCourierData] = useState<CourierFormData>(EMPTY_COURIER);
   const [selectedImages, setSelectedImages] = useState<{ uri: string }[]>([]);
@@ -64,10 +63,8 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
   const [orderForShipping, setOrderForShipping] = useState<OrderWithBreakdown | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  // Alert dedup ref
   const alertShownRef = useRef<Set<string>>(new Set());
 
-  // ── Queries ─────────────────────────────────────────────────────────────────
   const paidQuery       = useSellerOrders({ page: 1, limit: 50, status: 'PAID', paymentStatus: 'SUCCESS' });
   const processingQuery = useSellerOrders({ page: 1, limit: 50, status: 'PROCESSING' });
   const shippedQuery    = useSellerOrders({ page: 1, limit: 50, status: 'SHIPPED' });
@@ -89,15 +86,15 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
   const activeQuery = queryMap[activeTab];
   const orders = activeQuery?.data?.orders ?? [];
 
-  // ── Mutations ────────────────────────────────────────────────────────────────
+
   const acceptOrderMutation = useAcceptOrder();
   const rejectOrderMutation = useRejectOrder();
 
   const { shipOrder, error: deliveryError } = useDelivery();
 
-  // ── Status tabs ──────────────────────────────────────────────────────────────
   const statusTabs: StatusTab[] = [
-    { status: 'PAID',       label: 'Paid (Pending Acceptance)' },
+    { status: 'PENDING_PAYMENT', label: 'Pending Payment' },
+    { status: 'PAID',       label: 'Paid' },
     { status: 'PROCESSING', label: 'Processing' },
     { status: 'SHIPPED',    label: 'Shipped' },
     { status: 'COMPLETED',  label: 'Completed' },
@@ -109,7 +106,7 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
   const getTabCount = (status: OrderStatus): number =>
     queryMap[status]?.data?.pagination?.total ?? 0;
 
-  // ── Permissions ──────────────────────────────────────────────────────────────
+
   useEffect(() => {
     (async () => {
       if (Platform.OS !== 'web') {
@@ -121,42 +118,6 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
     })();
   }, []);
 
-  // ── Proof reminder on focus ───────────────────────────────────────────────────
-  useFocusEffect(
-    useCallback(() => {
-      if (activeTab === 'PROCESSING' && orders.length > 0) {
-        setTimeout(() => {
-          const orderNeedingProof = orders.find((order) => {
-            const hasProof =
-              order.deliveryInfo?.deliveryProofs &&
-              order.deliveryInfo.deliveryProofs.length > 0;
-            return order.deliveryInfo && !hasProof && !alertShownRef.current.has(order.id);
-          });
-
-          if (orderNeedingProof) {
-            alertShownRef.current.add(orderNeedingProof.id);
-            Alert.alert(
-              'Delivery Proof Required',
-              `Order #${orderNeedingProof.id.slice(-8).toUpperCase()} needs delivery proof to be marked as shipped.`,
-              [
-                {
-                  text: 'Later',
-                  style: 'cancel',
-                  onPress: () => alertShownRef.current.delete(orderNeedingProof.id),
-                },
-                {
-                  text: 'Ship Order',
-                  onPress: () => handleStartShippingFlow(orderNeedingProof),
-                },
-              ]
-            );
-          }
-        }, 2000);
-      }
-    }, [activeTab, orders])
-  );
-
-  // ── Handlers ─────────────────────────────────────────────────────────────────
 
   const onRefresh = useCallback(() => { activeQuery?.refetch?.(); }, [activeQuery]);
 
@@ -324,7 +285,6 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
     }
   };
 
-  // ── Status color ──────────────────────────────────────────────────────────────
   const getStatusColor = (status: OrderStatus): string => {
     switch (status) {
       case 'PENDING_PAYMENT': return Colors.error;
@@ -496,7 +456,12 @@ const SellerOrderManagement: React.FC<SellerOrderManagementProps> = ({ navigatio
               <View style={styles.actionRow}>
                 <TouchableOpacity
                   style={[styles.actionBtn, styles.primaryActionBtn, isProcessing && styles.btnDisabled]}
-                  onPress={() => handleStartShippingFlow(item)}
+                  onPress={() =>
+                    navigation.navigate('ShipOrderScreen', {
+                      orderId: item.id,
+                      isEdit: false,
+                    })
+                  }
                   disabled={isProcessing}
                 >
                   <Text style={styles.primaryActionBtnText}>
