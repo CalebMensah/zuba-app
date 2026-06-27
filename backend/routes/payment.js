@@ -17,7 +17,7 @@ const router = express.Router();
 router.post('/checkout-session',strictLimiter,authenticateToken,createCheckoutSession); // NEW: Checkout session route
 router.post('/initiate', authenticateToken, initiatePayment);
 router.post('/webhook', handlePaystackWebhook);
-router.get('/verify/:reference', authenticateToken, verifyPayment);
+router.get('/verify-payment/:reference', authenticateToken, verifyPayment);
 router.get('/checkout-session/:sessionId', authenticateToken,getPaymentsByCheckoutSession);
 router.get('/user/all', authenticateToken, getUserPayments);
 router.get('/:paymentId', authenticateToken, getPaymentDetails);
