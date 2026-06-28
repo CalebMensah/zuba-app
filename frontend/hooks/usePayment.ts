@@ -369,7 +369,7 @@ export const usePayment = () => {
       const config = await getConfig();
       
       // Debug logging
-      console.log('🔄 Creating checkout session with data:', {
+      console.log('Creating checkout session with data:', {
         orderIds: sessionData.orderIds,
         email: sessionData.email,
         callbackUrl: sessionData.callbackUrl,
@@ -382,13 +382,13 @@ export const usePayment = () => {
         config
       );
       
-      console.log('✅ Checkout session created successfully:', response.data);
+      console.log('Checkout session created successfully:', response.data);
       return response.data;
     } catch (err) {
       const axiosError = err as AxiosError<ApiErrorResponse>;
       
       // Enhanced error logging
-      console.error('❌ Checkout session error:', {
+      console.error('Checkout session error:', {
         status: axiosError.response?.status,
         statusText: axiosError.response?.statusText,
         data: axiosError.response?.data,
@@ -534,20 +534,20 @@ export const usePayment = () => {
 
   // Verify payment by reference - WITH DETAILED LOGGING
   const verifyPayment = async (reference: string): Promise<PaymentVerificationResponse | null> => {
-    console.log(`🔍 FRONTEND: Starting verifyPayment(${reference})`);
+    console.log(`FRONTEND: Starting verifyPayment(${reference})`);
     setLoading(true);
     setError(null);
     
     try {
       const config = await getConfig();
-      console.log(`🔗 Calling backend /verify-payment/${reference}`);
+      console.log(`Calling backend /verify-payment/${reference}`);
       
       const response = await axios.get<PaymentVerificationResponse>(
         `${API_URL}/payments/verify-payment/${reference}`,
         config
       );
       
-      console.log(`✅ FRONTEND VERIFY SUCCESS [${reference}]`, {
+      console.log(` FRONTEND VERIFY SUCCESS [${reference}]`, {
         success: response.data.success,
         paymentsCount: response.data.data.payments?.length || 0,
         statuses: response.data.data.payments?.map(p => p.status),
@@ -557,10 +557,9 @@ export const usePayment = () => {
       return response.data;
     } catch (err) {
       const axiosError = err as AxiosError<ApiErrorResponse>;
-      console.error(`❌ FRONTEND VERIFY FAILED [${reference}]`, {
+      console.error(`FRONTEND VERIFY FAILED [${reference}]`, {
         status: axiosError.response?.status,
         message: axiosError.response?.data?.message,
-        debug: axiosError.response?.data?.debug
       });
       
       const errorMessage = axiosError.response?.data?.message || 'Failed to verify payment';
@@ -568,7 +567,7 @@ export const usePayment = () => {
       throw err;
     } finally {
       setLoading(false);
-      console.log(`🔚 FRONTEND: verifyPayment(${reference}) complete`);
+      console.log(`FRONTEND: verifyPayment(${reference}) complete`);
     }
   };
 

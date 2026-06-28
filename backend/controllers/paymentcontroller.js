@@ -1574,6 +1574,7 @@ export const getUserPayments = async (req, res) => {
 };
 
 export const verifyPayment = async (req, res) => {
+  console.log('Verifying payment with params:', req.params, 'and user:', req.user);
   const { reference } = req.params;
   
   try {
