@@ -1587,6 +1587,7 @@ export const verifyPayment = async (req, res) => {
       });
     }
     const verification = await paystack.transaction.verify(reference);
+    console.log('verification data:', verification)
 
     if (!verification.data) {
       return res.status(400).json({
